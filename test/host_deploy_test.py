@@ -7,7 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 OPS = Path(__file__).resolve().parents[1] / "ops/deploy"
 sys.path.insert(0, str(OPS))
@@ -376,12 +376,12 @@ class WorkerTest(unittest.TestCase):
         rebuild.assert_called_once()
         self.assertEqual("success", self.w.data["state"])
 
-    def pinned_fixture(self, refs, running="chaos 47.11.0.1", missing=(), inactive=()):
+    def pinned_fixture(self, refs, running="chaos 47.11.0.1", missing=(), inactive=(), on_vm=()):
         self.w.settings.update(custom_residents={}, stock_repositories=["stock"],
                                stock_repository="stock", stock_aliases=["stock:latest"],
                                development_repository="dev", idle_wait_seconds=0)
         residents = [dict(id=i, container_name=f"r{i}", container_image=f"stock:{i}",
-                          active=i not in inactive)
+                          active=i not in inactive, on_vm=i in on_vm)
                      for i in range(len(refs))]
         labels = {f"stock:{i}": ref for i, ref in enumerate(refs)}
         commands = []
@@ -442,6 +442,21 @@ class WorkerTest(unittest.TestCase):
         rolled = [call.args[1]["DEPLOY_RESIDENT_ID"] for call in self.w.rails.call_args_list
                   if call.args[1:]]
         self.assertEqual(["0"], rolled)
+
+    def test_active_resident_on_its_own_vm_is_left_alone(self):
+        # Its container lives on the VM, so there is nothing here to probe or roll.
+        commands = self.pinned_fixture(["c" * 40, "c" * 40], missing=(1,), on_vm=(1,))
+        self.w.rebuild_residents()
+        self.assertEqual("all residents healthy", self.w.data["step"])
+        self.assertEqual([1], self.w.data["on_vm"])
+        self.assertNotIn(call("r1"), self.w.container_exists.call_args_list)
+        self.assertFalse(any("r1" in c for c in commands if c[:2] == ["docker", "exec"]))
+        rolled = [c.args[1]["DEPLOY_RESIDENT_ID"] for c in self.w.rails.call_args_list if c.args[1:]]
+        self.assertEqual(["0"], rolled)
+
+    def test_rails_query_marks_residents_on_their_own_vm(self):
+        source = (OPS / "worker.py").read_text()
+        self.assertIn("'on_vm'=>a.placement&.backend=='hetzner_cloud'", source)
 
     def test_active_resident_without_container_stops_before_building(self):
         commands = self.pinned_fixture(["c" * 40, "c" * 40], missing=(1,))

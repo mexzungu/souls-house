@@ -173,10 +173,16 @@ class Worker:
         """An inactive agent whose container was never made (or was removed) has
         nothing to roll: leave it alone and say so. Its image tag, if it is a
         stock alias, still moves with the fleet. A missing container on an
-        ACTIVE resident is real damage, so that still stops the run."""
-        present, absent = [], []
+        ACTIVE resident is real damage, so that still stops the run.
+
+        A resident on its own VM has its container there, not on this host, so
+        this rollout never touches it (active or not): its runtime ships with
+        the VM's user_data. It is reported, never counted as missing."""
+        present, absent, elsewhere = [], [], []
         for resident in residents:
-            if self.container_exists(resident["container_name"]):
+            if resident.get("on_vm"):
+                elsewhere.append(resident["id"])
+            elif self.container_exists(resident["container_name"]):
                 present.append(resident)
             elif resident["active"]:
                 raise RuntimeError("Active resident has no container; operator review required")
@@ -184,6 +190,8 @@ class Worker:
                 absent.append(resident["id"])
         if absent:
             self.report("inactive residents without containers left alone", absent=absent)
+        if elsewhere:
+            self.report("residents on their own servers left alone", on_vm=elsewhere)
         return present
 
     def inspect_image(self, image):
@@ -207,8 +215,9 @@ class Worker:
             self.report("Chaos resolved", chaos_revision=revision)
         residents = self.rails(
             "raise 'Async admission required' unless ResidentTurn.enabled?; "
-            "puts({residents:Agent.hosted.where.not(container_name:[nil,''])"
-            ".order(:id).map{|a| a.attributes.slice('id','container_name','container_image','active','paused')}}.to_json)"
+            "puts({residents:Agent.hosted.where.not(container_name:[nil,'']).includes(:placement)"
+            ".order(:id).map{|a| a.attributes.slice('id','container_name','container_image','active','paused')"
+            ".merge('on_vm'=>a.placement&.backend=='hetzner_cloud')}}.to_json)"
         )["residents"]
         residents = self.present_residents(residents)
         if not residents:
