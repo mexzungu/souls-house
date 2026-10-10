@@ -30,6 +30,10 @@
       </p>
     </div>
 
+    {#if file.summary_long}
+      <p class="text-sm" data-testid="field-file-summary">{file.summary_long}</p>
+    {/if}
+
     {#if file.note}
       <div>
         <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Why I'm bringing this</p>

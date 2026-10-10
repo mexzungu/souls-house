@@ -86,6 +86,9 @@
           {formatWhen(recording.created_at)}
         </p>
       </div>
+      {#if recording.summary_long}
+        <p class="text-sm" data-testid="field-recording-summary">{recording.summary_long}</p>
+      {/if}
       {#if recording.note}
         <div>
           <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Why I'm bringing this</p>
