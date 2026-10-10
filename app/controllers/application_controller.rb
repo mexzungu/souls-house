@@ -5,7 +5,6 @@ class ApplicationController < ActionController::Base
   include Authentication
   include AccountScoping
   include FeatureToggleable
-  allow_browser versions: :modern
   # PaperTrail 17 no longer adds this callback itself.
   before_action :set_paper_trail_whodunnit
 
