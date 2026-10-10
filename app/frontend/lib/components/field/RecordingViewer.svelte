@@ -83,7 +83,7 @@
           {#if recording.uploader_name}
             Brought by {recording.uploader_name}{recording.uploader_kind === 'resident' ? ' (resident)' : ''} ·
           {/if}
-          {formatWhen(recording.created_at)}
+          {#if recording.recorded_at}Recorded {formatWhen(recording.recorded_at)} · {/if}{formatWhen(recording.created_at)}
         </p>
       </div>
       {#if recording.summary_long}

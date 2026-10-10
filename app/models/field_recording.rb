@@ -68,7 +68,8 @@ class FieldRecording < ApplicationRecord
 
   broadcasts_to :account
 
-  scope :newest_first, -> { order(created_at: :desc, id: :desc) }
+  # When it was recorded if the upload said so (archive imports), else when it arrived.
+  scope :newest_first, -> { order(Arel.sql("COALESCE(field_recordings.recorded_at, field_recordings.created_at) DESC"), id: :desc) }
   scope :summary_readable, -> { where(status: "ready").where("transcript_text ~ '[^[:space:]]'") }
 
   # Summarise once the transcript is ready (FieldSummarizable). The hourly
