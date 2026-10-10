@@ -1,6 +1,9 @@
 require "test_helper"
+require "support/field_recording_helpers"
 
 class FieldControllerTest < ActionDispatch::IntegrationTest
+
+  include FieldRecordingHelpers
 
   setup do
     @user = users(:user_1)
@@ -147,6 +150,30 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     props = inertia_props
     assert_equal "File 52", props["current_item"]["title"], "the open item is sent even when it's on another page"
     assert_equal "file-#{files.last.to_param}", props["selected"]
+  end
+
+  test "an imported recording sorts and shows by when it was recorded, not when it arrived" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    @account.field_files.create!(file: upload, title: "Yesterday's file", uploaded_by: @user, created_at: 1.day.ago)
+    imported = ready_recording(account: @account, user: @user, title: "January call", recorded_at: Time.zone.parse("2026-01-15 07:54"))
+
+    get account_field_path(@account)
+    items = inertia_props["items"]
+    assert_equal [ "Yesterday's file", "January call" ], items.map { |i| i["title"] }
+    assert_equal imported.recorded_at.iso8601, items.last["recorded_at"]
+    assert_equal [ imported ], @account.field_recordings.newest_first.to_a
+  end
+
+  test "an imported file or note sorts and shows by the date it is from" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    @account.field_files.create!(file: upload, title: "Yesterday's file", uploaded_by: @user, created_at: 1.day.ago)
+    old_file = @account.field_files.create!(file: upload, title: "2019 transcript", uploaded_by: @user, dated_at: Time.zone.parse("2019-03-14"))
+    old_note = @account.whiteboards.create!(name: "2018 diary", content: "It rained.", dated_at: Time.zone.parse("2018-05-01"))
+
+    get account_field_path(@account)
+    items = inertia_props["items"]
+    assert_equal [ "Yesterday's file", "2019 transcript", "2018 diary" ], items.map { |i| i["title"] }
+    assert_equal [ old_file.dated_at.iso8601, old_note.dated_at.iso8601 ], items.last(2).map { |i| i["dated_at"] }
   end
 
   test "the tag filter narrows the list and its counts on the server" do

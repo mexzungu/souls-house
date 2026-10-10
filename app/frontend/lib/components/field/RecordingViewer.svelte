@@ -83,9 +83,12 @@
           {#if recording.uploader_name}
             Brought by {recording.uploader_name}{recording.uploader_kind === 'resident' ? ' (resident)' : ''} ·
           {/if}
-          {formatWhen(recording.created_at)}
+          {#if recording.recorded_at}Recorded {formatWhen(recording.recorded_at)} · {/if}{formatWhen(recording.created_at)}
         </p>
       </div>
+      {#if recording.summary_long}
+        <p class="text-sm" data-testid="field-recording-summary">{recording.summary_long}</p>
+      {/if}
       {#if recording.note}
         <div>
           <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Why I'm bringing this</p>
