@@ -199,19 +199,21 @@ class XPosterTest < ActiveSupport::TestCase
     assert_not_requested :post, TWEETS_URL
   end
 
-  test "a sender's late answer never overwrites a resolution, and is kept beside it" do
+  test "a resolution in the gap after the token step and before the send stops the send" do
     stub_x_post(id: "2003")
     poster = XPoster.new(agent: @agent)
-    poster.define_singleton_method(:deliver!) do |log, token|
-      log.update_columns(status: "resolved_not_posted")
-      super(log, token)
+    agent = @agent
+    test_case = self
+    poster.define_singleton_method(:refreshed_access_token) do |log|
+      token = super(log)
+      test_case.travel(TweetLog::PENDING_RESOLVABLE_AFTER + 1.minute) { log.reload.resolve!(resolution: "not_posted", by: agent) }
+      token
     end
 
-    log = poster.post!(text: "Raced", idempotency_key: "k1").log
+    log = poster.post!(text: "Gap", idempotency_key: "k1").log
 
     assert_equal "resolved_not_posted", log.status
-    assert_nil log.tweet_id
-    assert_includes log.error_message, "2003"
+    assert_not_requested :post, TWEETS_URL
   end
 
   test "a refused connection is a definite failure that does not count toward the ceiling" do

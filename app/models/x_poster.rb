@@ -47,7 +47,7 @@ class XPoster
     return Result.new(log:, replayed: true) if replayed
 
     access_token = refreshed_access_token(log)
-    deliver!(log, access_token) if access_token
+    send_exclusively!(log, access_token) if access_token
     Result.new(log: log.reload, replayed: false)
   end
 
@@ -125,6 +125,18 @@ class XPoster
     nil
   end
 
+  # The post's own row lock is held from the final pending check through the
+  # send and the recording of X's answer. A resolver takes the same lock, so
+  # it either resolves first (and this sends nothing) or waits and then sees
+  # the recorded outcome. Only this post's row is held, never the account's
+  # integration row, for at most one send (about 70 seconds with no retries).
+  def send_exclusively!(log, access_token)
+    TweetLog.transaction do
+      log.lock!
+      deliver!(log, access_token) if log.status == "pending"
+    end
+  end
+
   def deliver!(log, access_token)
     uri = URI("#{XApi::X_API_BASE}/tweets")
     http = Net::HTTP.new(uri.host, uri.port)
@@ -195,9 +207,9 @@ class XPoster
     finish!(log, status: "outcome_unknown", failure_reason: "outcome_unknown", error_message: message.truncate(500))
   end
 
-  # The sender's last write only lands while the row is still pending. If a
-  # stale pending post was resolved by hand meanwhile, the resolution stands
-  # and the sender's late answer is kept beside it rather than over it.
+  # The sender's last write only lands while the row is still pending. Under
+  # send_exclusively! a resolution cannot land in between; this stays as a
+  # second guard so a resolution is never overwritten if that ever changes.
   def finish!(log, **attributes)
     updated = TweetLog.where(id: log.id, status: "pending").update_all(attributes.merge(updated_at: Time.current))
     return true if updated == 1

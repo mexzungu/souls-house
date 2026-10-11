@@ -56,6 +56,44 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
     assert_not_requested @stub
   end
 
+  test "a resolver waits for a send in progress and then sees its outcome; the post is sent once" do
+    @integration.update!(daily_post_limit: 20)
+    sending = Queue.new
+    release = Queue.new
+    WebMock.reset!
+    stub = stub_request(:post, "https://api.x.com/2/tweets").to_return do
+      sending << true
+      release.pop(timeout: 20)
+      { status: 201, body: { data: { id: "777" } }.to_json, headers: { "Content-Type" => "application/json" } }
+    end
+
+    sender = Thread.new { ActiveRecord::Base.connection_pool.with_connection { post!("In flight", key: "in-flight") } }
+    assert sending.pop(timeout: 20), "the send never started"
+
+    log = @integration.tweet_logs.find_by!(idempotency_key: "in-flight")
+    resolver_result = Queue.new
+    resolver = Thread.new do
+      ActiveRecord::Base.connection_pool.with_connection do
+        TweetLog.find(log.id).tap { |row| row.define_singleton_method(:resolvable?) { |**| status.in?(%w[pending outcome_unknown]) } }
+          .resolve!(resolution: "not_posted", by: @agent)
+        resolver_result << :resolved
+      rescue ArgumentError => e
+        resolver_result << e.message
+      end
+    end
+
+    sleep 0.5
+    assert resolver.alive?, "the resolver should be waiting on the post's lock"
+    release << true
+    sender.join(20)
+    resolver.join(20)
+
+    assert_equal "posted", log.reload.status
+    assert_equal "777", log.tweet_id
+    assert_match(/can be resolved/, resolver_result.pop(timeout: 1).to_s)
+    assert_requested stub, times: 1
+  end
+
   private
 
   def post!(text, key:)
