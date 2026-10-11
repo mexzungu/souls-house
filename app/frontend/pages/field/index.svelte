@@ -13,6 +13,8 @@
   import RecordingUploadDialog from '$lib/components/field/RecordingUploadDialog.svelte';
   import RecordingAllowance from '$lib/components/field/RecordingAllowance.svelte';
   import RecordingViewer from '$lib/components/field/RecordingViewer.svelte';
+  import FieldTweetViewer from '$lib/components/field/FieldTweetViewer.svelte';
+  import FieldTweetStreamPanel from '$lib/components/field/FieldTweetStreamPanel.svelte';
   import FieldTagEditor from '$lib/components/field/FieldTagEditor.svelte';
   import FieldTagManager from '$lib/components/field/FieldTagManager.svelte';
   import FieldList from '$lib/components/field/FieldList.svelte';
@@ -30,10 +32,11 @@
   let {
     items = [],
     current_item = null,
-    counts = { all: 0, files: 0, notes: 0, recordings: 0 },
+    counts = { all: 0, files: 0, notes: 0, recordings: 0, tweets: 0 },
     field_empty = false,
     pagination = { page: 1, pages: 1, per_page: 50, total: 0 },
     recording_allowance = null,
+    tweet_stream = null,
     max_recording_bytes = 2 * 1024 * 1024 * 1024,
     max_recording_label = '2 GB',
     suggestions_enabled = false,
@@ -56,6 +59,7 @@
     { key: 'files', label: 'Files' },
     { key: 'notes', label: 'Notes' },
     { key: 'recordings', label: 'Recordings' },
+    { key: 'tweets', label: 'Tweets' },
   ];
 
   // The server sends one page of the list (tab and tags already applied),
@@ -76,6 +80,7 @@
       [`Account:${account.id}:field_files`]: [...LIST_PROPS, 'search'],
       [`Account:${account.id}:whiteboards`]: [...LIST_PROPS, 'search'],
       [`Account:${account.id}:field_recordings`]: [...LIST_PROPS, 'recording_allowance', 'search'],
+      [`Account:${account.id}:field_tweets`]: [...LIST_PROPS, 'search'],
     };
     if (current?.kind === 'note') subs[`Whiteboard:${current.id}`] = [...LIST_PROPS, 'search'];
     updateSync(subs);
@@ -303,6 +308,12 @@
     if (!confirm(message)) return;
     router.delete(`/accounts/${account.id}/field/files/${current.id}`);
   }
+
+  function deleteTweet() {
+    const message = "Delete this tweet from the Field? It won't be brought back by the stream.";
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/field/tweets/${current.id}`);
+  }
 </script>
 
 <svelte:head>
@@ -323,6 +334,10 @@
 
   {#if fieldEmpty}
     <FieldEmpty {accountLabel} />
+    <!-- An empty Field has no tabs, so a stream is set up (or shown waiting) here. -->
+    {#if tweet_stream}
+      <div class="mt-6"><FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} /></div>
+    {/if}
   {:else}
     <!-- On a phone, an open item has the screen to itself. -->
     <div class={current ? 'hidden lg:block' : ''}>
@@ -358,6 +373,12 @@
 
     {#if tab === 'recordings' && recording_allowance}
       <div class={current ? 'hidden lg:block' : ''}><RecordingAllowance allowance={recording_allowance} /></div>
+    {/if}
+
+    {#if tab === 'tweets' && tweet_stream}
+      <div class={current ? 'hidden lg:block' : ''}>
+        <FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} />
+      </div>
     {/if}
 
     <div class="grid gap-6 lg:grid-cols-3">
@@ -404,6 +425,8 @@
           {#key current.key}
             <RecordingViewer recording={current} />
           {/key}
+        {:else if current?.kind === 'tweet'}
+          <FieldTweetViewer tweet={current} onDelete={deleteTweet} />
         {:else if current?.kind === 'note'}
           <div class="mb-2 flex flex-wrap justify-end gap-1">
             <Button size="sm" variant="ghost" onclick={() => (historyOpen = true)} data-testid="note-history-open">

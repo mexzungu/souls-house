@@ -7,8 +7,9 @@
   import FollowThroughSettingsCard from '$lib/components/admin/FollowThroughSettingsCard.svelte';
   import VmBirthSettingsCard from '$lib/components/admin/VmBirthSettingsCard.svelte';
   import FieldOcrSettingsCard from '$lib/components/admin/FieldOcrSettingsCard.svelte';
+  import FieldTweetsSettingsCard from '$lib/components/admin/FieldTweetsSettingsCard.svelte';
 
-  let { setting = {}, follow_through_residents = [], vm_births = {}, field_ocr = {} } = $props();
+  let { setting = {}, follow_through_residents = [], vm_births = {}, field_ocr = {}, field_tweets = {} } = $props();
 
   useSync({ 'Setting:all': 'setting' });
 
@@ -38,6 +39,12 @@
     formData.append('setting[vm_resident_limit]', form.vm_resident_limit ?? 0);
     formData.append('setting[field_ocr_enabled]', form.field_ocr_enabled ?? false);
     formData.append('setting[field_ocr_daily_usd_ceiling]', form.field_ocr_daily_usd_ceiling ?? 1);
+    formData.append('setting[field_tweets_enabled]', form.field_tweets_enabled ?? false);
+    formData.append('setting[field_tweets_site_monthly_usd_ceiling]', form.field_tweets_site_monthly_usd_ceiling ?? 0);
+    formData.append('setting[field_tweets_account_monthly_usd_ceiling]', form.field_tweets_account_monthly_usd_ceiling ?? 1);
+    formData.append('setting[field_tweets_daily_import_cap]', form.field_tweets_daily_import_cap ?? 50);
+    formData.append('setting[field_tweets_poll_minutes]', form.field_tweets_poll_minutes ?? 15);
+    if (form.field_tweets_resume_house) formData.append('setting[field_tweets_resume_house]', 'true');
     formData.append('setting[follow_through_resident_ids][]', '');
     for (const id of followThroughPicked) formData.append('setting[follow_through_resident_ids][]', id);
 
@@ -102,6 +109,8 @@
       <VmBirthSettingsCard {form} status={vm_births} />
 
       <FieldOcrSettingsCard {form} status={field_ocr} />
+
+      <FieldTweetsSettingsCard {form} status={field_tweets} />
 
       <div class="flex justify-end">
         <Button type="submit" disabled={submitting}>
