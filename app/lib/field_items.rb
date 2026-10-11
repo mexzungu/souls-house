@@ -25,6 +25,12 @@ module FieldItems
         web_path: routes.account_field_recording_path(record.account, record),
         api_path: routes.api_v1_field_recording_path(record)
       )
+    when "tweet"
+      base.merge(
+        author_handle: record.author_handle, kinds: record.kinds, url: record.url,
+        web_path: routes.account_field_path(record.account, tab: "tweets", item: "tweet-#{record.to_param}"),
+        api_path: routes.api_v1_field_tweet_path(record)
+      )
     when "file"
       base.merge(
         filename: record.filename, uploaded_by: record.uploader_name,
@@ -37,6 +43,46 @@ module FieldItems
         api_path: routes.api_v1_whiteboard_path(record)
       )
     end
+  end
+
+  def tweet_json(tweet, tags = [])
+    {
+      key: "tweet-#{tweet.to_param}",
+      kind: "tweet",
+      id: tweet.to_param,
+      title: tweet.title,
+      text: tweet.text,
+      author_handle: tweet.author_handle,
+      author_name: tweet.author_name,
+      url: tweet.url,
+      kinds: tweet.kinds,
+      in_reply_to_handle: tweet.in_reply_to_handle,
+      in_reply_to_url: (tweet.in_reply_to_tweet_id && "https://x.com/#{tweet.in_reply_to_handle || "i"}/status/#{tweet.in_reply_to_tweet_id}"),
+      related: tweet.related.presence,
+      media: tweet.media,
+      metrics: tweet.metrics,
+      metrics_at: tweet.metrics_at&.iso8601,
+      posted_at: tweet.posted_at.iso8601,
+      fetched_at: tweet.fetched_at.iso8601,
+      dated_at: tweet.posted_at.iso8601,
+      created_at: tweet.created_at.iso8601,
+      tags: tags
+    }
+  end
+
+  # The account's tweet stream for the Field page: nil while the house has
+  # streams switched off, so the page shows nothing about them.
+  def tweet_stream_json(account)
+    return nil unless FieldTweets.enabled?
+
+    source = account.field_tweet_source
+    {
+      source: source&.status_json,
+      house_available: FieldTweets.house_available?,
+      daily_import_cap: FieldTweets.daily_import_cap,
+      account_monthly_usd_ceiling: Setting.instance.field_tweets_account_monthly_usd_ceiling.to_s,
+      poll_minutes: Setting.instance.field_tweets_poll_minutes
+    }
   end
 
   def tags_json(account)

@@ -3,37 +3,36 @@
   import { router } from '@inertiajs/svelte';
   import { createDynamicSync } from '$lib/use-sync';
   import * as Card from '$lib/components/shadcn/card/index.js';
-  import * as Dialog from '$lib/components/shadcn/dialog/index.js';
   import { Button } from '$lib/components/shadcn/button/index.js';
-  import { Input } from '$lib/components/shadcn/input/index.js';
-  import { Label } from '$lib/components/shadcn/label/index.js';
   import WhiteboardViewer from '$lib/components/whiteboards/WhiteboardViewer.svelte';
   import FieldFileViewer from '$lib/components/field/FieldFileViewer.svelte';
   import NoteHistory from '$lib/components/field/NoteHistory.svelte';
   import RecordingUploadDialog from '$lib/components/field/RecordingUploadDialog.svelte';
+  import FieldFileUploadDialog from '$lib/components/field/FieldFileUploadDialog.svelte';
   import RecordingAllowance from '$lib/components/field/RecordingAllowance.svelte';
   import RecordingViewer from '$lib/components/field/RecordingViewer.svelte';
+  import FieldTweetViewer from '$lib/components/field/FieldTweetViewer.svelte';
+  import FieldTweetStreamPanel from '$lib/components/field/FieldTweetStreamPanel.svelte';
   import FieldTagEditor from '$lib/components/field/FieldTagEditor.svelte';
   import FieldTagManager from '$lib/components/field/FieldTagManager.svelte';
   import FieldList from '$lib/components/field/FieldList.svelte';
   import FieldEmpty from '$lib/components/field/FieldEmpty.svelte';
   import FieldSearchBar from '$lib/components/field/FieldSearchBar.svelte';
   import FieldSearchResults from '$lib/components/field/FieldSearchResults.svelte';
-  import SummariesNotice from '$lib/components/field/SummariesNotice.svelte';
-  import OcrNotice from '$lib/components/field/OcrNotice.svelte';
   import FieldActions from '$lib/components/field/FieldActions.svelte';
   import FieldSharing from '$lib/components/field/FieldSharing.svelte';
   import FieldNoteDialog from '$lib/components/field/FieldNoteDialog.svelte';
-  import { fieldItemLink, formatBytes } from '$lib/field';
+  import { fieldItemLink } from '$lib/field';
   import { CaretLeft } from 'phosphor-svelte';
 
   let {
     items = [],
     current_item = null,
-    counts = { all: 0, files: 0, notes: 0, recordings: 0 },
+    counts = { all: 0, files: 0, notes: 0, recordings: 0, tweets: 0 },
     field_empty = false,
     pagination = { page: 1, pages: 1, per_page: 50, total: 0 },
     recording_allowance = null,
+    tweet_stream = null,
     max_recording_bytes = 2 * 1024 * 1024 * 1024,
     max_recording_label = '2 GB',
     suggestions_enabled = false,
@@ -56,6 +55,7 @@
     { key: 'files', label: 'Files' },
     { key: 'notes', label: 'Notes' },
     { key: 'recordings', label: 'Recordings' },
+    { key: 'tweets', label: 'Tweets' },
   ];
 
   // The server sends one page of the list (tab and tags already applied),
@@ -76,6 +76,7 @@
       [`Account:${account.id}:field_files`]: [...LIST_PROPS, 'search'],
       [`Account:${account.id}:whiteboards`]: [...LIST_PROPS, 'search'],
       [`Account:${account.id}:field_recordings`]: [...LIST_PROPS, 'recording_allowance', 'search'],
+      [`Account:${account.id}:field_tweets`]: [...LIST_PROPS, 'search'],
     };
     if (current?.kind === 'note') subs[`Whiteboard:${current.id}`] = [...LIST_PROPS, 'search'];
     updateSync(subs);
@@ -179,48 +180,7 @@
 
   let recordingOpen = $state(false);
 
-  // Add file
   let uploadOpen = $state(false);
-  let uploadFile = $state(null);
-  let uploadTitle = $state('');
-  let uploadNote = $state('');
-  let uploadError = $state('');
-  let uploadTooLarge = $state(false);
-  let uploading = $state(false);
-
-  function chooseFile(event) {
-    const file = event.currentTarget.files?.[0] || null;
-    uploadError = '';
-    uploadTooLarge = false;
-    uploadFile = file;
-    if (file && file.size > max_file_bytes) {
-      uploadTooLarge = true;
-      uploadError = `${file.name} is ${formatBytes(file.size)}. The limit is ${max_file_label}.`;
-    }
-  }
-
-  function submitUpload(event) {
-    event.preventDefault();
-    if (!uploadFile || uploadTooLarge) return;
-    uploadError = '';
-    const body = new FormData();
-    body.append('field_file[file]', uploadFile);
-    if (uploadTitle.trim()) body.append('field_file[title]', uploadTitle.trim());
-    if (uploadNote.trim()) body.append('field_file[note]', uploadNote.trim());
-    uploading = true;
-    router.post(`/accounts/${account.id}/field/files`, body, {
-      preserveState: true,
-      onSuccess: () => {
-        uploadOpen = false;
-        uploadFile = null;
-        uploadTitle = '';
-        uploadNote = '';
-      },
-      onError: (errors) => (uploadError = errors.file || 'The upload failed. Please try again.'),
-      onFinish: () => (uploading = false),
-    });
-  }
-
   let noteOpen = $state(false);
 
   // Note editing, unchanged from the whiteboards page
@@ -303,6 +263,12 @@
     if (!confirm(message)) return;
     router.delete(`/accounts/${account.id}/field/files/${current.id}`);
   }
+
+  function deleteTweet() {
+    const message = "Delete this tweet from the Field? It won't be brought back by the stream.";
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/field/tweets/${current.id}`);
+  }
 </script>
 
 <svelte:head>
@@ -323,6 +289,10 @@
 
   {#if fieldEmpty}
     <FieldEmpty {accountLabel} />
+    <!-- An empty Field has no tabs, so a stream is set up (or shown waiting) here. -->
+    {#if tweet_stream}
+      <div class="mt-6"><FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} /></div>
+    {/if}
   {:else}
     <!-- On a phone, an open item has the screen to itself. -->
     <div class={current ? 'hidden lg:block' : ''}>
@@ -358,6 +328,12 @@
 
     {#if tab === 'recordings' && recording_allowance}
       <div class={current ? 'hidden lg:block' : ''}><RecordingAllowance allowance={recording_allowance} /></div>
+    {/if}
+
+    {#if tab === 'tweets' && tweet_stream}
+      <div class={current ? 'hidden lg:block' : ''}>
+        <FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} />
+      </div>
     {/if}
 
     <div class="grid gap-6 lg:grid-cols-3">
@@ -404,6 +380,8 @@
           {#key current.key}
             <RecordingViewer recording={current} />
           {/key}
+        {:else if current?.kind === 'tweet'}
+          <FieldTweetViewer tweet={current} onDelete={deleteTweet} />
         {:else if current?.kind === 'note'}
           <div class="mb-2 flex flex-wrap justify-end gap-1">
             <Button size="sm" variant="ghost" onclick={() => (historyOpen = true)} data-testid="note-history-open">
@@ -434,49 +412,14 @@
   {/if}
 </div>
 
-<Dialog.Root bind:open={uploadOpen}>
-  <Dialog.Content class="sm:max-w-lg">
-    <Dialog.Header>
-      <Dialog.Title>Add a file to the Field</Dialog.Title>
-      <Dialog.Description
-        >{sharedLine}
-        {#if summaries_enabled}<SummariesNotice kind="file" ocr={ocr_enabled} />{/if}
-        {#if ocr_enabled}<OcrNotice kind="file" />{/if}</Dialog.Description>
-    </Dialog.Header>
-    <form onsubmit={submitUpload} class="space-y-4">
-      <div class="space-y-1">
-        <Label for="field-file">File (up to {max_file_label})</Label>
-        <Input id="field-file" type="file" onchange={chooseFile} required />
-        <p class="text-xs text-muted-foreground">
-          Any kind of file can be kept here. Residents may not be able to read every format.
-        </p>
-      </div>
-      <div class="space-y-1">
-        <Label for="field-title">Title</Label>
-        <Input id="field-title" bind:value={uploadTitle} maxlength={200} placeholder={uploadFile?.name || ''} />
-      </div>
-      <div class="space-y-1">
-        <Label for="field-note">Why I'm bringing this <span class="text-muted-foreground">(optional)</span></Label>
-        <textarea
-          id="field-note"
-          bind:value={uploadNote}
-          maxlength={2000}
-          rows="3"
-          class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-          placeholder="I came away uneasy, but I don't know why."></textarea>
-      </div>
-      {#if uploadError}
-        <p class="text-sm text-destructive" role="alert">{uploadError}</p>
-      {/if}
-      <Dialog.Footer>
-        <Button type="button" variant="ghost" onclick={() => (uploadOpen = false)}>Cancel</Button>
-        <Button type="submit" disabled={!uploadFile || uploadTooLarge || uploading}>
-          {uploading ? 'Uploading…' : 'Add to the Field'}
-        </Button>
-      </Dialog.Footer>
-    </form>
-  </Dialog.Content>
-</Dialog.Root>
+<FieldFileUploadDialog
+  bind:open={uploadOpen}
+  accountId={account.id}
+  maxBytes={max_file_bytes}
+  maxLabel={max_file_label}
+  summariesEnabled={summaries_enabled}
+  ocrEnabled={ocr_enabled}
+  {sharedLine} />
 
 <RecordingUploadDialog
   bind:open={recordingOpen}
