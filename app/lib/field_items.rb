@@ -59,6 +59,9 @@ module FieldItems
       summary_short: file.summary_short,
       summary_long: file.summary_long,
       summary_partial: file.summary_partial?,
+      summary_pending: file.summary_pending?,
+      summary_failed: file.summary_failed?,
+      resummarize_url: url_helpers.resummarize_account_field_file_path(file.account, file),
       filename: file.filename,
       content_type: file.content_type,
       byte_size: file.byte_size,
@@ -101,6 +104,7 @@ module FieldItems
   # content: false (the item grid) leaves the notes out; has_notes still says
   # whether there are any.
   def recording_json(recording, tags = [], content: true)
+    speakers = recording.ready? ? speakers_of(recording).to_a : []
     {
       key: "recording-#{recording.to_param}",
       kind: "recording",
@@ -111,6 +115,9 @@ module FieldItems
       has_notes: recording.notes.present?,
       summary_short: recording.summary_short,
       summary_long: recording.summary_long,
+      summary_pending: recording.summary_pending?,
+      summary_failed: recording.summary_failed?,
+      resummarize_url: Rails.application.routes.url_helpers.resummarize_account_field_recording_path(recording.account, recording),
       status: recording.status,
       failure_reason: recording.failure_reason,
       duration_ms: recording.duration_ms,
@@ -122,7 +129,10 @@ module FieldItems
       transcript_source: recording.transcript_source,
       recorded_at: recording.recorded_at&.iso8601,
       source_path: recording.source_path,
-      speaker_names: recording.ready? ? speakers_of(recording).map(&:display_name) : [],
+      speaker_names: speakers.map(&:display_name),
+      # How many speakers still read "Speaker N", so the list can show the
+      # recording is waiting for someone to name them.
+      unnamed_speakers: speakers.count(&:unnamed?),
       # Deleting after this point doesn't give the minutes back (spec §5).
       dispatched: recording.dispatch_count.positive?,
       retryable: recording.kept? && FieldRecording::RETRYABLE_STATUSES.include?(recording.status) && recording.audio.attached?,
