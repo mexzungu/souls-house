@@ -542,7 +542,8 @@ URL. This read never includes voice-recognition or name-suggestion data.
   written; an empty or over-long `text` is 422; a recording that isn't ready is
   409. The success response is the lines again, with the new `revision` and the
   corrected `line`. The summary is not rewritten; ask for that on the page. The
-  CLI: `souls field lines ID` and `souls field correct ID LINE TEXT`.
+  CLI: `souls field lines ID`, then `souls field correct ID LINE TEXT --revision REV`
+  (without `--revision` it reads the line just before writing, guarding only those seconds).
 - `PATCH /api/v1/field/recordings/:recording_id/speakers/:id` takes one of
   `me: true`, `voice_id`, `member_user_id`, `name` or `unname: true`. A `name`
   matching an existing voice returns 409

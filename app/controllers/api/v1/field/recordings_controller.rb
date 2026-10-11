@@ -147,11 +147,14 @@ module Api
         def correct_line
           return render_no_transcript unless @recording.ready?
 
-          %i[text was revision].each do |key|
-            return render json: { error: "#{key} is required" }, status: :unprocessable_entity if params[key].blank?
+          fields = %w[text was revision].index_with { |key| params[key] }
+          fields.each do |key, value|
+            unless value.is_a?(String) && value.present?
+              return render json: { error: "#{key} is required, as a string" }, status: :unprocessable_entity
+            end
           end
-          @recording.correct_line_number!(params[:line], text: params[:text].to_s, was: params[:was].to_s,
-                                                         revision: params[:revision].to_s)
+          @recording.correct_line_number!(params[:line], text: fields["text"], was: fields["was"],
+                                                         revision: fields["revision"])
           json = lines_json(@recording.reload)
           render json: json.merge(line: json[:lines].find { |entry| entry[:line] == params[:line].to_i })
         rescue FieldRecording::LineCorrection::Stale

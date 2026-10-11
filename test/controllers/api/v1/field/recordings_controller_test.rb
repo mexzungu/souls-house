@@ -76,6 +76,25 @@ class Api::V1::Field::RecordingsControllerTest < ActionDispatch::IntegrationTest
     assert_equal before, @recording.reload.transcript_words
   end
 
+  test "correction fields that aren't strings are refused and nothing is written" do
+    get lines_api_v1_field_recording_path(@recording), headers: @headers
+    revision = response.parsed_body["revision"]
+    before = @recording.transcript_words
+
+    [ { text: { bad: "shape" }, was: "there", revision: },
+      { text: [ "Dan" ], was: "there", revision: },
+      { text: 7, was: "there", revision: },
+      { text: "Dan", was: { t: "there" }, revision: },
+      { text: "Dan", was: "there", revision: [ revision ] } ].each do |params|
+      patch line_api_v1_field_recording_path(@recording, line: 2), headers: @headers, params:, as: :json
+      assert_response :unprocessable_entity, params.inspect
+      assert_match "as a string", response.parsed_body["error"]
+    end
+    @recording.reload
+    assert_equal before, @recording.transcript_words
+    assert_equal revision, @recording.transcript_revision
+  end
+
   test "lines need a transcript, and another account's recording is out of reach" do
     queued = queued_recording(account: @account, user: @user)
     get lines_api_v1_field_recording_path(queued), headers: @headers
