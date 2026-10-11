@@ -211,6 +211,11 @@ Rails.application.routes.draw do
     resources :field_files, path: "field/files", only: [ :create, :update, :destroy ] do
       post :resummarize, on: :member
     end
+    resources :field_tweets, path: "field/tweets", only: [ :destroy ]
+    resource :field_tweet_source, path: "field/tweet_stream", only: [ :create, :update, :destroy ] do
+      post :pause
+      post :resume
+    end
     resources :field_recording_uploads, path: "field/recordings/uploads", only: [ :create ]
     resources :field_recordings, path: "field/recordings", only: [ :show, :create, :update, :destroy ] do
       post :retry, on: :member
@@ -458,6 +463,10 @@ Rails.application.routes.draw do
           resource :tags, only: :update, controller: "item_tags"
           resources :pages, only: [ :index, :show ], controller: "file_pages"
         end
+        resources :tweets, only: [ :index, :show, :destroy ] do
+          resource :tags, only: :update, controller: "item_tags"
+        end
+        get :tweet_stream, to: "tweets#stream"
         resources :recording_uploads, path: "recordings/uploads", only: :create
         resources :recordings, only: [ :index, :show, :create, :update, :destroy ] do
           member do

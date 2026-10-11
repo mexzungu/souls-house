@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_11_160000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_11_183000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -986,7 +986,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_160000) do
     t.index ["field_tag_id"], name: "index_field_taggings_on_field_tag_id"
     t.index ["taggable_type", "taggable_id"], name: "index_field_taggings_on_taggable"
     t.index ["tagged_by_type", "tagged_by_id"], name: "index_field_taggings_on_tagged_by"
-    t.check_constraint "taggable_type::text = ANY (ARRAY['FieldFile'::character varying, 'FieldRecording'::character varying, 'Whiteboard'::character varying]::text[])", name: "field_taggings_taggable_type"
+    t.check_constraint "taggable_type::text = ANY (ARRAY['FieldFile'::character varying, 'FieldRecording'::character varying, 'Whiteboard'::character varying, 'FieldTweet'::character varying]::text[])", name: "field_taggings_taggable_type"
   end
 
   create_table "field_tags", force: :cascade do |t|
@@ -1003,6 +1003,110 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_160000) do
     t.index ["account_id"], name: "index_field_tags_on_account_id"
     t.index ["created_by_type", "created_by_id"], name: "index_field_tags_on_created_by"
     t.index ["discarded_by_type", "discarded_by_id"], name: "index_field_tags_on_discarded_by"
+  end
+
+  create_table "field_tweet_backlog_items", force: :cascade do |t|
+    t.bigint "field_tweet_source_id", null: false
+    t.string "provider_tweet_id", limit: 32, null: false
+    t.datetime "posted_at", null: false
+    t.jsonb "attrs", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["field_tweet_source_id", "posted_at"], name: "index_field_tweet_backlog_on_source_and_posted"
+    t.index ["field_tweet_source_id", "provider_tweet_id"], name: "index_field_tweet_backlog_on_source_and_tweet", unique: true
+  end
+
+  create_table "field_tweet_calls", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "field_tweet_source_id"
+    t.string "funding", null: false
+    t.string "status", default: "reserved", null: false
+    t.decimal "charge_usd", precision: 14, scale: 8, null: false
+    t.integer "returned_count", default: 0, null: false
+    t.integer "already_stored_count", default: 0, null: false
+    t.integer "queued_count", default: 0, null: false
+    t.integer "rejected_count", default: 0, null: false
+    t.boolean "retry", default: false, null: false
+    t.integer "http_status"
+    t.string "error", limit: 300
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_field_tweet_calls_on_account_id"
+    t.index ["field_tweet_source_id"], name: "index_field_tweet_calls_on_field_tweet_source_id"
+    t.index ["funding", "created_at"], name: "index_field_tweet_calls_on_funding_and_created_at"
+    t.check_constraint "charge_usd >= 0::numeric", name: "field_tweet_calls_nonnegative_charge"
+    t.check_constraint "funding::text = ANY (ARRAY['house'::character varying, 'own'::character varying]::text[])", name: "field_tweet_calls_funding"
+    t.check_constraint "status::text = ANY (ARRAY['reserved'::character varying, 'settled'::character varying, 'failed'::character varying, 'uncertain'::character varying]::text[])", name: "field_tweet_calls_status"
+  end
+
+  create_table "field_tweet_sources", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "created_by_type"
+    t.bigint "created_by_id"
+    t.string "handle", limit: 15, null: false
+    t.boolean "include_replies", default: true, null: false
+    t.boolean "include_quotes", default: true, null: false
+    t.boolean "include_reposts", default: false, null: false
+    t.text "api_key"
+    t.decimal "own_monthly_usd_limit", precision: 10, scale: 4, default: "5.0", null: false
+    t.string "state", default: "active", null: false
+    t.string "state_reason", limit: 300
+    t.datetime "connected_at", null: false
+    t.datetime "checkpoint_at", null: false
+    t.datetime "window_since"
+    t.datetime "window_until"
+    t.text "window_cursor"
+    t.integer "window_pages", default: 0, null: false
+    t.integer "window_rejected", default: 0, null: false
+    t.datetime "gap_since"
+    t.datetime "gap_until"
+    t.datetime "last_success_at"
+    t.datetime "next_attempt_at"
+    t.integer "failure_count", default: 0, null: false
+    t.datetime "sync_claimed_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_field_tweet_sources_on_account_id", unique: true
+    t.index ["created_by_type", "created_by_id"], name: "index_field_tweet_sources_on_created_by"
+    t.index ["next_attempt_at"], name: "index_field_tweet_sources_on_next_attempt_at"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'paused'::character varying, 'needs_attention'::character varying]::text[])", name: "field_tweet_sources_state"
+  end
+
+  create_table "field_tweets", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "field_tweet_source_id"
+    t.string "provider_tweet_id", limit: 32, null: false
+    t.string "author_id", limit: 32
+    t.string "author_handle", limit: 15, null: false
+    t.string "author_name", limit: 100
+    t.text "text", null: false
+    t.datetime "posted_at", null: false
+    t.datetime "fetched_at", null: false
+    t.string "url", limit: 300, null: false
+    t.boolean "is_reply", default: false, null: false
+    t.boolean "is_quote", default: false, null: false
+    t.boolean "is_repost", default: false, null: false
+    t.string "in_reply_to_tweet_id", limit: 32
+    t.string "in_reply_to_handle", limit: 15
+    t.string "conversation_id", limit: 32
+    t.string "quoted_tweet_id", limit: 32
+    t.string "reposted_tweet_id", limit: 32
+    t.jsonb "media", default: [], null: false
+    t.jsonb "metrics", default: {}, null: false
+    t.datetime "metrics_at"
+    t.jsonb "related", default: {}, null: false
+    t.string "lang", limit: 16
+    t.string "source", limit: 40, default: "twitterapi.io", null: false
+    t.datetime "discarded_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.virtual "search_vector", type: :tsvector, as: "(setweight(to_tsvector('simple'::regconfig, (((COALESCE(author_handle, ''::character varying))::text || ' '::text) || (COALESCE(author_name, ''::character varying))::text)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE(text, ''::text), 30000)), 'C'::\"char\"))", stored: true
+    t.index ["account_id", "created_at"], name: "index_field_tweets_on_account_id_and_created_at"
+    t.index ["account_id", "posted_at"], name: "index_field_tweets_on_account_id_and_posted_at"
+    t.index ["account_id", "provider_tweet_id"], name: "index_field_tweets_on_account_id_and_provider_tweet_id", unique: true
+    t.index ["discarded_at"], name: "index_field_tweets_on_discarded_at"
+    t.index ["field_tweet_source_id"], name: "index_field_tweets_on_field_tweet_source_id"
+    t.index ["search_vector"], name: "index_field_tweets_on_search_vector", using: :gin
   end
 
   create_table "field_voice_enrolments", force: :cascade do |t|
@@ -1949,6 +2053,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_160000) do
     t.boolean "field_ocr_enabled", default: false, null: false
     t.datetime "field_ocr_enabled_at"
     t.decimal "field_ocr_daily_usd_ceiling", precision: 10, scale: 4, default: "1.0", null: false
+    t.boolean "field_tweets_enabled", default: false, null: false
+    t.decimal "field_tweets_site_monthly_usd_ceiling", precision: 10, scale: 4, default: "0.0", null: false
+    t.decimal "field_tweets_account_monthly_usd_ceiling", precision: 10, scale: 4, default: "1.0", null: false
+    t.integer "field_tweets_daily_import_cap", default: 50, null: false
+    t.integer "field_tweets_poll_minutes", default: 15, null: false
+    t.datetime "field_tweets_house_halted_at"
+    t.string "field_tweets_house_halt_reason", limit: 300
   end
 
   create_table "stone_revisions", force: :cascade do |t|
@@ -2267,6 +2378,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_160000) do
   add_foreign_key "field_taggings", "accounts"
   add_foreign_key "field_taggings", "field_tags"
   add_foreign_key "field_tags", "accounts"
+  add_foreign_key "field_tweet_backlog_items", "field_tweet_sources", on_delete: :cascade
+  add_foreign_key "field_tweet_calls", "accounts"
+  add_foreign_key "field_tweet_sources", "accounts"
+  add_foreign_key "field_tweets", "accounts"
+  add_foreign_key "field_tweets", "field_tweet_sources", on_delete: :nullify
   add_foreign_key "field_voice_enrolments", "accounts"
   add_foreign_key "field_voice_enrolments", "field_recording_speakers"
   add_foreign_key "field_voice_enrolments", "field_voices"

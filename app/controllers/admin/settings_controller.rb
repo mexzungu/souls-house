@@ -10,7 +10,8 @@ class Admin::SettingsController < ApplicationController
       ),
       follow_through_residents: follow_through_residents,
       vm_births: Agents::VmBirthPolicy.current.as_json,
-      field_ocr: FieldOcr.status_json
+      field_ocr: FieldOcr.status_json,
+      field_tweets: FieldTweets.status_json
     }
   end
 
@@ -18,6 +19,10 @@ class Admin::SettingsController < ApplicationController
     setting = Setting.instance
 
     setting.logo.purge if params[:setting]&.[](:remove_logo)
+
+    if params[:setting]&.[](:field_tweets_resume_house).to_s == "true"
+      setting.assign_attributes(field_tweets_house_halted_at: nil, field_tweets_house_halt_reason: nil)
+    end
 
     saved = Setting.transaction do
       setting.update(setting_params).tap do |ok|
@@ -49,6 +54,11 @@ class Admin::SettingsController < ApplicationController
       :vm_resident_limit,
       :field_ocr_enabled,
       :field_ocr_daily_usd_ceiling,
+      :field_tweets_enabled,
+      :field_tweets_site_monthly_usd_ceiling,
+      :field_tweets_account_monthly_usd_ceiling,
+      :field_tweets_daily_import_cap,
+      :field_tweets_poll_minutes,
       :logo
     )
   end
