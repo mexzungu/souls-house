@@ -1,5 +1,5 @@
 <script>
-  import { Link } from '@inertiajs/svelte';
+  import { Link, page } from '@inertiajs/svelte';
   import { accountChatPath } from '@/routes';
   import { shortDate } from '$lib/chat-display';
   import ChatParticipantAvatars from '$lib/components/chat/ChatParticipantAvatars.svelte';
@@ -7,12 +7,20 @@
   import ReplyAttentionEye from './ReplyAttentionEye.svelte';
   import VisualTagPicker from './VisualTagPicker.svelte';
 
-  let { chat, accountId, activeChatId = null, visualTags = [] } = $props();
+  let {
+    chat,
+    accountId,
+    activeChatId = null,
+    visualTags = [],
+    selectable = false,
+    selected = false,
+    onToggle = () => {},
+  } = $props();
 </script>
 
 <div class="relative">
   <Link
-    href={accountChatPath(accountId, chat.id)}
+    href={accountChatPath(accountId, chat.id) + ($page.props.current_room === 'all' ? '?room=all' : '')}
     class="block p-3 pr-10 hover:bg-muted/50 transition-colors border-b border-border
          {activeChatId === chat.id ? 'bg-primary/10 border-l-4 border-l-primary' : ''}
          {chat.archived ? 'opacity-50' : ''}
@@ -60,4 +68,24 @@
   <div class="absolute right-2 top-2">
     <ReplyAttentionEye chatId={chat.id} {accountId} />
   </div>
+  {#if selectable && chat.discarded}
+    <div
+      class="absolute inset-0 z-10 cursor-not-allowed"
+      title="Deleted conversations can't be moved; restore it first"
+      aria-hidden="true">
+    </div>
+  {:else if selectable}
+    <!-- While selecting for a move, the whole row toggles instead of opening. -->
+    <label
+      class="absolute inset-0 z-10 flex cursor-pointer items-start bg-background/10 p-3 {selected
+        ? 'bg-primary/10'
+        : ''}">
+      <input
+        type="checkbox"
+        checked={selected}
+        onchange={onToggle}
+        class="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary"
+        aria-label="Select {chat.title_or_default || 'conversation'}" />
+    </label>
+  {/if}
 </div>
