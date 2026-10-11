@@ -346,7 +346,8 @@ class AgentsControllerTest < ActionDispatch::IntegrationTest
     catalog = @agent.subagent_catalog
     assert_equal catalog.options.as_json, inertia_shared_props["subagent_catalog"]
     assert_equal catalog.providers.as_json, inertia_shared_props["subagent_providers"]
-    assert_equal catalog.empty_reason, inertia_shared_props["subagent_catalog_empty_reason"]
+    assert_not_empty catalog.options
+    assert_nil inertia_shared_props["subagent_catalog_empty_reason"]
   end
 
   test "edit exposes provider subscription setup for a supported hosted agent" do
