@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_11_183000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_11_200000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -2180,11 +2180,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_183000) do
     t.bigint "agent_id", null: false
     t.datetime "created_at", null: false
     t.text "text", null: false
-    t.string "tweet_id", null: false
+    t.string "tweet_id"
     t.datetime "updated_at", null: false
     t.bigint "x_integration_id", null: false
+    t.string "status", default: "posted", null: false
+    t.string "idempotency_key"
+    t.string "request_digest"
+    t.string "reply_to_tweet_id"
+    t.string "failure_reason"
+    t.text "error_message"
+    t.datetime "resolved_at"
+    t.bigint "resolved_by_agent_id"
+    t.index ["agent_id", "idempotency_key"], name: "index_tweet_logs_on_agent_and_idempotency_key", unique: true, where: "(idempotency_key IS NOT NULL)"
     t.index ["agent_id"], name: "index_tweet_logs_on_agent_id"
+    t.index ["resolved_by_agent_id"], name: "index_tweet_logs_on_resolved_by_agent_id"
     t.index ["tweet_id"], name: "index_tweet_logs_on_tweet_id", unique: true
+    t.index ["x_integration_id", "created_at"], name: "index_tweet_logs_on_x_integration_id_and_created_at"
     t.index ["x_integration_id"], name: "index_tweet_logs_on_x_integration_id"
   end
 
@@ -2306,6 +2317,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_183000) do
     t.datetime "token_expires_at"
     t.datetime "updated_at", null: false
     t.string "x_username"
+    t.integer "daily_post_limit", default: 20, null: false
     t.index ["account_id"], name: "index_x_integrations_on_account_id", unique: true
   end
 
@@ -2515,6 +2527,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_183000) do
   add_foreign_key "transcription_glossary_terms", "agents", column: "created_by_agent_id", on_delete: :nullify
   add_foreign_key "transcription_glossary_terms", "users", column: "created_by_user_id", on_delete: :nullify
   add_foreign_key "tweet_logs", "agents"
+  add_foreign_key "tweet_logs", "agents", column: "resolved_by_agent_id"
   add_foreign_key "tweet_logs", "x_integrations"
   add_foreign_key "users", "accounts", column: "default_account_id", on_delete: :nullify
   add_foreign_key "visual_tags", "accounts"

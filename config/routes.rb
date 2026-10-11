@@ -441,6 +441,7 @@ Rails.application.routes.draw do
       resource :subscription_usage, only: :show
       resources :youtube_reads, only: :create
       resources :x_reads, only: :create
+      resources :x_posts, only: %i[create update]
       resources :service_connections, only: [] do
         resource :access_token, only: :show, controller: "service_connection_tokens"
         namespace :comms do
