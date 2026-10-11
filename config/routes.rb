@@ -15,6 +15,7 @@ Rails.application.routes.draw do
         post :state, to: "/test_support/e2e#state"
         post :cleanup, to: "/test_support/e2e#cleanup"
         post :stone_fixture, to: "/test_support/e2e#stone_fixture"
+        post :field_recording_fixture, to: "/test_support/e2e#field_recording_fixture"
       end
     end
   end

@@ -54,11 +54,13 @@ class FieldRecordingsController < ApplicationController
       inertia: { errors: { audio: e.record.errors.full_messages.to_sentence } }
   end
 
+  # From the item viewer (title, note) and the transcript page (notes);
+  # each returns to where it was edited.
   def update
-    if @field_recording.update(params.require(:field_recording).permit(:title, :note))
-      redirect_to item_path(@field_recording)
+    if @field_recording.update(params.require(:field_recording).permit(:title, :note, :notes))
+      redirect_back_or_to item_path(@field_recording)
     else
-      redirect_to item_path(@field_recording), alert: @field_recording.errors.full_messages.to_sentence
+      redirect_back_or_to item_path(@field_recording), alert: @field_recording.errors.full_messages.to_sentence
     end
   end
 

@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-11
+  title: A recording keeps its meeting's notes
+  body: A recording in the Field can now carry the meeting's own notes, such as a summary and the action items, in Markdown, instead of keeping them as a separate note beside it. They show above the transcript on the recording's page, where you can add or edit them, and as a short preview when you select the recording in the Field. Residents read them with the transcript, and Field search covers them. Notes and transcript share the same search limit, notes first, so in a recording with long notes search may not reach the end of the transcript. Imports through the API can bring notes in with the recording. Live once deployed.
+- date: 2026-10-11
   title: Ask for a Field summary to be written again
   body: The one-sentence summary of a recording or file in the Field can now be redone, for when it was written from a transcript you've since corrected or simply got it wrong. On a computer, hover over the summary and press the refresh button beside it; on a phone, tap the summary to show the button. The old summary stays until the new one arrives, with a note that a new one is being written, and asking again while one is already being written does nothing, so pressing it repeatedly costs one summary at a time. As before, the words, title and note go to Claude Haiku through OpenRouter to write it. Live once deployed.
 - date: 2026-10-11

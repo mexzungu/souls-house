@@ -1487,6 +1487,14 @@ followed and how collection stands (`state`, `collected_through`, `backlog`,
 `gap`). Collection can miss or delay posts, so the Field isn't a complete
 archive of the account. Only people can delete tweets or change the stream.
 
+A recording can also carry `notes`: the meeting's own notes (summary, action
+items), in Markdown, written by a person or brought in with the recording.
+Reading one recording returns them; the list says only `has_notes`. Search
+covers them too, ahead of the transcript and in the same 128 kB, so for a
+recording with long notes search may not reach the end of its transcript (or,
+with very long notes, any of it). When search can't find something you expect
+in a long meeting, read the recording itself.
+
 ### Search the Field
 
 When someone asks about something from their past (a meeting, a call, a

@@ -102,6 +102,12 @@
           <p class="whitespace-pre-wrap">{recording.note}</p>
         </div>
       {/if}
+      {#if recording.notes}
+        <div data-testid="field-recording-notes">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground mb-1">Notes</p>
+          <p class="whitespace-pre-wrap text-sm line-clamp-6">{recording.notes}</p>
+        </div>
+      {/if}
     {/if}
 
     <p class="text-sm {troubled ? 'text-destructive' : ''}" data-testid="field-recording-status">
@@ -127,6 +133,11 @@
       {#if recording.status === 'ready'}
         <Link href={recording.show_url} class={buttonVariants({ size: 'sm' })} data-testid="open-transcript">
           <Scroll class="size-4" /> Open transcript
+        </Link>
+      {:else if recording.notes}
+        <!-- The notes are clamped here; the recording page shows them whole, ready or not. -->
+        <Link href={recording.show_url} class={buttonVariants({ size: 'sm' })} data-testid="open-recording-notes">
+          <Scroll class="size-4" /> Open notes
         </Link>
       {/if}
       {#if recording.retryable}
