@@ -8,8 +8,12 @@
 # body 128,000 bytes, times 7, just under the 1 MB tsvector cap), which
 # leaves no room for a fourth part. So notes go at the front of the body:
 # notes, then the transcript (once ready), together bounded at 128,000 bytes.
-# A recording without notes indexes exactly as before; one with long notes
-# loses the tail of its transcript from search, never the notes.
+# The limitation, exactly: notes are capped in characters and the body in
+# bytes, so notes take as much of the 128 kB as they need, the transcript
+# gets what is left, and notes past 128 kB of their own (possible with
+# multi-byte text: 100,000 characters can be up to 400 kB) lose their own
+# tail and leave none of the transcript in search. A recording without notes
+# indexes exactly as before (its body is the old expression, no separator).
 #
 # The helpers are copied from that migration (a migration must not depend on
 # another's code). `||` rather than concat_ws: a generated column needs
@@ -24,7 +28,7 @@ class AddNotesToFieldRecordings < ActiveRecord::Migration[8.1]
 
   def up
     add_column :field_recordings, :notes, :text
-    replace_search_vector(body: "coalesce(notes, '') || ' ' || coalesce(#{TRANSCRIPT}, '')")
+    replace_search_vector(body: "CASE WHEN coalesce(notes, '') = '' THEN #{TRANSCRIPT} ELSE notes || ' ' || coalesce(#{TRANSCRIPT}, '') END")
   end
 
   def down

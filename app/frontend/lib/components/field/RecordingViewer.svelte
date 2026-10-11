@@ -127,6 +127,11 @@
         <Link href={recording.show_url} class={buttonVariants({ size: 'sm' })} data-testid="open-transcript">
           <Scroll class="size-4" /> Open transcript
         </Link>
+      {:else if recording.notes}
+        <!-- The notes are clamped here; the recording page shows them whole, ready or not. -->
+        <Link href={recording.show_url} class={buttonVariants({ size: 'sm' })} data-testid="open-recording-notes">
+          <Scroll class="size-4" /> Open notes
+        </Link>
       {/if}
       {#if recording.retryable}
         <Button size="sm" variant="outline" onclick={retry}>

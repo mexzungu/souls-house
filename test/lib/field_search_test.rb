@@ -71,6 +71,33 @@ class FieldSearchTest < ActiveSupport::TestCase
     assert_empty search(query: "granttree").results
   end
 
+  # Notes and transcript share the body's 128,000 bytes, notes first (the
+  # migration's stated limitation). These pin the boundaries.
+  test "notes come first in the search budget, and the transcript gets what they leave" do
+    filler = "ab " * 33_000 # 99,000 bytes of notes
+    @recording.update!(notes: "notesstart #{filler}notesend",
+      transcript_text: "transcriptstart #{"cd " * 15_000}transcripttail")
+    assert_equal 1, search(query: "notesstart notesend transcriptstart", kinds: [ "recording" ]).results.size
+    assert_empty search(query: "transcripttail", kinds: [ "recording" ]).results, "past the budget the notes leave"
+  end
+
+  test "notes longer than the budget in bytes lose their own tail and leave no transcript in search" do
+    notes = "notesstart " + ("字 " * 49_990) + "notestail" # 100,000 characters (the cap), about 200 kB
+    assert_operator notes.length, :<=, FieldRecording::MAX_NOTES_LENGTH
+    @recording.update!(notes: notes, transcript_text: "transcriptmarker and the rest")
+
+    assert_equal 1, search(query: "notesstart", kinds: [ "recording" ]).results.size
+    assert_empty search(query: "notestail", kinds: [ "recording" ]).results
+    assert_empty search(query: "transcriptmarker", kinds: [ "recording" ]).results
+  end
+
+  test "without notes a transcript is indexed exactly as before, to the last byte of the budget" do
+    transcript = ("ab " * 42_665) + "endwo"
+    assert_equal FieldSearch::BODY_LIMIT, transcript.bytesize
+    @recording.update_columns(transcript_text: transcript)
+    assert_equal 1, search(query: "endwo", kinds: [ "recording" ]).results.size
+  end
+
   test "discarded and deleted items, and other accounts, are never found" do
     other = accounts(:another_team).whiteboards.create!(name: "Elsewhere", content: "bach partita")
     @note.soft_delete!

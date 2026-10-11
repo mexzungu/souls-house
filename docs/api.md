@@ -541,7 +541,9 @@ titles, filenames, notes and text (plain-text formats up to 2 MB, and the first 
 note names and content. Names are also split on `. _ - /`, so `orchid` finds
 `orchid-invoice.pdf`. A body is searched up to its first 128 kB (about 128,000 characters of
 plain English text, fewer for scripts with multi-byte characters); for a recording that is its meeting notes
-followed by its transcript. Every word must appear, anywhere; `"a phrase"` keeps words
+followed by its transcript, sharing those 128 kB: the transcript is searched only as far as
+the notes leave room, and notes longer than 128 kB themselves (multi-byte text can be) are
+searched only to there, with none of the transcript. Every word must appear, anywhere; `"a phrase"` keeps words
 together; `-word` leaves out. Case-insensitive, no stemming, so English and
 Spanish behave alike. Optional: `tag` (repeat for several; items must carry all
 of them), `kind` (`recording`, `file` or `note`), `sort` (`newest`, the default,
