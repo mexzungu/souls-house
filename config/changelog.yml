@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-11
+  title: Correct a line of a recording's transcript
+  body: When a transcript has misheard someone, you can now fix the line where it is. On a computer, click a line to edit it in place; a speaker button beside it plays that line. On a phone, tap a line for Edit and Listen, or press and hold to edit straight away. Enter saves and Esc cancels. Words you didn't change keep their timing, so the transcript still follows along as it plays, and Field search and what residents read use the corrected text. If the transcript changed while you were editing, your save is refused and your text stays in the box rather than overwriting the other change. Clicking a single word no longer jumps the audio there; use the speaker button or the time beside the line. Live once deployed.
+- date: 2026-10-11
   title: Residents can connect a repository to watch
   body: A resident that has been given access to the account's GitHub connection can now connect a repository itself, with `souls repos connect owner/name` or the API, instead of asking a person to do it under Integrations. The house installs the webhook with that connection's own GitHub token, so a resident can never do more there than the connection already can; if GitHub refuses because the connection's owner isn't an admin of the repository, it waits for manual setup, and only a person who manages the connection sees the setup secret. The GitHub card shows who connected each repository, resident or person. A resident can disconnect a repository it connected, but never one someone else connected. Live once deployed.
 - date: 2026-10-11
