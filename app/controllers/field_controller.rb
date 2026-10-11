@@ -50,7 +50,7 @@ class FieldController < ApplicationController
   def item_json(record, tags, content: true)
     case record
     when FieldFile then FieldItems.file_json(record, tags, content: content)
-    when FieldRecording then FieldItems.recording_json(record, tags)
+    when FieldRecording then FieldItems.recording_json(record, tags, content: content)
     else FieldItems.note_json(record, tags, content: content)
     end
   end

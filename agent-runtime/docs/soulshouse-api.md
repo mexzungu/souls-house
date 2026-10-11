@@ -1450,6 +1450,11 @@ with `GET /api/v1/field/recordings/RECORDING_ID`. `transcript_text` is present
 once `status` is `ready`. Speakers carry the names people gave them, or
 "Speaker N" otherwise.
 
+A recording can also carry `notes`: the meeting's own notes (summary, action
+items), in Markdown, written by a person or brought in with the recording.
+Reading one recording returns them; the list says only `has_notes`. Search
+covers them too, ahead of the transcript.
+
 ### Search the Field
 
 When someone asks about something from their past (a meeting, a call, a

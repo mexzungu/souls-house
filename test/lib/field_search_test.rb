@@ -58,6 +58,19 @@ class FieldSearchTest < ActiveSupport::TestCase
     assert_equal 1, search(query: "board").results.size
   end
 
+  test "a recording's notes are searched, ready or not, and excerpted" do
+    @recording.update!(notes: "## Action items\n\n- Send the shareholder letter by Friday")
+    result = search(query: "shareholder", kinds: [ "recording" ]).results.sole
+    assert_equal @recording.id, result.record.id
+    assert_includes result.excerpts.first[:text], "shareholder letter"
+    # The transcript still is too, after the notes.
+    assert_equal 1, search(query: "granttree shareholder").results.size
+
+    @recording.update_columns(status: "transcribing")
+    assert_equal 1, search(query: "shareholder").results.size
+    assert_empty search(query: "granttree").results
+  end
+
   test "discarded and deleted items, and other accounts, are never found" do
     other = accounts(:another_team).whiteboards.create!(name: "Elsewhere", content: "bach partita")
     @note.soft_delete!
@@ -136,6 +149,10 @@ class FieldSearchTest < ActiveSupport::TestCase
 
     assert_equal 1, search(query: "a2-b2", kinds: [ "recording" ]).results.size
     assert_empty search(query: "a119999-b119999", kinds: [ "file" ]).results
+
+    # Notes share the body's budget, ahead of the transcript.
+    @recording.update!(notes: dense.first(FieldRecording::MAX_NOTES_LENGTH))
+    assert_equal 1, search(query: "a3-b3", kinds: [ "recording" ]).results.size
   end
 
   # Mira's repro (PR #262, round two): 4-byte alphabetic characters in
@@ -147,6 +164,7 @@ class FieldSearchTest < ActiveSupport::TestCase
     assert_operator dense.bytesize, :>, 400_000
 
     @recording.update!(transcript_text: dense)
+    @recording.update!(notes: dense.first(FieldRecording::MAX_NOTES_LENGTH))
     @file.update_columns(extracted_text: dense)
     @note.update_columns(content: dense)
     first = letters.first(8).join("-")

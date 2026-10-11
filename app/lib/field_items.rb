@@ -98,13 +98,17 @@ module FieldItems
     }
   end
 
-  def recording_json(recording, tags = [])
+  # content: false (the item grid) leaves the notes out; has_notes still says
+  # whether there are any.
+  def recording_json(recording, tags = [], content: true)
     {
       key: "recording-#{recording.to_param}",
       kind: "recording",
       id: recording.to_param,
       title: recording.title,
       note: recording.note,
+      notes: (recording.notes if content),
+      has_notes: recording.notes.present?,
       summary_short: recording.summary_short,
       summary_long: recording.summary_long,
       status: recording.status,

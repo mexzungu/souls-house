@@ -33,6 +33,12 @@ class Api::V1::Field::RecordingsControllerTest < ActionDispatch::IntegrationTest
     %w[audio voice_id field_voice print words naming_source suggest].each { |key| assert_not_includes json, "\"#{key}" }
   end
 
+  test "a resident reads a recording's notes" do
+    @recording.update!(notes: "- Ask Priya about the board pack")
+    get api_v1_field_recording_path(@recording), headers: @headers
+    assert_equal "- Ask Priya about the board pack", response.parsed_body.dig("recording", "notes")
+  end
+
   test "unfinished recordings have no transcript yet, and discarded ones are gone" do
     queued = queued_recording(account: @account, user: @user)
     get api_v1_field_recording_path(queued), headers: @headers
