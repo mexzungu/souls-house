@@ -433,6 +433,25 @@ before an upload:
 **Files.** `PATCH /api/v1/field/files/:id` with `title`, `note` and/or
 `dated_at` returns `{ "file": {...} }`. Upload and delete already existed.
 
+**PDF text.** A PDF's own text layer is read page by page with Poppler after
+upload (nothing is sent outside the house). Files gain `text_extraction`
+(`status`: `pending`, `extracted`, `partial`, `failed` or `encrypted`, plus
+`reason`, `page_count`, per-state page counts, `pages_truncated`,
+`pages_listed`, `search_text_truncated`, `complete` and
+`text_source: "native"`) and `pages_path`; both are `null` for files that
+aren't PDFs. Files also gain `summary_partial` (summaries written from part
+of a PDF only). `GET /api/v1/field/files/:file_id/pages` lists
+`{ number, status, source, reason, characters }` for the listed pages (status
+`text`, `empty`, `failed` or `skipped`); `GET .../pages/:number` adds `text`,
+and answers `skipped` for a page past the listing limit. Limits: rows for the
+first 500 pages (later pages are counted, not stored); five minutes for the
+whole read, every command's timeout capped to what is left; 256 kB of text
+per page (cut pages say so); the first 2 MB of joined text for search and
+summaries. Commands write stdout and stderr to size-capped files, not pipes.
+`FieldFiles::ExtractPdfJob.backfill` reads existing PDFs. Reading is local,
+but each PDF with text is then summarised, which sends its text, title and
+note to Claude Haiku through OpenRouter under the summaries policy.
+
 **Dates on imported files and notes.** `POST /api/v1/field/files` (multipart)
 and `POST /api/v1/whiteboards` take `dated_at`, an ISO 8601 date or time, for
 material from the past (old transcripts, diary pages). The Field list, search
@@ -501,7 +520,7 @@ URL. This read never includes voice-recognition or name-suggestion data.
 
 **Search.** `GET /api/v1/field/search?query=granttree valuation` searches one
 account's Field: recording titles, notes and transcripts (once ready), file
-titles, filenames, notes and text (plain-text formats up to 2 MB; not PDFs), and
+titles, filenames, notes and text (plain-text formats up to 2 MB, and the first 2 MB of a PDF's own text layer; not scanned pages), and
 note names and content. Names are also split on `. _ - /`, so `orchid` finds
 `orchid-invoice.pdf`. A body is searched up to its first 128 kB (about 128,000 characters of
 plain English text, fewer for scripts with multi-byte characters). Every word must appear, anywhere; `"a phrase"` keeps words
