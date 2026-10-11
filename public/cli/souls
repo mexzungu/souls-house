@@ -616,6 +616,31 @@ def cmd_field_note(client, args):
     emit(client.post("whiteboards", json_body=body))
 
 
+def cmd_field_lines(client, args):
+    data = client.get(f"field/recordings/{args.recording}/lines")
+    if args.json:
+        emit(data)
+        return
+    print(f"revision {data['revision']}")
+    for line in data["lines"]:
+        speaker = f"{line['speaker']}: " if line.get("speaker") else ""
+        print(f"{line['line']:>4}  {speaker}{line['text']}")
+
+
+def cmd_field_correct(client, args):
+    text = read_text_arg(args.text, required=True)
+    was, revision = args.was, args.revision
+    if was is None or revision is None:
+        data = client.get(f"field/recordings/{args.recording}/lines")
+        line = next((entry for entry in data["lines"] if entry["line"] == args.line), None)
+        if line is None:
+            raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
+        was = line["text"] if was is None else was
+        revision = data["revision"] if revision is None else revision
+    emit(client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
+                      json_body={"text": text, "was": was, "revision": revision}))
+
+
 def cmd_glossary(client, args):
     action = args.glossary_command
     if action == "list":
@@ -937,7 +962,7 @@ def build_parser():
     wp.set_defaults(func=cmd_watches_cancel)
 
     p = add("field", None,
-            "Bring things into the Field: upload a file, or write a note (souls help field)",
+            "The Field: upload a file, write a note, or correct a transcript line (souls help field)",
             epilog="--date is when the thing is from, for old material: an ISO 8601 date or time\n"
                    "(2019-03-14, 2019-03-14T09:30:00Z). The Field orders by it instead of the\n"
                    "upload time. Examples:\n"
@@ -946,7 +971,7 @@ def build_parser():
                    "  cat diary.md | souls field note 'Diary, May 2018' --date 2018-05-01\n"
                    "Recordings take recorded_at instead: see docs/api.md.",
             formatter_class=argparse.RawDescriptionHelpFormatter)
-    fsub = p.add_subparsers(dest="field_command", metavar="upload|note")
+    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|lines|correct")
 
     fp = fsub.add_parser("upload", parents=[common], help="Upload a file (a document, an old transcript)")
     fp.add_argument("file", metavar="FILE")
@@ -963,6 +988,26 @@ def build_parser():
     fp.add_argument("--summary", help="one line, up to 250 characters")
     fp.add_argument("--date", metavar="ISO_DATE", help="when the note is from (sent as dated_at)")
     fp.set_defaults(func=cmd_field_note)
+
+    fp = fsub.add_parser("lines", parents=[common], help="A recording's transcript as numbered lines, with its revision")
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON")
+    fp.set_defaults(func=cmd_field_lines)
+
+    fp = fsub.add_parser("correct", parents=[common],
+                         help="Correct one line of a recording's transcript (souls field lines shows the numbers)",
+                         epilog="Without --was and --revision it reads the line just before writing, which only\n"
+                                "guards those few seconds. Pass the revision `souls field lines` printed to be\n"
+                                "refused (exit 6) if anything in the transcript changed since you read it.\n"
+                                "  souls field lines KJkAjl\n"
+                                "  souls field correct KJkAjl 14 'Soixante-dix kilos.' --revision 3f2a9c1d0b7e4a65",
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("line", type=int, metavar="LINE", help="the line's number")
+    fp.add_argument("text", nargs="?", metavar="TEXT", help="the whole corrected line; - or omitted reads stdin")
+    fp.add_argument("--was", help="the line as you read it (default: as it reads now)")
+    fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
+    fp.set_defaults(func=cmd_field_correct)
 
     p = add("glossary", cmd_glossary, "The account's transcription glossary: list, add, remove, pin, unpin")
     p.add_argument("glossary_command", nargs="?", choices=["list", "add", "remove", "pin", "unpin"],

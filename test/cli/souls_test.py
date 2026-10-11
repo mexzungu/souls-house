@@ -348,6 +348,41 @@ class FieldTest(CliTestCase):
         self.assertIn("upload|note", out)
         self.assertEqual(self.house.requests, [])
 
+    LINES = {"id": "KJkAjl", "revision": "rev1",
+             "lines": [{"line": 1, "speaker": "Sanda", "text": "Cinquante kilos."},
+                       {"line": 2, "speaker": None, "text": "[laughter]"}]}
+
+    def test_lines_prints_numbered_lines_and_the_revision(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        code, out, _ = self.run_cli("field", "lines", "KJkAjl")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["revision rev1", "   1  Sanda: Cinquante kilos.", "   2  [laughter]"])
+
+    def test_correct_reads_the_line_then_sends_it_with_was_and_revision(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={"revision": "rev2"})
+        code, _, _ = self.run_cli("field", "correct", "KJkAjl", "1", "Soixante-dix kilos.")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(self.last()["body"]),
+                         {"text": "Soixante-dix kilos.", "was": "Cinquante kilos.", "revision": "rev1"})
+
+    def test_correct_with_was_and_revision_sends_them_without_reading(self):
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", status=409,
+                         body={"error": "The transcript has changed", "revision": "rev2"})
+        code, _, err = self.run_cli("field", "correct", "KJkAjl", "1", "-", "--was", "Cinquante kilos.",
+                                    "--revision", "rev1", stdin="Soixante-dix kilos.\n")
+        self.assertEqual(code, souls.EXIT_CONFLICT)
+        self.assertIn("The transcript has changed", err)
+        self.assertEqual(len(self.house.requests), 1)
+        self.assertEqual(json.loads(self.last()["body"])["text"], "Soixante-dix kilos.")
+
+    def test_correcting_a_line_that_does_not_exist_is_a_usage_error_without_a_write(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        code, _, err = self.run_cli("field", "correct", "KJkAjl", "9", "x")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("has no line 9 (it has 2)", err)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
+
 
 class OriginTest(CliTestCase):
     def test_a_foreign_absolute_url_is_refused_before_any_request(self):

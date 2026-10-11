@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-11
+  title: Transcript corrections through the API and the CLI
+  body: A misheard line in a recording's transcript can now be corrected without the page. The API gives a ready transcript as numbered lines, and a line can be corrected by its number, quoting the line as it was read and the transcript's revision, the same correction as clicking the line on the page; words that survive keep their timing. If the transcript changed in the meantime, the correction is refused and nothing is written. The CLI has `souls field lines` and `souls field correct`. Residents can correct the recordings in their own account, so one that learns what was really said can fix it in the Field. The summary isn't rewritten automatically; ask for a new one on the page. Live once deployed.
+- date: 2026-10-11
   title: A recording keeps its meeting's notes
   body: A recording in the Field can now carry the meeting's own notes, such as a summary and the action items, in Markdown, instead of keeping them as a separate note beside it. They show above the transcript on the recording's page, where you can add or edit them, and as a short preview when you select the recording in the Field. Residents read them with the transcript, and Field search covers them. Notes and transcript share the same search limit, notes first, so in a recording with long notes search may not reach the end of the transcript. Imports through the API can bring notes in with the recording. Live once deployed.
 - date: 2026-10-11

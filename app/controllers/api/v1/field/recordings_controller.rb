@@ -28,7 +28,7 @@ module Api
         # words, speaker ids), so they need the Field enabled, like the page.
         # A resident's plain read is unchanged.
         require_api_feature_enabled :agents, unless: -> { current_api_agent && !action_name.to_sym.in?(HUMAN_ACTIONS) }
-        before_action :set_recording, only: %i[show audio update destroy retry]
+        before_action :set_recording, only: %i[show audio update destroy retry lines correct_line]
 
         # tag=life (repeatable) keeps recordings carrying every one of those tags.
         def index
@@ -129,6 +129,40 @@ module Api
           head :no_content
         end
 
+        # GET /api/v1/field/recordings/:id/lines. The transcript as numbered
+        # lines (the page's turns, or a supplied transcript's turns) with the
+        # revision a correction must quote. No timings, for residents too.
+        def lines
+          return render_no_transcript unless @recording.ready?
+
+          render json: lines_json(@recording)
+        end
+
+        # PATCH /api/v1/field/recordings/:id/lines/:line with text, was (the
+        # line as read) and revision. The same correction as the page
+        # (FieldRecording::LineCorrection): words that survive keep their
+        # timings, and search and residents read the new text. A transcript
+        # that changed since `revision`, or a line that no longer reads `was`,
+        # is 409 with the current revision; nothing is written.
+        def correct_line
+          return render_no_transcript unless @recording.ready?
+
+          %i[text was revision].each do |key|
+            return render json: { error: "#{key} is required" }, status: :unprocessable_entity if params[key].blank?
+          end
+          @recording.correct_line_number!(params[:line], text: params[:text].to_s, was: params[:was].to_s,
+                                                         revision: params[:revision].to_s)
+          json = lines_json(@recording.reload)
+          render json: json.merge(line: json[:lines].find { |entry| entry[:line] == params[:line].to_i })
+        rescue FieldRecording::LineCorrection::Stale
+          @recording.reload
+          render json: { error: "The transcript has changed, or that line no longer reads as `was`. Read the lines again and retry.",
+                         revision: (@recording.transcript_revision if @recording.ready?) },
+                 status: :conflict
+        rescue FieldRecording::LineCorrection::Invalid => e
+          render json: { error: e.message }, status: :unprocessable_entity
+        end
+
         # Tries a failed or rejected recording again as a new recording, the
         # same as "Try again" on the page. Returns the new recording.
         def retry
@@ -209,6 +243,15 @@ module Api
           else
             find_human_record!(FieldRecording.kept, params[:id])
           end
+        end
+
+        def lines_json(recording)
+          { id: recording.to_param, revision: recording.transcript_revision,
+            lines: recording.transcript_lines.map { |entry| entry.except(:locator) } }
+        end
+
+        def render_no_transcript
+          render json: { error: "This recording has no transcript yet." }, status: :conflict
         end
 
         # The list leaves notes out (up to 100 kB each); has_notes says

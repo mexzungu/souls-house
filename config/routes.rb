@@ -472,6 +472,8 @@ Rails.application.routes.draw do
           member do
             get :audio
             post :retry
+            get :lines
+            patch "lines/:line", action: :correct_line, as: :line
           end
           post :dismiss_you_hint, on: :collection
           resources :speakers, only: :update
