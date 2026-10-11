@@ -1024,6 +1024,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_150000) do
     t.integer "returned_count", default: 0, null: false
     t.integer "already_stored_count", default: 0, null: false
     t.integer "queued_count", default: 0, null: false
+    t.integer "rejected_count", default: 0, null: false
     t.boolean "retry", default: false, null: false
     t.integer "http_status"
     t.string "error", limit: 300
@@ -1055,6 +1056,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_11_150000) do
     t.datetime "window_until"
     t.text "window_cursor"
     t.integer "window_pages", default: 0, null: false
+    t.integer "window_rejected", default: 0, null: false
     t.datetime "gap_since"
     t.datetime "gap_until"
     t.datetime "last_success_at"

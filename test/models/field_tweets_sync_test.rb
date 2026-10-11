@@ -202,6 +202,76 @@ class FieldTweetsSyncTest < ActiveSupport::TestCase
     assert_empty @source.backlog_items
   end
 
+  test "an allowance used up exactly stops paid pages; the window waits with its cursor" do
+    enable_field_tweets(cap: 1)
+    travel 15.minutes
+    client = FakeClient.new(page_of([ tweet_payload(1, at: @connected + 1.minute) ], cursor: "c2"))
+    with_house_key { assert_equal :waiting, run_sync(@source, client) }
+    assert_equal 1, client.calls.size, "no second page is bought for tweets that couldn't come in today"
+    assert_empty @source.backlog_items
+    @source.reload
+    assert_equal [ "c2", @connected ], [ @source.window_cursor, @source.checkpoint_at ]
+
+    travel_to Time.utc(2026, 10, 12, 0, 5)
+    client.push(page_of([]), page_of([]))
+    with_house_key { run_sync(@source, client) }
+    assert_equal "c2", client.calls[1][:cursor]
+  end
+
+  test "more results without a usable cursor keeps the window open and counts as a failure" do
+    travel 15.minutes
+    [ [ nil, [ tweet_payload(1, at: @connected + 1.minute) ] ], [ "", [ tweet_payload(1, at: @connected + 1.minute) ] ] ].each do |cursor, tweets|
+      client = FakeClient.new(TwitterApiIo::Page.new(tweets: tweets, next_cursor: cursor, has_next_page: true))
+      with_house_key { assert_equal :failed, run_sync(@source, client) }
+      @source.reload
+      assert_equal @connected, @source.checkpoint_at, "the checkpoint doesn't move over unread results"
+      assert @source.window_open?
+      assert_match(/no usable cursor/, @source.state_reason)
+      travel_to @source.next_attempt_at + 1.second
+    end
+    assert_equal 2, @source.failure_count
+    assert_equal [ "1" ], @account.field_tweets.pluck(:provider_tweet_id), "what the page did return is kept"
+  end
+
+  test "a cursor that repeats, or an empty page that claims more, is a broken continuation too" do
+    travel 15.minutes
+    client = FakeClient.new(page_of([ tweet_payload(1, at: @connected + 1.minute) ], cursor: "c2"),
+      page_of([ tweet_payload(2, at: @connected + 30.seconds) ], cursor: "c2"))
+    with_house_key { assert_equal :failed, run_sync(@source, client) }
+    assert_equal [ "c2", @connected ], [ @source.reload.window_cursor, @source.checkpoint_at ]
+
+    travel_to @source.next_attempt_at + 1.second
+    client.push(TwitterApiIo::Page.new(tweets: [], next_cursor: "c3", has_next_page: true))
+    with_house_key { assert_equal :failed, run_sync(@source, client) }
+    assert_equal [ "c2", 2 ], [ @source.reload.window_cursor, @source.failure_count ]
+  end
+
+  test "an unreadable returned tweet is counted apart and its window kept as a gap" do
+    travel 15.minutes
+    window_until = Time.current - 60
+    broken = tweet_payload(2, at: @connected).merge("createdAt" => nil)
+    client = FakeClient.new(page_of([ tweet_payload(1, at: @connected + 1.minute), broken ]))
+    with_house_key { run_sync(@source, client) }
+
+    call = FieldTweetCall.sole
+    assert_equal [ 2, 0, 1, 1 ], [ call.returned_count, call.already_stored_count, call.queued_count, call.rejected_count ]
+    @source.reload
+    assert_equal [ @connected, window_until ], [ @source.gap_since, @source.gap_until ], "the window isn't certified as collected"
+    assert_equal 0, @source.window_rejected
+    assert_equal [ "1" ], @account.field_tweets.pluck(:provider_tweet_id)
+  end
+
+  test "an unreadable success keeps its whole reservation, and the window waits" do
+    travel 15.minutes
+    client = FakeClient.new(TwitterApiIo::Error.new("TwitterAPI.io answered with something that isn't JSON", status: 200))
+    with_house_key { assert_equal :failed, run_sync(@source, client) }
+    call = FieldTweetCall.sole
+    assert_equal [ "uncertain", 200, BigDecimal("0.003") ], [ call.status, call.http_status, call.charge_usd ]
+    @source.reload
+    assert_equal [ @connected, 1 ], [ @source.checkpoint_at, @source.failure_count ]
+    assert_equal "active", @source.state
+  end
+
   test "a window past its page limit is closed and its unread older end kept as a gap" do
     travel 15.minutes
     stub_const(FieldTweets::Sync, :MAX_WINDOW_PAGES, 2) do

@@ -34,6 +34,7 @@ class CreateFieldTweets < ActiveRecord::Migration[8.1]
       t.datetime :window_until
       t.text :window_cursor
       t.integer :window_pages, null: false, default: 0
+      t.integer :window_rejected, null: false, default: 0 # returned tweets in the open window that couldn't be read
       t.datetime :gap_since # a stretch that couldn't be collected
       t.datetime :gap_until
       t.datetime :last_success_at
@@ -109,6 +110,7 @@ class CreateFieldTweets < ActiveRecord::Migration[8.1]
       t.integer :returned_count, null: false, default: 0
       t.integer :already_stored_count, null: false, default: 0
       t.integer :queued_count, null: false, default: 0
+      t.integer :rejected_count, null: false, default: 0 # returned but unreadable (no id, author or time)
       t.boolean :retry, null: false, default: false
       t.integer :http_status
       t.string :error, limit: 300

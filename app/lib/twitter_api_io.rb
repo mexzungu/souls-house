@@ -31,8 +31,12 @@ class TwitterApiIo
 
     # The key or its balance: retrying won't help, a person must act.
     def funding? = [ 401, 402, 403 ].include?(status)
-    # Worth another try later: rate limits, the provider's own failures, the network.
-    def transient? = status.nil? || status == 429 || status >= 500
+    # Worth another try later: rate limits, the provider's own failures, the
+    # network, an answer that couldn't be read.
+    def transient? = status.nil? || status == 429 || status >= 500 || answered_ok?
+    # A 2xx whose body couldn't be read: the provider may have billed for
+    # tweets nobody saw, so what it cost is unknown, not known to be zero.
+    def answered_ok? = status.present? && (200..299).cover?(status)
 
   end
 
@@ -58,7 +62,7 @@ class TwitterApiIo
     request = Net::HTTP::Get.new(uri)
     request["X-API-Key"] = @api_key
     request["Accept"] = "application/json"
-    response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, open_timeout: TIMEOUT, read_timeout: TIMEOUT) { |http| http.request(request) }
+    response = build_http(uri).start { |http| http.request(request) }
 
     status = response.code.to_i
     # Never the body: it may echo the request, and the request carries the key.
@@ -72,6 +76,18 @@ class TwitterApiIo
     raise Error.new("TwitterAPI.io answered with something that isn't JSON", status: status)
   rescue Timeout::Error, SystemCallError, SocketError, OpenSSL::SSL::SSLError, IOError => e
     raise Error.new("Couldn't reach TwitterAPI.io (#{e.class.name})")
+  end
+
+  # Net::HTTP retries an idempotent GET once by itself when a connection
+  # drops. A search is billed, so that retry would be a second paid call
+  # under one reservation: every retry goes through FieldTweets.reserve!.
+  def build_http(uri)
+    http = Net::HTTP.new(uri.hostname, uri.port)
+    http.use_ssl = true
+    http.open_timeout = TIMEOUT
+    http.read_timeout = TIMEOUT
+    http.max_retries = 0
+    http
   end
 
   # "from:handle since_time:… until_time:…" plus what the source wants. The

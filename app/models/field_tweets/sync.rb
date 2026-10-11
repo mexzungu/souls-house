@@ -10,9 +10,14 @@
 # - The checkpoint moves to the window's end only when its last page has
 #   been processed. A failure never moves it.
 # - New tweets go to the backlog first and are imported from there, oldest
-#   first, within the day's allowance. When the allowance is used up no new
-#   page is fetched: the open window keeps its cursor and waits, so nothing
-#   is paid for twice.
+#   first, within the day's allowance. When the allowance is used up (or
+#   the backlog still holds tweets) no new page is fetched: the open window
+#   keeps its cursor and waits, so nothing is paid for twice and nothing is
+#   paid for that couldn't be imported today.
+# - A page that says there is more but gives no usable cursor isn't the end
+#   of the window: the window stays open and the run counts as a failure.
+# - Returned tweets that can't be read (no id, author or time) are counted
+#   apart from duplicates, and the window they came in is kept as a gap.
 # - Tweets already in the account (overlap, retries, discarded ones) are
 #   counted, not imported again.
 # - One run per source at a time (sync_claimed_at).
@@ -29,6 +34,16 @@ module FieldTweets
     CLAIM_TTL = 10.minutes
     MAX_FAILURES = 8
     MAX_BACKOFF = 6.hours
+
+    # The provider said there was more but gave nothing to ask for it with.
+    class BrokenPage < StandardError
+
+      def initialize = super("TwitterAPI.io said there were more results but gave no usable cursor; the window stays open")
+      def status = nil
+      def funding? = false
+      def transient? = true
+
+    end
 
     def self.due(now: Time.current)
       FieldTweetSource.where(state: "active").where("next_attempt_at IS NULL OR next_attempt_at <= ?", now)
@@ -69,8 +84,8 @@ module FieldTweets
       import_backlog!
       pages = 0
       loop do
-        if @source.backlog_items.exists?
-          schedule!(now + FieldTweets.poll_interval, reason: "Today's import allowance is used up; the rest waits for tomorrow")
+        if @source.backlog_items.exists? || FieldTweets.import_allowance_left(@source.account, now: now).zero?
+          schedule!(now + FieldTweets.poll_interval, reason: "Today's import allowance is used up; collection goes on tomorrow")
           return :waiting
         end
         unless @source.window_open? || open_window!
@@ -83,6 +98,7 @@ module FieldTweets
         end
 
         result = fetch_page!
+        return failed!(BrokenPage.new) if result == :broken
         return result unless result == :page
 
         pages += 1
@@ -124,7 +140,6 @@ module FieldTweets
       end
 
       process_page!(page, call)
-      :page
     end
 
     def client
@@ -133,9 +148,11 @@ module FieldTweets
 
     def process_page!(page, call)
       fetched_at = now
+      rejected = 0
       attrs = page.tweets.filter_map do |tweet|
         FieldTweet.attributes_from(tweet, fetched_at: fetched_at)
       rescue FieldTweet::Invalid
+        rejected += 1
         nil
       end
       # The query already leaves reposts out unless asked for; this only
@@ -153,14 +170,22 @@ module FieldTweets
           }, unique_by: :index_field_tweet_backlog_on_source_and_tweet)
         end
 
-        advance_window!(page, attrs)
-        @source.update!(failure_count: 0, last_success_at: fetched_at, state_reason: nil)
-        call.settle!(returned: page.tweets.size, already_stored: page.tweets.size - fresh.size, queued: fresh.size)
+        @source.update!(window_rejected: @source.window_rejected + rejected) if rejected.positive?
+        result = advance_window!(page, attrs)
+        @source.update!(failure_count: 0, last_success_at: fetched_at, state_reason: nil) unless result == :broken
+        call.settle!(returned: page.tweets.size, already_stored: page.tweets.size - fresh.size - rejected,
+          queued: fresh.size, rejected: rejected)
+        result
       end
     end
 
+    # => :page, or :broken when the provider says there's more without a
+    # cursor that leads anywhere new (the window and its cursor stay as they
+    # were; tweets from this page are kept).
     def advance_window!(page, attrs)
-      more = page.has_next_page && page.next_cursor.present? && page.tweets.any? && page.next_cursor != @source.window_cursor
+      return :broken if page.has_next_page && (page.next_cursor.blank? || page.next_cursor == @source.window_cursor || page.tweets.empty?)
+
+      more = page.has_next_page
       pages = @source.window_pages + 1
 
       if more && pages >= MAX_WINDOW_PAGES
@@ -173,10 +198,15 @@ module FieldTweets
       else
         complete_window!
       end
+      :page
     end
 
+    # A window with unreadable tweets in it isn't certified as collected: the
+    # whole window is kept as a gap.
     def complete_window!
-      @source.update!(checkpoint_at: @source.window_until, window_since: nil, window_until: nil, window_cursor: nil, window_pages: 0)
+      record_gap!(@source.window_since, @source.window_until) if @source.window_rejected.positive?
+      @source.update!(checkpoint_at: @source.window_until, window_since: nil, window_until: nil, window_cursor: nil,
+        window_pages: 0, window_rejected: 0)
     end
 
     def record_gap!(since, until_time)
@@ -199,7 +229,7 @@ module FieldTweets
         @source.update!(window_cursor: nil, window_pages: 0)
         retry_later!("The provider rejected the saved page cursor; the window restarts")
       elsif error.transient?
-        retry_later!("TwitterAPI.io failed (#{error.status || "no answer"}); trying again later")
+        retry_later!("#{error.message}; trying again later")
       else
         @source.needs_attention!("TwitterAPI.io rejected the search (#{error.status})")
       end
