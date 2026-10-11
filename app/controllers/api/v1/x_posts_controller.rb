@@ -26,9 +26,12 @@ module Api
           render json: body, status: result.replayed ? :ok : :created
         when "resolved_not_posted"
           render json: body.merge(error: "This key's post was resolved as not posted; use a new Idempotency-Key to post again"), status: :conflict
-        when "outcome_unknown", "pending"
+        when "outcome_unknown"
           message = "X may or may not have published this post. It will not be retried automatically; check the account on X, then resolve it with PATCH /api/v1/x_posts/#{log.to_param}"
           render json: body.merge(error: message), status: result.replayed ? :conflict : :gateway_timeout
+        when "pending"
+          message = "This post is still being sent, or its sender was interrupted. It will not be retried automatically. If it is still pending at #{log.resolvable_at.iso8601}, check the account on X and resolve it with PATCH /api/v1/x_posts/#{log.to_param}"
+          render json: body.merge(error: message), status: :conflict
         else
           render json: body, status: FAILURE_STATUSES.fetch(log.failure_reason, :bad_gateway)
         end

@@ -4,6 +4,11 @@ class TweetLog < ApplicationRecord
   # Everything that did or may have become a public post counts toward the
   # account's daily ceiling; only definite failures do not.
   COUNTING_STATUSES = %w[pending posted outcome_unknown resolved_posted].freeze
+  # A pending post is still being sent, or its sender was interrupted. A
+  # live sender finishes within about two minutes of its last touch, and it
+  # rechecks under this row's lock before sending, so after this long with
+  # no activity a pending post can be resolved like an unknown one.
+  PENDING_RESOLVABLE_AFTER = 10.minutes
 
   belongs_to :x_integration
   belongs_to :agent
@@ -27,7 +32,9 @@ class TweetLog < ApplicationRecord
 
   def resolve!(resolution:, by:, tweet_id: nil)
     with_lock do
-      raise ArgumentError, "Only a post whose outcome is unknown can be resolved" unless status == "outcome_unknown"
+      unless resolvable?
+        raise ArgumentError, "Only a post whose outcome is unknown, or one left pending with no activity for #{PENDING_RESOLVABLE_AFTER.inspect}, can be resolved"
+      end
 
       case resolution
       when "posted"
@@ -42,6 +49,16 @@ class TweetLog < ApplicationRecord
     end
   end
 
+  def resolvable?(now: Time.current)
+    status == "outcome_unknown" || (status == "pending" && updated_at <= now - PENDING_RESOLVABLE_AFTER)
+  end
+
+  def resolvable_at
+    return updated_at + PENDING_RESOLVABLE_AFTER if status == "pending"
+
+    Time.current if status == "outcome_unknown"
+  end
+
   def as_post_json
     {
       id: to_param,
@@ -53,7 +70,8 @@ class TweetLog < ApplicationRecord
       failure_reason:,
       error: error_message,
       created_at: created_at&.iso8601,
-      resolved_at: resolved_at&.iso8601
+      resolved_at: resolved_at&.iso8601,
+      resolvable_at: resolvable_at&.iso8601
     }
   end
 

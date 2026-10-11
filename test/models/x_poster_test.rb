@@ -134,6 +134,86 @@ class XPosterTest < ActiveSupport::TestCase
     assert_equal "outcome_unknown", post!("B", key: "k2").log.status
   end
 
+  test "a 2xx whose JSON is the wrong shape is outcome_unknown, never a crash or a stranded pending post" do
+    [ "null", "42", "[]", { data: [] }.to_json, { data: 42 }.to_json, { data: { id: 123 } }.to_json, { data: { id: "abc" } }.to_json ].each_with_index do |body, index|
+      WebMock.reset!
+      stub_request(:post, TWEETS_URL).to_return(status: 201, body:)
+
+      log = post!("Shape #{index}", key: "shape-#{index}").log
+      assert_equal "outcome_unknown", log.status, "body #{body}"
+    end
+  end
+
+  test "error bodies of any JSON shape still produce a definite failure" do
+    [ "null", "42", "[]", { errors: "nope" }.to_json, { errors: [ "x", 1, nil, { message: "real" } ] }.to_json, { title: 5 }.to_json ].each_with_index do |body, index|
+      WebMock.reset!
+      stub_request(:post, TWEETS_URL).to_return(status: 403, body:)
+
+      log = post!("Error #{index}", key: "error-#{index}").log
+      assert_equal "failed", log.status, "body #{body}"
+      assert_equal "forbidden", log.failure_reason
+    end
+    assert_includes TweetLog.find_by(idempotency_key: "error-4").error_message, "real"
+  end
+
+  test "a failure to record X's answer after it accepted leaves the post unknown" do
+    stub_x_post(id: "2001")
+
+    poster = XPoster.new(agent: @agent)
+    poster.define_singleton_method(:record_response!) { |_log, _response| raise NoMethodError, "boom" }
+    log = poster.post!(text: "Accepted", idempotency_key: "k1").log
+
+    assert_equal "outcome_unknown", log.status
+    assert_requested :post, TWEETS_URL, times: 1
+  end
+
+  test "a post interrupted after reserving stays pending, replays without sending, and becomes resolvable once quiet" do
+    log = create_log(status: "pending")
+    log.update_columns(idempotency_key: "k1", request_digest: Digest::SHA256.hexdigest({ text: "t", reply_to: nil }.to_json))
+
+    replay = post!("t", key: "k1")
+    assert replay.replayed
+    assert_equal "pending", replay.log.status
+    assert_not_requested :post, TWEETS_URL
+
+    assert_raises(ArgumentError) { log.resolve!(resolution: "not_posted", by: @agent) }
+
+    travel TweetLog::PENDING_RESOLVABLE_AFTER + 1.minute do
+      log.reload.resolve!(resolution: "not_posted", by: @agent)
+    end
+    assert_equal "resolved_not_posted", log.reload.status
+  end
+
+  test "a post resolved while it waited to send is never sent" do
+    stub_x_post(id: "2002")
+    poster = XPoster.new(agent: @agent)
+    poster.define_singleton_method(:reserve!) do |text:, idempotency_key:, reply_to:|
+      log = super(text:, idempotency_key:, reply_to:)
+      log.first.update_columns(status: "resolved_not_posted")
+      log
+    end
+
+    log = poster.post!(text: "Too late", idempotency_key: "k1").log
+
+    assert_equal "resolved_not_posted", log.status
+    assert_not_requested :post, TWEETS_URL
+  end
+
+  test "a sender's late answer never overwrites a resolution, and is kept beside it" do
+    stub_x_post(id: "2003")
+    poster = XPoster.new(agent: @agent)
+    poster.define_singleton_method(:deliver!) do |log, token|
+      log.update_columns(status: "resolved_not_posted")
+      super(log, token)
+    end
+
+    log = poster.post!(text: "Raced", idempotency_key: "k1").log
+
+    assert_equal "resolved_not_posted", log.status
+    assert_nil log.tweet_id
+    assert_includes log.error_message, "2003"
+  end
+
   test "a refused connection is a definite failure that does not count toward the ceiling" do
     unreachable = Object.new
     %i[use_ssl= open_timeout= read_timeout= write_timeout= max_retries=].each { |name| unreachable.define_singleton_method(name) { |_| nil } }

@@ -177,6 +177,9 @@ def run_posting(args, app_url, token):
         if args.reply_to:
             payload["reply_to"] = args.reply_to
         call = dict(path="/api/v1/x_posts", method="POST", extra_headers={"Idempotency-Key": key})
+        # Disclose the key before anything is sent: if this process is
+        # interrupted mid-request, the key is the only safe way to retry.
+        print(f"[idempotency key: {key}] (retry only with --key {key})", file=sys.stderr, flush=True)
     else:
         key = None
         if args.not_posted:
@@ -195,15 +198,25 @@ def run_posting(args, app_url, token):
         try:
             result = json.loads(body)
         except json.JSONDecodeError:
+            result = None
+        if not isinstance(result, dict):
             result = {"error": body}
         result.setdefault("http_status", error.code)
         failed = True
-    except Exception as error:
+    except BaseException as error:
         # The request may have reached souls.house and X; only the same key is a safe retry.
-        print(f"souls.house X request failed: {error}", file=sys.stderr)
+        print(f"souls.house X request failed: {error!r}", file=sys.stderr, flush=True)
         if key:
-            print(f"Outcome unknown. Retry only with --key {key} so it cannot post twice.", file=sys.stderr)
+            print(f"Outcome unknown. Retry only with --key {key} so it cannot post twice.", file=sys.stderr, flush=True)
+        if isinstance(error, KeyboardInterrupt):
+            return 130
+        if not isinstance(error, Exception):
+            raise
         return 1
+
+    if not isinstance(result, dict):
+        result = {"error": f"unexpected response: {result!r}"}
+        failed = True
 
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -218,8 +231,6 @@ def run_posting(args, app_url, token):
         )
     elif failed:
         print(f"souls.house returned HTTP {result.get('http_status')}: {result.get('error')}", file=sys.stderr)
-    if key:
-        print(f"[idempotency key: {key}]", file=sys.stderr)
     return 1 if failed else 0
 
 

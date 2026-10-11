@@ -103,18 +103,25 @@ class XPoster
     end
   end
 
-  # Refresh under the same row lock, so two posts never spend one rotating
-  # refresh token twice. Returns nil (and marks the log failed) when the
-  # token cannot be refreshed; nothing has been sent to X at that point.
+  # Last check before sending, under the post's own row lock: if the post is
+  # no longer pending (someone resolved a stale reservation), nothing is
+  # sent. Touching it restarts the quiet period a resolver must wait out, so
+  # a resolution cannot race this sender. Then the token is refreshed under
+  # the integration's lock, so two posts never spend one rotating refresh
+  # token twice. Returns nil when nothing should be sent.
   def refreshed_access_token(log)
     integration = log.x_integration
     XIntegration.transaction do
+      log.lock!
+      return nil unless log.status == "pending"
+
+      log.touch
       integration.lock!
       integration.refresh_tokens!
       integration.access_token
     end
   rescue XApi::Error, ArgumentError, JSON::ParserError, *CONNECT_ERRORS, Net::ReadTimeout => e
-    log.update!(status: "failed", failure_reason: "token_refresh_failed", error_message: e.message.truncate(500))
+    finish!(log, status: "failed", failure_reason: "token_refresh_failed", error_message: e.message.truncate(500))
     nil
   end
 
@@ -130,7 +137,7 @@ class XPoster
     begin
       http.start
     rescue *CONNECT_ERRORS => e
-      return log.update!(status: "failed", failure_reason: "unreachable", error_message: e.message.truncate(500))
+      return finish!(log, status: "failed", failure_reason: "unreachable", error_message: e.message.truncate(500))
     end
 
     request = Net::HTTP::Post.new(uri)
@@ -148,47 +155,71 @@ class XPoster
       http.finish if http.started?
     end
 
-    record_response!(log, response)
+    begin
+      record_response!(log, response)
+    rescue StandardError => e
+      # Something after the send went wrong while reading or recording the
+      # answer. X may have published: never call that a failure.
+      unknown!(log, "Could not record X's answer (#{response.code}): #{e.class}")
+    end
   end
 
   def record_response!(log, response)
     code = response.code.to_i
-    detail = error_detail(response)
+    data = parse_object(response.body)
+    detail = error_detail(data)
 
     case code
     when 200..299
-      tweet_id = begin
-        JSON.parse(response.body.to_s).dig("data", "id")
-      rescue JSON::ParserError
-        nil
-      end
-      return unknown!(log, "X answered #{code} without a readable tweet id") unless tweet_id.to_s.match?(TWEET_ID_PATTERN)
+      payload = data && data["data"]
+      tweet_id = payload.is_a?(Hash) ? payload["id"] : nil
+      return unknown!(log, "X answered #{code} without a readable tweet id") unless tweet_id.is_a?(String) && tweet_id.match?(TWEET_ID_PATTERN)
 
-      log.update!(status: "posted", tweet_id: tweet_id.to_s)
+      finish!(log, status: "posted", tweet_id:)
     when 401
-      log.update!(status: "failed", failure_reason: "unauthorized", error_message: "X rejected the access token; reconnect the account. #{detail}".strip)
+      finish!(log, status: "failed", failure_reason: "unauthorized", error_message: "X rejected the access token; reconnect the account. #{detail}".strip)
     when 403
-      log.update!(status: "failed", failure_reason: "forbidden", error_message: "X refused the post (missing tweet.write scope, app access level, or duplicate text). #{detail}".strip)
+      finish!(log, status: "failed", failure_reason: "forbidden", error_message: "X refused the post (missing tweet.write scope, app access level, or duplicate text). #{detail}".strip)
     when 429
       reset = response["x-rate-limit-reset"].to_i
       reset_at = Time.zone.at(reset).iso8601 if reset.positive?
-      log.update!(status: "failed", failure_reason: "rate_limited", error_message: [ "X rate limit reached", (reset_at && "until #{reset_at}"), detail ].compact.join(" ").strip)
+      finish!(log, status: "failed", failure_reason: "rate_limited", error_message: [ "X rate limit reached", (reset_at && "until #{reset_at}"), detail ].compact.join(" ").strip)
     when 400..499
-      log.update!(status: "failed", failure_reason: "rejected", error_message: "X rejected the post (#{code}). #{detail}".strip)
+      finish!(log, status: "failed", failure_reason: "rejected", error_message: "X rejected the post (#{code}). #{detail}".strip)
     else
       unknown!(log, "X answered #{code}. #{detail}".strip)
     end
   end
 
   def unknown!(log, message)
-    log.update!(status: "outcome_unknown", failure_reason: "outcome_unknown", error_message: message.truncate(500))
+    finish!(log, status: "outcome_unknown", failure_reason: "outcome_unknown", error_message: message.truncate(500))
   end
 
-  def error_detail(response)
-    data = JSON.parse(response.body.to_s)
-    [ data["title"], data["detail"], *Array(data["errors"]).map { |error| error["message"] || error["detail"] } ].compact.uniq.join(": ").truncate(300)
-  rescue JSON::ParserError, TypeError
-    ""
+  # The sender's last write only lands while the row is still pending. If a
+  # stale pending post was resolved by hand meanwhile, the resolution stands
+  # and the sender's late answer is kept beside it rather than over it.
+  def finish!(log, **attributes)
+    updated = TweetLog.where(id: log.id, status: "pending").update_all(attributes.merge(updated_at: Time.current))
+    return true if updated == 1
+
+    late = "Late answer after resolution: #{attributes.slice(:status, :tweet_id, :error_message).compact.to_json}"
+    TweetLog.where(id: log.id).update_all([ "error_message = CONCAT_WS(' | ', error_message, ?), updated_at = ?", late.truncate(500), Time.current ])
+    false
+  end
+
+  def parse_object(body)
+    parsed = JSON.parse(body.to_s)
+    parsed.is_a?(Hash) ? parsed : nil
+  rescue JSON::ParserError
+    nil
+  end
+
+  def error_detail(data)
+    return "" unless data
+
+    errors = data["errors"].is_a?(Array) ? data["errors"] : []
+    messages = errors.map { |error| error.is_a?(Hash) ? (error["message"] || error["detail"]) : nil }
+    [ data["title"], data["detail"], *messages ].select { |part| part.is_a?(String) }.uniq.join(": ").truncate(300)
   end
 
 end

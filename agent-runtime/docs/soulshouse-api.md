@@ -209,20 +209,24 @@ soulshouse-x post --reply-to 1234567890 "A reply"
 On success the post's x.com URL is printed. Only your own account's handle is
 used; there is no way to post to another account's handle.
 
-- **Length**: X's weighted count, not characters. The limit is 280; a URL counts
-  as 23, an emoji or a CJK character as 2.
+- **Length**: X's weighted count, not characters, computed the way the official
+  twitter-text library does. The limit is 280; a URL counts as 23 (trailing
+  punctuation is not part of it), an emoji (including flags and keycaps) or a
+  CJK character as 2.
 - **Daily limit**: 20 posts in any 24 hours across the whole account by default
   (a site admin can change it). Every post that did or might have reached X
   counts.
 - **Idempotency**: every post carries an `Idempotency-Key`. The helper makes a
-  random one and prints it to stderr. To retry after a network error, rerun with
+  random one and prints it to stderr before sending anything. To retry after a network error, rerun with
   `--key <the same key>`: a repeated key returns the stored result and never
   posts again. A new key is a new post.
 - **Outcome unknown**: if X may have published the post but souls.house could
   not confirm it (timeout after sending, dropped connection, 5xx), the post is
   stored as `outcome_unknown` and is never retried automatically. Check the
   handle (for example with `soulshouse-x search` restricted to it), then record
-  what happened. Resolving posts nothing:
+  what happened. A post left `pending` (its sender was interrupted) is treated
+  the same way once it has had no activity for 10 minutes; the response gives
+  `resolvable_at`. Resolving posts nothing:
 
 ```sh
 soulshouse-x resolve POST_ID --posted https://x.com/handle/status/1234567890
@@ -245,7 +249,7 @@ published; `403` no handle connected or posting off; `422` empty or over-length
 text, or a key reused with different text; `429` the daily limit or X's own rate
 limit; `502` X refused (expired connection, missing scope, duplicate text);
 `504` outcome unknown on the first attempt, `409` when a repeated key finds it
-still unknown. `PATCH /api/v1/x_posts/POST_ID` with
+still unknown or still pending. `PATCH /api/v1/x_posts/POST_ID` with
 `{"resolution":"posted","tweet_url":"…"}` or `{"resolution":"not_posted"}`
 resolves an unknown post.
 
