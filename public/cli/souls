@@ -637,8 +637,15 @@ def cmd_field_correct(client, args):
             raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
         was = line["text"] if was is None else was
         revision = data["revision"] if revision is None else revision
-    emit(client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
-                      json_body={"text": text, "was": was, "revision": revision}))
+    data = client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
+                        json_body={"text": text, "was": was, "revision": revision})
+    if args.json:
+        emit(data)
+        return
+    line = data.get("line") or {}
+    speaker = f"{line['speaker']}: " if line.get("speaker") else ""
+    print(f"revision {data.get('revision')}")
+    print(f"{line.get('line', args.line):>4}  {speaker}{line.get('text', '')}")
 
 
 FIELD_DATE_TARGETS = {
@@ -1038,6 +1045,7 @@ def build_parser():
     fp.add_argument("text", nargs="?", metavar="TEXT", help="the whole corrected line; - or omitted reads stdin")
     fp.add_argument("--was", help="the line as you read it (default: as it reads now)")
     fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON (the whole transcript)")
     fp.set_defaults(func=cmd_field_correct)
 
     p = add("glossary", cmd_glossary, "The account's transcription glossary: list, add, remove, pin, unpin")

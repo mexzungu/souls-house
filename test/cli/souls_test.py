@@ -390,9 +390,13 @@ class FieldTest(CliTestCase):
 
     def test_correct_reads_the_line_then_sends_it_with_was_and_revision(self):
         self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
-        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={"revision": "rev2"})
-        code, _, _ = self.run_cli("field", "correct", "KJkAjl", "1", "Soixante-dix kilos.")
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={
+            "revision": "rev2", "lines": self.LINES["lines"],
+            "line": {"line": 1, "speaker": "Sanda", "text": "Soixante-dix kilos."}})
+        code, out, _ = self.run_cli("field", "correct", "KJkAjl", "1", "Soixante-dix kilos.")
         self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["revision rev2", "   1  Sanda: Soixante-dix kilos."],
+                         "only the corrected line, not the whole transcript")
         self.assertEqual(json.loads(self.last()["body"]),
                          {"text": "Soixante-dix kilos.", "was": "Cinquante kilos.", "revision": "rev1"})
 
