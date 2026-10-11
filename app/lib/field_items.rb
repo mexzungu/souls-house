@@ -171,7 +171,7 @@ module FieldItems
       transcript_source: recording.transcript_source,
       recorded_at: recording.recorded_at&.iso8601,
       source_path: recording.source_path,
-      speaker_names: speakers.map(&:display_name),
+      speaker_names: FieldRecordingSpeaker.grouped(speakers).map { |group| group.first.display_name },
       # How many speakers still read "Speaker N", so the list can show the
       # recording is waiting for someone to name them.
       unnamed_speakers: speakers.count(&:unnamed?),
