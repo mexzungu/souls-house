@@ -7,6 +7,7 @@
   import { recordingStatusLine } from '$lib/field-recordings';
   import { tweetBadge } from '$lib/field-tweets';
   import { File, Microphone, Notepad, XLogo } from 'phosphor-svelte';
+  import UnnamedSpeakersBadge from './UnnamedSpeakersBadge.svelte';
 
   let { item, selected = false, onSelect } = $props();
 
@@ -19,6 +20,7 @@
       item.summary_long || item.summary_short,
       kindLabel[item.kind],
       item.kind === 'recording' ? recordingStatusLine(item) : null,
+      item.unnamed_speakers ? `${item.unnamed_speakers} to name` : null,
       item.kind === 'note' ? item.editor_name : item.kind === 'tweet' ? item.author_name : item.uploader_name,
       item.tags?.length ? item.tags.join(' · ') : null,
     ]
@@ -61,6 +63,8 @@
       data-testid="field-recording-line">
       {broken ? 'Failed' : recordingStatusLine(item)}
     </span>
+  {:else if item.kind === 'recording'}
+    <UnnamedSpeakersBadge count={item.unnamed_speakers} />
   {/if}
   {#if item.kind === 'tweet' && tweetBadge(item.kinds)}
     <span class="shrink-0 text-xs text-muted-foreground" data-testid="field-tweet-badge">{tweetBadge(item.kinds)}</span>

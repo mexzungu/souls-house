@@ -699,86 +699,51 @@ class ChatsControllerTest < ActionDispatch::IntegrationTest
 
   # Index ordering tests
 
-  test "index shows active chats before archived chats" do
-    # Create chats with specific states
-    archived_chat = @account.chats.create!(
-      model_id: "gpt-4o",
-      title: "Archived Chat",
-      updated_at: 1.minute.ago # Most recent update
-    )
+  test "index lists active chats before archived ones, even when the archived one is newer" do
+    archived_chat = @account.chats.create!(title: "Archived Chat", last_message_at: 1.minute.ago)
     archived_chat.archive!
-
-    active_chat = @account.chats.create!(
-      model_id: "gpt-4o",
-      title: "Active Chat",
-      updated_at: 1.hour.ago # Older update
-    )
+    active_chat = @account.chats.create!(title: "Active Chat", last_message_at: 1.hour.ago)
 
     get account_chats_path(@account)
-    assert_response :success
+    ids = inertia_shared_props.fetch("chats").pluck("id")
 
-    # Verify ordering: active chats first, then archived
-    active_chats = @account.chats.kept.active.latest
-    archived_chats = @account.chats.kept.archived.latest
-
-    # Active chat should be in active list, archived should be in archived list
-    assert_includes active_chats.map(&:id), active_chat.id
-    assert_includes archived_chats.map(&:id), archived_chat.id
+    assert_includes ids, active_chat.to_param
+    assert_includes ids, archived_chat.to_param
+    assert_operator ids.index(active_chat.to_param), :<, ids.index(archived_chat.to_param)
   end
 
-  test "index excludes discarded chats by default" do
-    discarded_chat = @account.chats.create!(
-      model_id: "gpt-4o",
-      title: "Discarded Chat"
-    )
+  test "index leaves discarded chats out of the sidebar by default" do
+    discarded_chat = @account.chats.create!(title: "Discarded Chat")
     discarded_chat.discard!
 
     get account_chats_path(@account)
-    assert_response :success
+    ids = inertia_shared_props.fetch("chats").pluck("id")
 
-    # Discarded chat should not be in the default view
-    kept_chats = @account.chats.kept
-    assert_not_includes kept_chats.map(&:id), discarded_chat.id
+    assert_includes ids, @chat.to_param
+    assert_not_includes ids, discarded_chat.to_param
   end
 
-  test "index shows discarded chats when member requests show_deleted" do
-    discarded_chat = @account.chats.create!(
-      model_id: "gpt-4o",
-      title: "Discarded Chat"
-    )
+  test "index includes discarded chats when the owner asks for show_deleted" do
+    discarded_chat = @account.chats.create!(title: "Discarded Chat")
     discarded_chat.discard!
 
     get account_chats_path(@account, show_deleted: true)
-    assert_response :success
 
-    # With show_deleted, discarded chat should be findable
-    all_chats = @account.chats.with_discarded
-    assert_includes all_chats.map(&:id), discarded_chat.id
+    assert_includes inertia_shared_props.fetch("chats").pluck("id"), discarded_chat.to_param
   end
 
-  test "show_deleted works for confirmed members" do
-    # team_account has user_1 as owner, and existing_user (user_id: 3) as member via team_member membership
+  test "show_deleted works for confirmed members, not just owners" do
     team_account = accounts(:team_account)
-    member_user = users(:existing_user)  # This user is member via team_member membership
-
-    discarded_chat = team_account.chats.create!(
-      model_id: "gpt-4o",
-      title: "Discarded Chat"
-    )
+    member_user = users(:existing_user) # confirmed member (role: member) via the team_member membership
+    discarded_chat = team_account.chats.create!(title: "Discarded Chat")
     discarded_chat.discard!
 
-    # Sign in as member (not admin)
     delete logout_path
-    post login_path, params: {
-      email_address: member_user.email_address,
-      password: "password123"
-    }
+    post login_path, params: { email_address: member_user.email_address, password: "password123" }
 
     get account_chats_path(team_account, show_deleted: true)
-    assert_response :success
 
-    all_chats = team_account.chats.with_discarded
-    assert_includes all_chats.map(&:id), discarded_chat.id
+    assert_includes inertia_shared_props.fetch("chats").pluck("id"), discarded_chat.to_param
   end
 
   # Pagination tests (now via messages#index)
