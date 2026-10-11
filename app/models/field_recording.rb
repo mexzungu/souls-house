@@ -146,6 +146,41 @@ class FieldRecording < ApplicationRecord
     end
   end
 
+  # The transcript as the lines a correction addresses, numbered from 1 in
+  # reading order: a displayed turn of timed words, or a supplied turn. Each
+  # carries its speaker's shown name and its text, and the locator
+  # correct_line! takes. Empty unless the recording is ready.
+  def transcript_lines
+    return [] unless ready?
+
+    names = speakers.includes(:field_voice).to_h { |speaker| [ speaker.label, speaker.display_name ] }
+    if supplied?
+      (transcript_turns || []).each_with_index.map do |turn, index|
+        { line: index + 1, speaker: names[turn["spk"]] || turn["spk"], text: FieldRecording::LineCorrection.normalise(turn["t"]),
+          locator: { index: } }
+      end
+    else
+      words = transcript_words || []
+      timed = words.each_index.reject { |n| words[n]["k"] == "s" }
+      FieldRecording::LineCorrection.turn_ranges(words).each_with_index.map do |(first, last), n|
+        spk = words[timed[first]]["spk"]
+        text = words[timed[first]..timed[last]].map { |word| word["t"] }.join
+        { line: n + 1, speaker: names[spk] || spk, text: FieldRecording::LineCorrection.normalise(text),
+          locator: { first:, last: } }
+      end
+    end
+  end
+
+  # correct_line! by line number (transcript_lines), for the API. A number
+  # that doesn't name a line is Stale, like a line that moved.
+  def correct_line_number!(number, text:, was:, revision:)
+    number = Integer(number, exception: false)
+    line = transcript_lines.find { |entry| entry[:line] == number } if number
+    raise FieldRecording::LineCorrection::Stale unless line
+
+    correct_line!(line[:locator], text:, was:, revision:)
+  end
+
   # Probe of a supplied recording: the duration only, for display. Its status
   # is already final and nothing is reserved.
   def record_duration!(probed_ms)

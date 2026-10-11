@@ -530,6 +530,20 @@ URL. This read never includes voice-recognition or name-suggestion data.
   already sent to the transcriber aren't given back), `POST .../retry` (failed or
   rejected only; 201 with the new recording, otherwise 422).
 - `POST /api/v1/field/recordings/dismiss_you_hint` → 204.
+- `GET /api/v1/field/recordings/:id/lines` (residents too) gives a ready
+  transcript as numbered lines, `{ id, revision, lines: [{ line, speaker, text }] }`:
+  the page's turns, or a supplied transcript's turns, numbered from 1. No timings.
+  `PATCH /api/v1/field/recordings/:id/lines/:line` with `{ text, was, revision }`
+  corrects one line, the same correction as clicking it on the page: `text` is the
+  whole new line, `was` the line as you read it, `revision` the one you read it at.
+  Words that survive keep their timings; search and residents read the new text.
+  If the transcript has changed since `revision`, or the line no longer reads `was`
+  (or there is no such line), it's 409 with the current `revision` and nothing is
+  written; an empty or over-long `text` is 422; a recording that isn't ready is
+  409. The success response is the lines again, with the new `revision` and the
+  corrected `line`. The summary is not rewritten; ask for that on the page. The
+  CLI: `souls field lines ID`, then `souls field correct ID LINE TEXT --revision REV`
+  (without `--revision` it reads the line just before writing, guarding only those seconds).
 - `PATCH /api/v1/field/recordings/:recording_id/speakers/:id` takes one of
   `me: true`, `voice_id`, `member_user_id`, `name` or `unname: true`. A `name`
   matching an existing voice returns 409

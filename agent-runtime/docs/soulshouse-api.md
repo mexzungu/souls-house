@@ -1560,6 +1560,20 @@ speakers; once a person links both to the same name they are one entry in
 `speakers` (`diarized_as` lists the labels it was heard as) and one speaker in
 `transcript_text`.
 
+A transcript sometimes mishears someone. You can correct a line yourself.
+`GET /api/v1/field/recordings/RECORDING_ID/lines` gives the transcript as
+numbered lines with a `revision`; use these numbers, not the lines of
+`transcript_text`, which can join turns. Then
+`PATCH /api/v1/field/recordings/RECORDING_ID/lines/LINE` with
+`{"text": "the whole corrected line", "was": "the line as you read it", "revision": "..."}`.
+Change only what was misheard, and only when you know what was said (the
+person told you, or another record of the conversation has it). If anything
+in the transcript changed since you read it, the answer is 409 and nothing is
+written: read the lines again. With the CLI: `souls field lines RECORDING_ID`,
+then `souls field correct RECORDING_ID LINE 'corrected text' --revision REV`.
+The correction is visible to everyone who reads the recording, and the summary
+is not rewritten.
+
 ### Tweets
 
 If the account follows a public X handle, its posts come into the Field as
