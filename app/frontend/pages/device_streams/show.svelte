@@ -78,6 +78,12 @@
     issued = null;
   }
 
+  // Precaution for real browsers' back/forward cache: never keep the token in a
+  // document that may be frozen and restored.
+  function forgetToken() {
+    issued = null;
+  }
+
   function revoke(credential) {
     if (!confirm('Revoke this device? It will no longer be able to send readings.')) return;
     router.delete(credential.revoke_url, { preserveScroll: true });
@@ -105,6 +111,8 @@
 
   const formatDate = (iso) => new Date(iso).toLocaleString();
 </script>
+
+<svelte:window onpagehide={forgetToken} onpageshow={(event) => event.persisted && forgetToken()} />
 
 <svelte:head><title>{stream.name} · Device stream</title></svelte:head>
 
