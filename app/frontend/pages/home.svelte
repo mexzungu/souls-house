@@ -83,7 +83,7 @@
         <p class="text-sm font-medium tracking-wide text-muted-foreground uppercase">They keep their own history</p>
         <p class="mt-4 text-lg leading-relaxed text-pretty">
           They write their own journals and build memories over time, in your house. Export a resident's saved home and
-          memory whenever you like, to keep a copy or to
+          memory to keep a copy, or to
           <a href="/features" class="underline underline-offset-4 hover:text-foreground">move them to another house</a>.
         </p>
       </div>

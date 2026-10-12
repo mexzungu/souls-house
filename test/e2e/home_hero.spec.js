@@ -20,6 +20,10 @@ test('the homepage hero says the home belongs to the visitor and carries the hou
   await expect(film).toBeVisible();
   await expect(film).toHaveJSProperty('muted', true);
   await expect(film).toHaveJSProperty('paused', false);
+  // Not paused is not the same as decoding frames: the clock has to move.
+  const before = await film.evaluate((el) => el.currentTime);
+  await page.waitForTimeout(700);
+  expect(await film.evaluate((el) => el.currentTime)).toBeGreaterThan(before);
   const pause = page.getByTestId('hero-film-pause');
   await expect(pause).toHaveText('Pause');
   await pause.click();
