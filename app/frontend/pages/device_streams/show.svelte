@@ -1,0 +1,242 @@
+<script>
+  import { router } from '@inertiajs/svelte';
+  import { Button } from '$lib/components/shadcn/button/index.js';
+  import { Input } from '$lib/components/shadcn/input/index.js';
+  import { Label } from '$lib/components/shadcn/label/index.js';
+  import { Badge } from '$lib/components/shadcn/badge/index.js';
+  import DeviceStreamsFrame from '$lib/components/device-streams/DeviceStreamsFrame.svelte';
+  import { ArrowLeft, Key, Trash } from 'phosphor-svelte';
+
+  let {
+    account = null,
+    stream,
+    can_configure: canConfigure = false,
+    users = [],
+    agents = [],
+    credentials = [],
+    sessions = [],
+    urls,
+  } = $props();
+
+  let readerUserIds = $state(users.filter((user) => user.reader).map((user) => user.id));
+  let readerAgentIds = $state(agents.filter((agent) => agent.reader).map((agent) => agent.id));
+  let enabled = $state(stream.enabled);
+  let saving = $state(false);
+  let sessionUuid = $state('');
+
+  function toggle(list, id, checked) {
+    return checked ? [...new Set([...list, id])] : list.filter((existing) => existing !== id);
+  }
+
+  function saveReaders(event) {
+    event.preventDefault();
+    saving = true;
+    router.patch(
+      urls.controls,
+      { reader_user_ids: readerUserIds, reader_agent_ids: readerAgentIds, enabled: enabled ? '1' : '0' },
+      { preserveScroll: true, onFinish: () => (saving = false) }
+    );
+  }
+
+  function issueCredential() {
+    router.post(urls.credential);
+  }
+
+  function revoke(credential) {
+    if (!confirm('Revoke this device? It will no longer be able to send readings.')) return;
+    router.delete(credential.revoke_url, { preserveScroll: true });
+  }
+
+  function eraseSession(session) {
+    if (!confirm('Delete this session? Every reader and device stops seeing it.')) return;
+    router.delete(session.erase_url, { preserveScroll: true });
+  }
+
+  function eraseByUuid(event) {
+    event.preventDefault();
+    const uuid = sessionUuid.trim();
+    if (!uuid || !confirm(`Delete session ${uuid}?`)) return;
+    router.delete(`${urls.erase_session}?session_id=${encodeURIComponent(uuid)}`, {
+      preserveScroll: true,
+      onSuccess: () => (sessionUuid = ''),
+    });
+  }
+
+  function eraseAll() {
+    if (!confirm('Delete all sessions and close this stream? You cannot reopen it.')) return;
+    router.delete(urls.controls);
+  }
+
+  const formatDate = (iso) => new Date(iso).toLocaleString();
+</script>
+
+<svelte:head><title>{stream.name} · Device stream</title></svelte:head>
+
+<DeviceStreamsFrame {account} title={stream.name} description={`Device stream in ${stream.account_name}`}>
+  <div class="max-w-3xl space-y-6">
+    <a href={urls.index} class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+      <ArrowLeft size={16} /> Your streams
+    </a>
+
+    <section class="rounded-2xl border bg-card p-5 sm:p-6 space-y-3">
+      <div class="flex flex-wrap items-center gap-2">
+        {#if stream.erased}
+          <Badge variant="outline">Deleted and closed</Badge>
+        {:else if stream.enabled}
+          <Badge>Ingesting</Badge>
+        {:else}
+          <Badge variant="secondary">Ingestion disabled</Badge>
+        {/if}
+        <span class="text-sm text-muted-foreground"
+          >Account: <strong class="text-foreground">{stream.account_name}</strong></span>
+      </div>
+      <p class="text-sm">
+        Stream key: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs break-all">{stream.stream_key}</code>
+      </p>
+      {#if !account}
+        <p class="text-sm text-muted-foreground">
+          Personal recovery controls: you may revoke devices or delete data here. Reader changes and new credentials
+          require account membership.
+          {#if urls.manage_in_account}
+            <a href={urls.manage_in_account} class="underline underline-offset-4 hover:text-foreground"
+              >Manage in account</a>
+          {/if}
+        </p>
+      {/if}
+      <p class="text-sm text-muted-foreground">
+        Readers may analyse RR data; this does not authorize publication. As everywhere in this house, deleting hides
+        data, it does not destroy it: deleted sessions disappear from every reader and device, but the samples stay
+        stored on the server and in its backups. Mac files, downloaded copies and derived findings are not affected.
+        Infrastructure administrators can access stored data. If you need data truly gone, run your own house.
+      </p>
+    </section>
+
+    {#if stream.erased}
+      <p class="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+        This stream is deleted and closed. It cannot ingest again.
+      </p>
+    {:else}
+      {#if canConfigure}
+        <section class="rounded-2xl border bg-card p-5 sm:p-6">
+          <form onsubmit={saveReaders} class="space-y-5">
+            <fieldset class="min-w-0 space-y-3">
+              <legend class="text-lg font-semibold">Readers</legend>
+              <p class="text-sm text-muted-foreground">
+                Explicit selection. Future house members are not added automatically.
+              </p>
+              <div class="grid gap-2 sm:grid-cols-2 [&>*]:min-w-0">
+                {#each users as user (user.id)}
+                  <label class="flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted/50">
+                    <input
+                      type="checkbox"
+                      name="reader_user_ids[]"
+                      value={user.id}
+                      class="size-4 accent-primary"
+                      checked={readerUserIds.includes(user.id)}
+                      onchange={(event) =>
+                        (readerUserIds = toggle(readerUserIds, user.id, event.currentTarget.checked))} />
+                    <span class="min-w-0 truncate" title={user.name}>{user.name}</span>
+                  </label>
+                {/each}
+                {#each agents as agent (agent.id)}
+                  <label class="flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-muted/50">
+                    <input
+                      type="checkbox"
+                      name="reader_agent_ids[]"
+                      value={agent.id}
+                      class="size-4 accent-primary"
+                      checked={readerAgentIds.includes(agent.id)}
+                      onchange={(event) =>
+                        (readerAgentIds = toggle(readerAgentIds, agent.id, event.currentTarget.checked))} />
+                    <span class="min-w-0 truncate">{agent.name}</span>
+                    <span class="ml-auto shrink-0 text-xs text-muted-foreground">resident</span>
+                  </label>
+                {/each}
+              </div>
+            </fieldset>
+            <label class="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" name="enabled" value="1" class="size-4 accent-primary" bind:checked={enabled} />
+              Enable device ingestion
+            </label>
+            <Button type="submit" disabled={saving}>Save readers and ingestion choice</Button>
+          </form>
+        </section>
+      {/if}
+
+      <section class="rounded-2xl border bg-card p-5 sm:p-6 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-lg font-semibold">Devices</h2>
+          {#if urls.credential}
+            <Button variant="outline" size="sm" onclick={issueCredential}>
+              <Key /> Create append-only device credential
+            </Button>
+          {/if}
+        </div>
+        {#if credentials.length === 0}
+          <p class="text-sm text-muted-foreground">No device credentials yet.</p>
+        {:else}
+          <ul class="divide-y rounded-xl border">
+            {#each credentials as credential (credential.id)}
+              <li class="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                <span>Created {formatDate(credential.created_at)}</span>
+                {#if credential.revoked}
+                  <Badge variant="outline">Revoked</Badge>
+                {:else}
+                  <Button variant="outline" size="sm" onclick={() => revoke(credential)}>Revoke device</Button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
+
+      <section class="rounded-2xl border bg-card p-5 sm:p-6 space-y-4">
+        <h2 class="text-lg font-semibold">
+          Sessions <span class="text-sm font-normal text-muted-foreground">(newest 100)</span>
+        </h2>
+        {#if sessions.length === 0}
+          <p class="text-sm text-muted-foreground">No sessions recorded yet.</p>
+        {:else}
+          <ul class="divide-y rounded-xl border">
+            {#each sessions as session (session.uuid)}
+              <li class="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                <span class="min-w-0">
+                  <code class="font-mono text-xs break-all">{session.uuid}</code>
+                  <span class="block text-xs text-muted-foreground">{formatDate(session.created_at)}</span>
+                </span>
+                {#if session.erased}
+                  <Badge variant="outline">Deleted</Badge>
+                {:else}
+                  <Button variant="ghost" size="sm" onclick={() => eraseSession(session)}><Trash /> Delete</Button>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <form onsubmit={eraseByUuid} class="flex flex-col sm:flex-row sm:items-end gap-3 border-t pt-4">
+          <div class="flex-1 space-y-1.5">
+            <Label for="session-uuid">Delete an older session by UUID</Label>
+            <Input
+              id="session-uuid"
+              bind:value={sessionUuid}
+              required
+              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+          </div>
+          <Button type="submit" variant="outline">Delete session</Button>
+        </form>
+      </section>
+
+      <section class="rounded-2xl border border-destructive/40 bg-destructive/5 p-5 sm:p-6 space-y-3">
+        <h2 class="text-lg font-semibold">Delete all and close</h2>
+        <p class="text-sm text-muted-foreground">
+          This hides every session from every reader and revokes every device. The samples stay stored. You cannot
+          reopen this stream.
+        </p>
+        <Button
+          variant="outline"
+          class="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onclick={eraseAll}>Delete all sessions and close stream</Button>
+      </section>
+    {/if}
+  </div>
+</DeviceStreamsFrame>
