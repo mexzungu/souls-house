@@ -5,7 +5,7 @@
   import { Label } from '$lib/components/shadcn/label/index.js';
   import { Badge } from '$lib/components/shadcn/badge/index.js';
   import DeviceStreamsFrame from '$lib/components/device-streams/DeviceStreamsFrame.svelte';
-  import { ArrowLeft, Key, Trash } from 'phosphor-svelte';
+  import { ArrowLeft, Check, Copy, Key, Trash } from 'phosphor-svelte';
 
   let {
     account = null,
@@ -38,8 +38,44 @@
     );
   }
 
-  function issueCredential() {
-    router.post(urls.credential);
+  // The raw token lives only in this component's state. It is fetched as JSON,
+  // never passed as page props, so it is not kept in browser history.
+  let issued = $state(null);
+  let issuing = $state(false);
+  let issueError = $state(null);
+  let copied = $state(false);
+
+  async function issueCredential() {
+    issuing = true;
+    issueError = null;
+    try {
+      const response = await fetch(urls.credential, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '',
+        },
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      issued = await response.json();
+      router.reload({ only: ['credentials'], preserveScroll: true });
+    } catch (error) {
+      issueError = error.message;
+    } finally {
+      issuing = false;
+    }
+  }
+
+  async function copyToken() {
+    await navigator.clipboard.writeText(issued.token);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  }
+
+  function dismissToken() {
+    issued = null;
   }
 
   function revoke(credential) {
@@ -167,11 +203,35 @@
         <div class="flex flex-wrap items-center justify-between gap-3">
           <h2 class="text-lg font-semibold">Devices</h2>
           {#if urls.credential}
-            <Button variant="outline" size="sm" onclick={issueCredential}>
+            <Button variant="outline" size="sm" onclick={issueCredential} disabled={issuing}>
               <Key /> Create append-only device credential
             </Button>
           {/if}
         </div>
+        {#if issueError}
+          <p class="text-sm text-destructive">Could not create a credential: {issueError}</p>
+        {/if}
+        {#if issued}
+          <div class="space-y-3 rounded-xl border border-primary/40 bg-primary/5 p-4" data-testid="issued-credential">
+            <p class="text-sm font-medium">Copy once to your device. It will not be shown again.</p>
+            <p class="text-sm text-muted-foreground">
+              Append-only to this stream. Do not paste it into chat. It cannot read data or act as a resident.
+            </p>
+            <div class="flex items-start gap-2">
+              <pre
+                class="flex-1 overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs break-all whitespace-pre-wrap">{issued.token}</pre>
+              <Button variant="outline" size="icon" onclick={copyToken} aria-label="Copy credential">
+                {#if copied}<Check />{:else}<Copy />{/if}
+              </Button>
+            </div>
+            <p class="text-sm">
+              POST JSON to <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-xs break-all"
+                >{issued.endpoint}</code>
+              with this token as the Bearer credential.
+            </p>
+            <Button size="sm" onclick={dismissToken}>I've copied it</Button>
+          </div>
+        {/if}
         {#if credentials.length === 0}
           <p class="text-sm text-muted-foreground">No device credentials yet.</p>
         {:else}

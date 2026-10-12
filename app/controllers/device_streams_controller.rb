@@ -86,13 +86,12 @@ class DeviceStreamsController < ApplicationController
     redirect_to stream_controls_path
   end
 
+  # JSON only: the raw token must never enter Inertia page props, which the
+  # browser keeps in history.state and would redisplay on Back.
   def credential
-    render inertia: "device_streams/credential", props: {
-      account: @stream_account&.as_json,
-      stream: { name: @stream.name, account_name: @stream.account.name },
+    render json: {
       token: @stream.issue_credential!,
-      endpoint: "#{request.base_url}/api/v1/streams/#{@stream.stream_key}/samples",
-      controls_url: stream_controls_path
+      endpoint: "#{request.base_url}/api/v1/streams/#{@stream.stream_key}/samples"
     }
   end
 

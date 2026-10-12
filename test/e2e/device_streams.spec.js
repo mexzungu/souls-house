@@ -27,9 +27,39 @@ test('account services leads to account-scoped device controls and separate reco
     await expect(page.getByLabel('Enable device ingestion')).not.toBeChecked();
     await expect(page.getByRole('checkbox', { name: /E2E Researcher/ })).toBeVisible();
     await page.getByRole('checkbox', { name: /E2E Researcher/ }).check();
+    await page.getByLabel('Enable device ingestion').check();
     await page.getByRole('button', { name: 'Save readers and ingestion choice' }).click();
     await expect(page.getByRole('checkbox', { name: /E2E Researcher/ })).toBeChecked();
+    await expect(page.getByText('Ingesting', { exact: true })).toBeVisible();
     await page.screenshot({ path: 'test-results/device-stream-controls-desktop.png', fullPage: true });
+
+    // The one-time token must not survive in browser history (Inertia keeps page props in history.state).
+    await page.getByRole('button', { name: 'Create append-only device credential' }).click();
+    const issued = page.getByTestId('issued-credential');
+    await expect(issued).toBeVisible();
+    const token = (await issued.locator('pre').textContent()).trim();
+    expect(token).toMatch(/^shd_[0-9a-f]{64}$/);
+    await expect(page.getByRole('button', { name: 'Revoke device' })).toHaveCount(1);
+    expect(JSON.stringify(await page.evaluate(() => window.history.state))).not.toContain(token);
+
+    // Leave through an Inertia link, then Back: restored from history.state.
+    await page
+      .getByRole('navigation', { name: 'Account settings' })
+      .getByRole('link', { name: 'Integrations' })
+      .click();
+    await expect(page.getByRole('heading', { name: 'Connect a new integration' })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Synthetic H10' })).toBeVisible();
+    await expect(page.getByTestId('issued-credential')).toHaveCount(0);
+    expect(await page.content()).not.toContain(token);
+
+    // Leave through a full page load, then Back.
+    await page.goto('/device_streams');
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: 'Synthetic H10' })).toBeVisible();
+    expect(await page.content()).not.toContain(token);
+    expect(JSON.stringify(await page.evaluate(() => window.history.state))).not.toContain(token);
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: 'test-results/device-stream-controls-mobile.png', fullPage: true });
     await page.goto('/device_streams');

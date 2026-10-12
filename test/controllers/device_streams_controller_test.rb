@@ -28,12 +28,12 @@ class DeviceStreamsControllerTest < ActionDispatch::IntegrationTest
     assert_equal credential_account_device_stream_path(@account, @stream.stream_key), inertia_shared_props.dig("urls", "credential")
     assert_no_match(/permanent/i, File.read(Rails.root.join("app/frontend/pages/device_streams/show.svelte")))
     assert_match(/samples stay stored/, File.read(Rails.root.join("app/frontend/pages/device_streams/show.svelte")))
-    post credential_account_device_stream_path(@account, @stream.stream_key)
+    post credential_account_device_stream_path(@account, @stream.stream_key), headers: { "Accept" => "application/json" }
     assert_response :success
     assert_equal "no-store", response.headers["Cache-Control"]
-    @inertia_props = nil
-    assert_equal "device_streams/credential", inertia_component
-    assert_match(/\Ashd_[0-9a-f]{64}\z/, inertia_shared_props["token"])
+    assert_equal "application/json", response.media_type
+    assert_match(/\Ashd_[0-9a-f]{64}\z/, response.parsed_body["token"])
+    assert_equal "http://www.example.com/api/v1/streams/#{@stream.stream_key}/samples", response.parsed_body["endpoint"]
     credential = @stream.device_stream_credentials.last
     get account_device_stream_path(@account, @stream.stream_key)
     assert_no_match(/shd_[0-9a-f]{64}/, response.body)
@@ -98,6 +98,18 @@ class DeviceStreamsControllerTest < ActionDispatch::IntegrationTest
     patch account_device_stream_path(@account, @stream.stream_key),
       params: { enabled: "1", reader_agent_ids: [ agents(:research_assistant).to_param ] }
     assert_response :unprocessable_entity
+    assert_empty @stream.reload.reader_agent_ids
+  end
+
+  test "inertia rejection redirects back with the reason as a flash alert" do
+    path = account_device_stream_path(@account, @stream.stream_key)
+    patch path,
+      params: { enabled: "1", reader_agent_ids: [ agents(:research_assistant).to_param ] },
+      headers: { "X-Inertia" => "true", "Referer" => "http://www.example.com#{path}" },
+      as: :json
+    assert_response :see_other
+    assert_redirected_to path
+    assert_equal "Readers must belong to this account", flash[:alert]
     assert_empty @stream.reload.reader_agent_ids
   end
 
