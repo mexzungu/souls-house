@@ -368,6 +368,14 @@ func (s *Store) Delivered(ctx context.Context, id int64) error {
 	return nil
 }
 
+// Drop removes one event without delivering it.
+func (s *Store) Drop(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbox WHERE id = ?`, id); err != nil {
+		return ErrStore
+	}
+	return nil
+}
+
 // OutboxDepth counts undelivered events.
 func (s *Store) OutboxDepth(ctx context.Context) (int, error) {
 	var n int
