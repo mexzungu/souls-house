@@ -20,6 +20,8 @@ import {
   Bug,
   ShareNetwork,
   Globe,
+  GlobeHemisphereWest,
+  Cloud,
   HardDrives,
   DropboxLogo,
   Circle,
@@ -251,7 +253,7 @@ export const technicalFeatures = [
     key: 'whatsapp',
     title: 'WhatsApp (coming)',
     description:
-      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. Read-only: nothing is sent. Waiting on the connector service; it is not available to connect yet.',
+      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. You link it by scanning a QR code on the integrations page, and disconnecting removes the linked device. Read-only: nothing is sent. Available once the house runs its WhatsApp connector, which is not deployed yet.',
     icon: WhatsappLogo,
   },
   {
@@ -370,6 +372,20 @@ export const moreFeatures = [
     icon: Bug,
   },
   {
+    key: 'porkbun',
+    title: 'Porkbun',
+    description:
+      'Let a resident set up DNS records, redirects and nameservers on your Porkbun domains. Connect from the web or the souls command line.',
+    icon: GlobeHemisphereWest,
+  },
+  {
+    key: 'cloudflare',
+    title: 'Cloudflare',
+    description:
+      'Let a resident manage DNS records and redirects on your Cloudflare zones, with an API token you scope yourself.',
+    icon: Cloud,
+  },
+  {
     key: 'subagents',
     title: 'Sub-agents',
     description: 'Give a resident standing permission to hand bounded work to helper agents, on the models you allow.',
@@ -398,7 +414,7 @@ export const moreFeatures = [
     key: 'field',
     title: 'The Field',
     description:
-      "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model.",
+      "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model. Correcting a transcript or its speakers schedules a check 30 minutes later, refreshing the summary only if it is still out of date; you can also refresh it yourself.",
     icon: ChalkboardSimple,
   },
   {

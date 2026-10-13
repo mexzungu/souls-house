@@ -95,7 +95,10 @@ jobs:
               superseded)
                 printf '\nMaster moved on; nothing deployed:\n```json\n%s\n```\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
                 echo outcome=superseded >> "$GITHUB_OUTPUT"
-                exit 0 ;;
+                # Red in Actions: GitHub success with nothing shipped is the
+                # hole in #313. The host still deploys nothing; the marker
+                # step below still names this as superseded, not a crash.
+                exit 1 ;;
               failed|partial|interrupted)
                 printf '\nNot complete:\n```json\n%s\n```\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
                 exit 1 ;;
@@ -105,11 +108,12 @@ jobs:
           done
           echo "Wait expired; job $id may still be running on the host. Inspect before retrying."
           exit 1
-      # Marker steps: the Deployments page reads which of these ran to tell a
-      # real deploy from a superseded one (both leave the job successful).
+      # Marker steps: the Deployments page reads which of these ran. A real
+      # deploy leaves the job green. Superseded is red (nothing shipped) and
+      # still named, so it is not confused with a host crash.
       - name: Deployment verified
         if: steps.request.outputs.outcome == 'deployed'
         run: echo deployed
       - name: Master moved on, nothing deployed
-        if: steps.request.outputs.outcome == 'superseded'
+        if: failure() && steps.request.outputs.outcome == 'superseded'
         run: echo superseded

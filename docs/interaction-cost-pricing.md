@@ -38,6 +38,13 @@ output 0.47, from the OpenRouter endpoint for `qwen/qwen3.8-omni-flash`
 creation tokens use the input rate. Text pricing only; audio/video input is not
 modelled.
 
+Muse Wonder (added October 13, 2026, the day after Meta announced it): input 4,
+cache read 0.2, output 20, from the OpenRouter endpoint for `meta/muse-wonder`
+(Meta provider, `meta/muse-wonder-20261012`, the only endpoint). OpenRouter
+lists no cache-write price and no implicit caching for it, so cache writes fall
+back to the input rate. There is no direct Meta route in souls.house; it runs
+through OpenRouter only.
+
 Gemini rates are selected by the interaction's date, preserving historical
 promotional estimates. Google quotes cache **storage** by token-hour, not a
 one-off cache-write rate. Do not convert that to a token price by assuming a

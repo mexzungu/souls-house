@@ -60,6 +60,20 @@ class WorkflowAuthorityTest(unittest.TestCase):
         self.assertIn("expected_revision: ${{ github.event.workflow_run.head_sha }}", caller)
         self.assertIn("cancel-in-progress: false", caller)
 
+    def test_superseded_is_a_failed_github_job_not_a_green_nothing(self):
+        # #313: host superseded with GitHub success looks like a deploy.
+        transport = (OPS.parents[1] / ".github/workflows/deploy-house.yml").read_text()
+        superseded = transport.split("superseded)")[1].split("failed|partial|interrupted)")[0]
+        self.assertIn("outcome=superseded", superseded)
+        self.assertIn("exit 1", superseded)
+        self.assertNotIn("exit 0", superseded)
+        deployed = transport.split("success)")[1].split("superseded)")[0]
+        self.assertIn("exit 0", deployed)
+        marker = next(block for block in transport.split("- name: ")
+                      if block.startswith("Master moved on, nothing deployed"))
+        self.assertIn("failure() && steps.request.outputs.outcome == 'superseded'", marker)
+        self.assertNotIn("if: steps.request.outputs.outcome == 'superseded'\n", marker)
+
 
 class GateTest(unittest.TestCase):
     def setUp(self):

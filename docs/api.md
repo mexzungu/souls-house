@@ -328,6 +328,7 @@ member. The web's `require_account_manager!` also admits any confirmed member.
 | `GET /account/api_keys`; `DELETE /account/api_keys/:id` | member; metadata only; you can revoke only your own keys |
 | `GET`, `POST /account/guest_memberships` `{ agent_id }`; `DELETE /account/guest_memberships/:id` | add: someone in both accounts (else 422); remove: an owner of either account (else 403) |
 | `GET /account/service_connections`; `PATCH /account/service_connections/:id` `{ label?, enabled_for_new_agents?, freely_provisionable? }`; `DELETE` (disconnect) | `ServiceConnection#manageable_by?` (else 403); only the connection's owner can change `freely_provisionable` |
+| `GET /account/service_connections/providers`; `POST /account/service_connections` `{ provider, management_scope?, label?, credentials: { <field>: value } }` | member for a `personal` connection (the default); admin for `account_managed` (else 403). Only services that connect from pasted credentials (Porkbun, Cloudflare, Pipedrive, GitHub, Honeybadger, ...) are listed and accepted; OAuth and QR-paired ones are 422 and connect on the web. The provider checks the credential first; a refusal, a missing field or a credential already connected is 422 with the reason. `credentials` is masked in the request log and never returned |
 | `GET /account/ai_provider_keys`; `PATCH /account/ai_provider_keys` `{ <provider>_api_key?, clear?: [provider] }` | read: member; change: owner or admin (else 403). Keys are never returned, and travel only as `<provider>_api_key` so the request log masks them; any other shape (such as `set`) is 422 |
 
 ```http
@@ -433,6 +434,17 @@ before an upload:
 
 **Files.** `PATCH /api/v1/field/files/:id` with `title`, `note` and/or
 `dated_at` returns `{ "file": {...} }`. Upload and delete already existed.
+
+**Summary freshness.** File and recording list/detail responses carry
+`summary_freshness`: `current`, `stale`, or `unknown` (older summaries without
+tracked provenance); `null` means there is no summary. Freshness compares the
+exact summarisation input, including title, note and the bounded source text.
+`summary_pending` means generation/retry is pending, not the 30-minute wait
+after a transcript edit; `summary_failed` reports an exhausted refresh.
+The old summary stays visible. Per-recording human speaker naming also schedules
+a check. Voice renames, identity deletion and bulk transcript re-rendering can
+make summaries stale but do not schedule calls across the archive. Title/note
+edits do not schedule checks either. Older summaries are not backfilled.
 
 **PDF text.** A PDF's own text layer is read page by page with Poppler after
 upload (nothing is sent outside the house). Files gain `text_extraction`
@@ -541,7 +553,9 @@ URL. This read never includes voice-recognition or name-suggestion data.
   (or there is no such line), it's 409 with the current `revision` and nothing is
   written; an empty or over-long `text` is 422; a recording that isn't ready is
   409. The success response is the lines again, with the new `revision` and the
-  corrected `line`. The summary is not rewritten; ask for that on the page. The
+  corrected `line`. A successful text correction or speaker reassignment schedules
+  a summary freshness check 30 minutes later. Only a still-stale summary is rewritten;
+  a manual refresh or an earlier check makes subsequent checks no-ops. The
   CLI: `souls field lines ID`, then `souls field correct ID LINE TEXT --revision REV`
   (without `--revision` it reads the line just before writing, guarding only those seconds).
   The same `PATCH` with `{ speaker, was, revision }` (no `text`) gives the line to
@@ -558,7 +572,9 @@ URL. This read never includes voice-recognition or name-suggestion data.
 - `PATCH /api/v1/field/recordings/:recording_id/speakers/:id` takes one of
   `me: true`, `voice_id`, `member_user_id`, `name`, `unname: true`,
   `ignore: true` (noise, not a person: it stops counting as waiting for a
-  name; 409 if the speaker is named) or `unignore: true`. A `name`
+  name; 409 if the speaker is named; add `ignore_as: "anonymous"` for a real
+  person who stays unnamed, and the speaker's `ignored_as` says which) or
+  `unignore: true`. A `name`
   matching an existing voice returns 409
   `{ "error": ..., "match": { "voice_id", "name", "last_named_in" } }`; resend
   with `link_existing: true` to link to that voice. Returns `{ "speaker": {...} }`.

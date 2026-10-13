@@ -15,7 +15,8 @@ class ChatThinkingTest < ActiveSupport::TestCase
       "x-ai/grok-4.7" => [ "xAI", %w[low medium high xhigh] ],
       "xiaomi/mimo-v2.6-pro" => [ "Xiaomi", %w[none high] ],
       "xiaomi/mimo-v2.6-pro-ultraspeed" => [ "Xiaomi", %w[none high] ],
-      "xiaomi/mimo-v2.6-flash" => [ "Xiaomi", %w[none high] ]
+      "xiaomi/mimo-v2.6-flash" => [ "Xiaomi", %w[none high] ],
+      "meta/muse-wonder" => [ "Meta", %w[none high] ]
     }.each do |id, (group, efforts)|
       assert Chat::MODELS.any? { |model| model[:model_id] == id && model[:group] == group }, id
       assert Chat.supports_thinking?(id), id

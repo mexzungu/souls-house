@@ -115,6 +115,7 @@
           text={recording.summary_long}
           pending={recording.summary_pending}
           failed={recording.summary_failed}
+          freshness={recording.summary_freshness}
           url={recording.resummarize_url}
           testid="field-recording-summary" />
       {/if}

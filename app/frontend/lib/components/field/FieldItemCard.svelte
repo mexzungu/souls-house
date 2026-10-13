@@ -40,6 +40,11 @@
               data-testid="field-item-summary">
               {item.summary_short}
             </p>
+            {#if item.summary_freshness === 'stale'}
+              <p class="text-xs text-muted-foreground" data-testid="field-item-summary-freshness">
+                Summary out of date
+              </p>
+            {/if}
           {/if}
           {#if item.kind === 'recording'}
             <p

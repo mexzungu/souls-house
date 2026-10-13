@@ -589,15 +589,16 @@ module Chat::ModelSelection
     { model_id: "mistralai/mistral-saba", label: "Mistral Saba", group: "Mistral" },
     { model_id: "mistralai/mixtral-8x22b-instruct", label: "Mixtral 8x22B Instruct", group: "Mistral" },
 
-    # Meta Llama
-    { model_id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-4-scout", label: "Llama 4 Scout", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B Instruct", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.1-70b-instruct", label: "Llama 3.1 70B Instruct", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.1-8b-instruct", label: "Llama 3.1 8B Instruct", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.2-1b-instruct", label: "Llama 3.2 1B Instruct", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.2-3b-instruct", label: "Llama 3.2 3B Instruct", group: "Meta Llama" },
-    { model_id: "meta-llama/llama-3.2-11b-vision-instruct", label: "Llama 3.2 11B Vision Instruct", group: "Meta Llama" },
+    # Meta
+    { model_id: "meta/muse-wonder", label: "Muse Wonder", group: "Meta", thinking: { supported: true } },
+    { model_id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", group: "Meta" },
+    { model_id: "meta-llama/llama-4-scout", label: "Llama 4 Scout", group: "Meta" },
+    { model_id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B Instruct", group: "Meta" },
+    { model_id: "meta-llama/llama-3.1-70b-instruct", label: "Llama 3.1 70B Instruct", group: "Meta" },
+    { model_id: "meta-llama/llama-3.1-8b-instruct", label: "Llama 3.1 8B Instruct", group: "Meta" },
+    { model_id: "meta-llama/llama-3.2-1b-instruct", label: "Llama 3.2 1B Instruct", group: "Meta" },
+    { model_id: "meta-llama/llama-3.2-3b-instruct", label: "Llama 3.2 3B Instruct", group: "Meta" },
+    { model_id: "meta-llama/llama-3.2-11b-vision-instruct", label: "Llama 3.2 11B Vision Instruct", group: "Meta" },
 
     # Qwen
     { model_id: "qwen/qwen3.8-2.4t-a95b", label: "Qwen3.8 2.4T A95B", group: "Qwen", thinking: { supported: true } },
@@ -791,7 +792,7 @@ module Chat::ModelSelection
         REASONING_PROFILES[:grok_fast]
       when %r{\Ax-ai/grok-}
         REASONING_PROFILES[:grok]
-      when %r{\A(?:deepseek|moonshotai|minimax|qwen|xiaomi|z-ai)/}
+      when %r{\A(?:deepseek|meta|moonshotai|minimax|qwen|xiaomi|z-ai)/}
         REASONING_PROFILES[:thinking_mode] if supports_thinking?(model_id)
       end
     end
