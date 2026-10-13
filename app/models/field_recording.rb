@@ -143,6 +143,7 @@ class FieldRecording < ApplicationRecord
       end
       self.transcript_text = render_transcript_text
       save!
+      schedule_summary_refresh if saved_change_to_transcript_text?
     end
   end
 
@@ -243,6 +244,7 @@ class FieldRecording < ApplicationRecord
       remeasure_speakers!
       self.transcript_text = render_transcript_text
       save!
+      schedule_summary_refresh if saved_change_to_transcript_text?
       target
     end
   end

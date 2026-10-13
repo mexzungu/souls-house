@@ -48,6 +48,11 @@
   {/if}
   <span class="flex-1 min-w-0">
     <span class="block truncate">{item.title}</span>
+    {#if item.summary_freshness === 'stale'}
+      <span class="block truncate text-xs font-normal text-muted-foreground" data-testid="field-item-summary-freshness">
+        Summary out of date
+      </span>
+    {/if}
     <span class="block truncate text-xs font-normal text-muted-foreground sm:hidden">
       {[
         item.kind === 'tweet' ? item.text : item.summary_short,

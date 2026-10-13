@@ -435,6 +435,17 @@ before an upload:
 **Files.** `PATCH /api/v1/field/files/:id` with `title`, `note` and/or
 `dated_at` returns `{ "file": {...} }`. Upload and delete already existed.
 
+**Summary freshness.** File and recording list/detail responses carry
+`summary_freshness`: `current`, `stale`, or `unknown` (older summaries without
+tracked provenance); `null` means there is no summary. Freshness compares the
+exact summarisation input, including title, note and the bounded source text.
+`summary_pending` means generation/retry is pending, not the 30-minute wait
+after a transcript edit; `summary_failed` reports an exhausted refresh.
+The old summary stays visible. Per-recording human speaker naming also schedules
+a check. Voice renames, identity deletion and bulk transcript re-rendering can
+make summaries stale but do not schedule calls across the archive. Title/note
+edits do not schedule checks either. Older summaries are not backfilled.
+
 **PDF text.** A PDF's own text layer is read page by page with Poppler after
 upload (nothing is sent outside the house). Files gain `text_extraction`
 (`status`: `pending`, `extracted`, `partial`, `failed` or `encrypted`, plus
@@ -542,7 +553,9 @@ URL. This read never includes voice-recognition or name-suggestion data.
   (or there is no such line), it's 409 with the current `revision` and nothing is
   written; an empty or over-long `text` is 422; a recording that isn't ready is
   409. The success response is the lines again, with the new `revision` and the
-  corrected `line`. The summary is not rewritten; ask for that on the page. The
+  corrected `line`. A successful text correction or speaker reassignment schedules
+  a summary freshness check 30 minutes later. Only a still-stale summary is rewritten;
+  a manual refresh or an earlier check makes subsequent checks no-ops. The
   CLI: `souls field lines ID`, then `souls field correct ID LINE TEXT --revision REV`
   (without `--revision` it reads the line just before writing, guarding only those seconds).
   The same `PATCH` with `{ speaker, was, revision }` (no `text`) gives the line to

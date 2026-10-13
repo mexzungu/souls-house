@@ -42,6 +42,22 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_field_path(@account, tab: "files", item: "file-#{file.to_param}")
   end
 
+  test "the Field keeps older summaries visible but marks their source untracked" do
+    file = @account.field_files.create!(file: upload, title: "Earlier file", uploaded_by: @user)
+    file.update_columns(summary_short: "Old file", summary_long: "Old file summary.", summarized_at: 1.hour.ago)
+    recording = ready_recording(account: @account, user: @user)
+    recording.update_columns(summary_short: "Old recording", summary_long: "Old recording summary.", summarized_at: 1.hour.ago)
+
+    get account_field_path(@account)
+    items = inertia_props["items"]
+    [ file, recording ].each do |record|
+      item = items.find { |i| i["id"] == record.to_param && i["kind"] == (record.is_a?(FieldFile) ? "file" : "recording") }
+      assert_equal "unknown", item["summary_freshness"]
+      assert_equal record.summary_long, item["summary_long"]
+      assert_equal false, item["summary_pending"]
+    end
+  end
+
   test "a human dates a file as it comes in; an impossible date makes nothing" do
     post account_field_files_path(@account), params: { field_file: { file: upload, dated_at: "2019-03-14" } }
     assert_equal Time.zone.local(2019, 3, 14), @account.field_files.last.dated_at
