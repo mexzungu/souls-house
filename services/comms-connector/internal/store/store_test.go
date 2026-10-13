@@ -12,9 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"services/comms-connector/internal/provider"
 )
 
 const canary = "CANARY-COMMS-store-7f3a"
@@ -26,12 +23,6 @@ func randKey(t *testing.T) []byte {
 	return k
 }
 
-func synthetic() provider.Synthetic {
-	s := provider.DefaultSynthetic()
-	s.Marker = canary
-	return s
-}
-
 func openT(t *testing.T, path string, key []byte) *Store {
 	t.Helper()
 	s, err := Open(context.Background(), path, key)
@@ -41,59 +32,97 @@ func openT(t *testing.T, path string, key []byte) *Store {
 	return s
 }
 
-func count(t *testing.T, s *Store, table string) int {
+// fill queues n canary-bearing events, as the worker does with messages.
+func fill(t *testing.T, s *Store, n int) {
 	t.Helper()
-	var n int
-	if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&n); err != nil {
+	var bodies [][]byte
+	for i := 0; i < n; i++ {
+		bodies = append(bodies, []byte(fmt.Sprintf(`{"type":"message.upsert","messages":[{"body":"%s message %d %s"}]}`, canary, i, strings.Repeat("x", 200))))
+	}
+	if err := s.Enqueue(context.Background(), bodies...); err != nil {
 		t.Fatal(err)
 	}
-	return n
 }
 
 // TestRestartSurvivesReopen is the ConnectHook trap test: a hook-keyed
 // database works fresh and fails on reopen, so this test must reopen.
 func TestRestartSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store-1.db")
+	path := filepath.Join(t.TempDir(), "store.db")
 	key := randKey(t)
 	s := openT(t, path, key)
-	if err := synthetic().Run(ctx, s); err != nil {
+	fill(t, s, 60)
+	if err := s.SetMeta(ctx, map[string]string{"callback_secret": canary + "-secret"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AppendAccess(ctx, AccessEntry{Principal: "p", APIKeyID: "k", RunID: "r", TicketID: "t-00000001", GrantID: "g", KeyGeneration: 1, Scope: "chats:max=200", RowCount: 3}); err != nil {
-		t.Fatal(err)
-	}
-	wantMsgs := count(t, s, "messages")
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
+	s.Close()
 
 	for i := 0; i < 2; i++ { // reopen twice: fresh pool each time
 		s2 := openT(t, path, key)
-		if got := count(t, s2, "messages"); got != wantMsgs || got != 60 {
-			t.Fatalf("reopen %d: messages = %d, want %d", i, got, wantMsgs)
+		if n, err := s2.OutboxDepth(ctx); err != nil || n != 60 {
+			t.Fatalf("reopen %d: outbox depth %d", i, n)
 		}
-		msgs, err := s2.ListMessages(ctx, provider.ChatID(1), 5)
-		if err != nil || len(msgs) != 5 || !strings.Contains(msgs[0].Body, canary) {
-			t.Fatalf("reopen %d: read back failed", i)
-		}
-		log, err := s2.AccessLog(ctx)
-		if err != nil || len(log) != 1 || VerifyChain(log) != nil {
-			t.Fatalf("reopen %d: access log not intact", i)
-		}
-		// Re-running the deterministic provider is idempotent.
-		if err := synthetic().Run(ctx, s2); err != nil || count(t, s2, "messages") != wantMsgs {
-			t.Fatalf("reopen %d: provider re-run not idempotent", i)
+		if v, ok, err := s2.Meta(ctx, "callback_secret"); err != nil || !ok || v != canary+"-secret" {
+			t.Fatalf("reopen %d: meta lost", i)
 		}
 		s2.Close()
 	}
 }
 
+func TestOutboxIsOrderedAndDeliveryDrops(t *testing.T) {
+	ctx := context.Background()
+	s := openT(t, filepath.Join(t.TempDir(), "store.db"), randKey(t))
+	defer s.Close()
+	if err := s.Enqueue(ctx, []byte("a"), []byte("b"), []byte("c")); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Pending(ctx, 10)
+	if len(p) != 3 || string(p[0].Body) != "a" || string(p[2].Body) != "c" || !(p[0].ID < p[1].ID && p[1].ID < p[2].ID) {
+		t.Fatalf("pending %+v", p)
+	}
+	if err := s.Delivered(ctx, p[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	p2, _ := s.Pending(ctx, 10)
+	if len(p2) != 1 || string(p2[0].Body) != "c" {
+		t.Fatalf("after delivery %+v", p2)
+	}
+	// Ids are never reused after a delete (AUTOINCREMENT), so a wire sequence
+	// derived from them never goes backwards.
+	s.Delivered(ctx, p2[0].ID)
+	s.Enqueue(ctx, []byte("d"))
+	p3, _ := s.Pending(ctx, 10)
+	if len(p3) != 1 || p3[0].ID <= p[2].ID {
+		t.Fatalf("id reused: %+v", p3)
+	}
+	if err := s.Enqueue(ctx, nil); !errors.Is(err, ErrBadInput) {
+		t.Fatal("empty event queued")
+	}
+}
+
+func TestRemoveDeletesEveryFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "store.db")
+	s := openT(t, path, randKey(t))
+	fill(t, s, 5)
+	s.Close()
+	if err := Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(path + suffix); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s survived", suffix)
+		}
+	}
+	if err := Remove(path); err != nil {
+		t.Fatal("second remove failed")
+	}
+}
+
 func TestWrongKeyFails(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "store-1.db")
+	path := filepath.Join(t.TempDir(), "store.db")
 	key := randKey(t)
 	s := openT(t, path, key)
-	synthetic().Run(context.Background(), s)
+	fill(t, s, 3)
 	s.Close()
 	other := randKey(t)
 	_, err := Open(context.Background(), path, other)
@@ -142,15 +171,12 @@ func scanFiles(t *testing.T, path string, key []byte, wantWAL bool) {
 
 func TestNoPlaintextOnDisk(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store-1.db")
+	path := filepath.Join(t.TempDir(), "store.db")
 	key := randKey(t)
 	s := openT(t, path, key)
-	big := provider.Synthetic{Chats: 20, MessagesPerChat: 100, Marker: canary, Base: time.Unix(1_700_000_000, 0)}
-	if err := big.Run(ctx, s); err != nil {
-		t.Fatal(err)
-	}
+	fill(t, s, 2000)
 	// A sort large enough to want temp space, while the WAL is live.
-	rows, err := s.db.Query("SELECT body FROM messages ORDER BY body || sender_name DESC")
+	rows, err := s.db.Query("SELECT body FROM outbox ORDER BY body || queued_at DESC")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,14 +191,14 @@ func TestNoPlaintextOnDisk(t *testing.T) {
 	scanFiles(t, path, key, false) // after close/checkpoint
 	// Same check after a reopen-and-write cycle.
 	s = openT(t, path, key)
-	provider.Inject(ctx, s, nil, []provider.Message{{ID: "m-x", ChatID: provider.ChatID(0), Body: canary + "-late", SentAt: time.Now()}})
+	s.Enqueue(ctx, []byte(canary+"-late"))
 	scanFiles(t, path, key, true)
 	s.Close()
 }
 
 func TestTempStoreOnEveryPooledConnection(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "store-1.db")
+	path := filepath.Join(t.TempDir(), "store.db")
 	key := randKey(t)
 	for round := 0; round < 2; round++ { // fresh and reopened
 		s := openT(t, path, key)
@@ -210,7 +236,7 @@ func TestTempStoreOnEveryPooledConnection(t *testing.T) {
 }
 
 func TestDSNNeverFormatted(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "store-1.db")
+	path := filepath.Join(t.TempDir(), "store.db")
 	key := randKey(t)
 	s := openT(t, path, key)
 	defer s.Close()
@@ -236,98 +262,5 @@ func TestOpenErrorsAreFixed(t *testing.T) {
 		if err == nil || err.Error() != ErrOpen.Error() {
 			t.Errorf("path %q: got %v", p, err)
 		}
-	}
-}
-
-func appendN(t *testing.T, s *Store, n int) {
-	t.Helper()
-	for i := 0; i < n; i++ {
-		_, err := s.AppendAccess(context.Background(), AccessEntry{
-			Principal: "agent:1", APIKeyID: "key-1", RunID: "run-1",
-			TicketID: fmt.Sprintf("ticket-%08d", i), GrantID: "grant-1",
-			AccessEpoch: 4, KeyGeneration: 1, Scope: "messages:chat=chat-0001:limit=5", RowCount: 5,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestHashChain(t *testing.T) {
-	ctx := context.Background()
-	s := openT(t, filepath.Join(t.TempDir(), "store-1.db"), randKey(t))
-	defer s.Close()
-	appendN(t, s, 5)
-	log, err := s.AccessLog(ctx)
-	if err != nil || len(log) != 5 {
-		t.Fatal("read log")
-	}
-	if err := VerifyChain(log); err != nil {
-		t.Fatalf("intact chain rejected: %v", err)
-	}
-	if !bytes.Equal(log[0].PrevHash, GenesisHash) {
-		t.Fatal("first entry does not link to genesis")
-	}
-	for i := 1; i < len(log); i++ {
-		if !bytes.Equal(log[i].PrevHash, log[i-1].Hash) {
-			t.Fatalf("entry %d does not link", i+1)
-		}
-	}
-
-	tamper := func(name string, f func(es []AccessEntry) []AccessEntry) {
-		es := make([]AccessEntry, len(log))
-		copy(es, log)
-		if VerifyChain(f(es)) == nil {
-			t.Errorf("tamper %q not detected", name)
-		}
-	}
-	tamper("row count", func(es []AccessEntry) []AccessEntry { es[2].RowCount = 500; return es })
-	tamper("principal", func(es []AccessEntry) []AccessEntry { es[1].Principal = "agent:2"; return es })
-	tamper("scope", func(es []AccessEntry) []AccessEntry { es[3].Scope = "chats:max=200"; return es })
-	tamper("time", func(es []AccessEntry) []AccessEntry { es[0].At = es[0].At.Add(time.Second); return es })
-	tamper("delete middle", func(es []AccessEntry) []AccessEntry { return append(es[:2], es[3:]...) })
-	tamper("reorder", func(es []AccessEntry) []AccessEntry { es[1], es[2] = es[2], es[1]; return es })
-	tamper("rehash one", func(es []AccessEntry) []AccessEntry {
-		es[2].RowCount = 0
-		es[2].Hash = EntryHash(es[2].PrevHash, es[2])
-		return es
-	})
-
-	// Tampering in the database itself is caught on read-back.
-	if _, err := s.db.Exec("UPDATE access_log SET row_count = 999 WHERE seq = 3"); err != nil {
-		t.Fatal(err)
-	}
-	log2, _ := s.AccessLog(ctx)
-	if err := VerifyChain(log2); err == nil || !strings.Contains(err.Error(), "seq 3") {
-		t.Fatalf("DB tamper not detected at seq 3: %v", err)
-	}
-}
-
-func TestAppendFailureWritesNothing(t *testing.T) {
-	ctx := context.Background()
-	s := openT(t, filepath.Join(t.TempDir(), "store-1.db"), randKey(t))
-	defer s.Close()
-	appendN(t, s, 1)
-	if _, err := s.db.Exec(`CREATE TRIGGER fail_log BEFORE INSERT ON access_log BEGIN SELECT RAISE(ABORT, 'forced'); END`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := s.AppendAccess(ctx, AccessEntry{TicketID: "ticket-zz000001", Scope: "chats:max=200"})
-	if !errors.Is(err, ErrAccessLog) || strings.Contains(err.Error(), "forced") {
-		t.Fatalf("got %v", err)
-	}
-	if n := count(t, s, "access_log"); n != 1 {
-		t.Fatalf("access_log has %d rows after failed append", n)
-	}
-}
-
-func TestDuplicateTicketRefusedByLog(t *testing.T) {
-	s := openT(t, filepath.Join(t.TempDir(), "store-1.db"), randKey(t))
-	defer s.Close()
-	e := AccessEntry{TicketID: "ticket-dup00001", Scope: "chats:max=200"}
-	if _, err := s.AppendAccess(context.Background(), e); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.AppendAccess(context.Background(), e); !errors.Is(err, ErrAccessLog) {
-		t.Fatal("same ticket logged twice")
 	}
 }

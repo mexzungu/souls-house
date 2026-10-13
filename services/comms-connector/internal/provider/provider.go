@@ -1,119 +1,75 @@
-// Package provider defines the message source seam. Slice 1 has exactly one
-// implementation, Synthetic; whatsmeow arrives in slice 4 behind the same
-// interface.
+// Package provider is the seam between a connection's worker and the
+// messaging network. A Session is one linked device; it reports what
+// happens to a Sink, which turns it into signed events for Rails.
+//
+// Two implementations: Synthetic (here, deterministic, for tests and the
+// log smoke test) and whatsmeow (package whatsapp).
 package provider
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"time"
+
+	"services/comms-connector/internal/store"
 )
 
-// Chat is one conversation. ID is a connector-assigned opaque ID, never a JID.
+var (
+	// ErrNotPaired: the session has no linked device and was not asked to pair.
+	ErrNotPaired = errors.New("session is not paired")
+	// ErrLoggedOut: the phone removed this linked device. The sink has been told.
+	ErrLoggedOut = errors.New("session was logged out")
+)
+
+// Identity is who the paired account is, as Rails shows it on the connection.
+type Identity struct {
+	UserID      string `json:"user_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// Chat is one conversation. Field names are Rails' (CommsEvents::CHAT_FIELDS).
 type Chat struct {
-	ID        string
-	Name      string
-	UpdatedAt time.Time
+	ProviderChatID string     `json:"provider_chat_id"`
+	Name           string     `json:"name,omitempty"`
+	Kind           string     `json:"kind,omitempty"`
+	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
 }
 
-// Message is one received message. Media is never downloaded in milestone 1.
+// Message is one received message (CommsEvents::MESSAGE_FIELDS). Media are
+// never downloaded: MediaKind names it and Caption carries any caption.
 type Message struct {
-	ID         string
-	ChatID     string
-	ChatName   string
-	SenderName string
-	Body       string
-	SentAt     time.Time
+	ProviderMessageID string    `json:"provider_message_id"`
+	Chat              string    `json:"chat"`
+	SenderID          string    `json:"sender_id,omitempty"`
+	SenderName        string    `json:"sender_name,omitempty"`
+	SentAt            time.Time `json:"sent_at"`
+	Body              *string   `json:"body"`
+	MediaKind         *string   `json:"media_kind"`
+	Caption           *string   `json:"caption"`
 }
 
-// Sink receives what a provider produces. The encrypted store implements it.
+// Sink receives what a session produces. QR codes go to Rails at once and
+// are never stored; everything else is queued durably, in order.
 type Sink interface {
-	PutChat(ctx context.Context, c Chat) error
-	PutMessage(ctx context.Context, m Message) error
+	QR(ctx context.Context, code string, issuedAt, expiresAt time.Time) error
+	Connected(ctx context.Context, id Identity) error
+	LoggedOut(ctx context.Context) error
+	Chats(ctx context.Context, chats []Chat) error
+	Messages(ctx context.Context, msgs []Message) error
 }
 
-// Provider feeds a Sink until it is done or ctx is cancelled.
-type Provider interface {
-	Run(ctx context.Context, sink Sink) error
+// Session is one connection's linked device.
+type Session interface {
+	// Run connects and reports to sink until ctx ends (returning ctx.Err()),
+	// the phone logs the device out (ErrLoggedOut), or, when the session is
+	// not paired and pair is false, at once with ErrNotPaired. With pair
+	// true and no device, it pairs first, reporting QR codes.
+	Run(ctx context.Context, sink Sink, pair bool) error
+	// Logout removes the linked device at the network side, if there is
+	// one. Called only while Run is not running. Best effort: the caller
+	// deletes the store either way.
+	Logout(ctx context.Context) error
 }
 
-// Synthetic emits a deterministic set of fake chats and messages. The same
-// configuration always produces the same IDs, names, bodies and timestamps,
-// so re-running it against an existing store is idempotent.
-type Synthetic struct {
-	Chats           int
-	MessagesPerChat int
-	// Marker is embedded in every chat name, sender name and body. Tests set
-	// it to a CANARY-COMMS-… string; production leaves it empty.
-	Marker string
-	// Base is the timestamp of the first message.
-	Base time.Time
-}
-
-// DefaultSynthetic is what the binary runs with -provider synthetic.
-func DefaultSynthetic() Synthetic {
-	return Synthetic{
-		Chats:           3,
-		MessagesPerChat: 20,
-		Base:            time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC),
-	}
-}
-
-// ChatID returns the deterministic ID of chat i.
-func ChatID(i int) string { return fmt.Sprintf("chat-%04d", i) }
-
-// Events returns everything Run would emit, in order, without a sink.
-func (s Synthetic) Events() ([]Chat, []Message) {
-	var chats []Chat
-	var msgs []Message
-	for c := 0; c < s.Chats; c++ {
-		chat := Chat{
-			ID:   ChatID(c),
-			Name: fmt.Sprintf("Synthetic chat %d %s", c, s.Marker),
-		}
-		last := s.Base.UTC()
-		for m := 0; m < s.MessagesPerChat; m++ {
-			at := s.Base.Add(time.Duration(c)*time.Hour + time.Duration(m)*time.Minute).UTC()
-			last = at
-			msgs = append(msgs, Message{
-				ID:         fmt.Sprintf("%s-msg-%05d", chat.ID, m),
-				ChatID:     chat.ID,
-				ChatName:   chat.Name,
-				SenderName: fmt.Sprintf("Synthetic sender %d %s", m%3, s.Marker),
-				Body:       fmt.Sprintf("Synthetic message %d in chat %d %s", m, c, s.Marker),
-				SentAt:     at,
-			})
-		}
-		chat.UpdatedAt = last
-		chats = append(chats, chat)
-	}
-	return chats, msgs
-}
-
-// Run emits all chats, then all messages, and returns.
-func (s Synthetic) Run(ctx context.Context, sink Sink) error {
-	chats, msgs := s.Events()
-	return Inject(ctx, sink, chats, msgs)
-}
-
-// Inject writes the given chats and messages straight into a sink. It is the
-// test injection path. The binary never exposes it over the network.
-func Inject(ctx context.Context, sink Sink, chats []Chat, msgs []Message) error {
-	for _, c := range chats {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := sink.PutChat(ctx, c); err != nil {
-			return err
-		}
-	}
-	for _, m := range msgs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := sink.PutMessage(ctx, m); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// Factory makes a session over a connection's encrypted store.
+type Factory func(st *store.Store) (Session, error)

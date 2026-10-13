@@ -1,5 +1,8 @@
-// Package store is the per-connection SQLCipher database: chats, messages and
-// the hash-chained access log, all in one encrypted file.
+// Package store is the per-connection SQLCipher database: the connection's
+// metadata (its callback secret), the outbox of events not yet acknowledged
+// by Rails, and whatsmeow's own session tables (whatsmeow_*), which
+// whatsmeow creates on the same *sql.DB through sqlstore.NewWithDB. One
+// encrypted file per connection.
 //
 // Rules from the slice 0 probe (§6b):
 //   - the key goes in the DSN, applied inside the driver's Open before any
@@ -19,13 +22,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	sqlite3 "github.com/mattn/go-sqlite3" // replaced by jgiannuzzi/go-sqlite3 (sqlite3mc 2.2.7), see go.mod
-
-	"services/comms-connector/internal/provider"
 )
 
 // DriverName is the registered driver. whatsmeow's dbutil maps any name
@@ -38,8 +40,6 @@ var (
 	ErrOpen = errors.New("open comms store failed")
 	// ErrStore is returned for any later database failure.
 	ErrStore = errors.New("comms store operation failed")
-	// ErrAccessLog is returned when the access-log append did not commit.
-	ErrAccessLog = errors.New("access log append failed")
 	// ErrBadInput is returned for rows that fail validation before writing.
 	ErrBadInput = errors.New("invalid store input")
 )
@@ -111,8 +111,7 @@ func (keyedConnector) Format(f fmt.State, _ rune) { _, _ = f.Write([]byte("comms
 
 // Store is one open per-connection database.
 type Store struct {
-	db    *sql.DB
-	logMu sync.Mutex // serialises access-log appends inside this process
+	db *sql.DB
 }
 
 func (s *Store) String() string             { return "comms-store" }
@@ -159,35 +158,14 @@ func (s *Store) Close() error {
 }
 
 const schema = `
-CREATE TABLE IF NOT EXISTS chats (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS messages (
-  id          TEXT PRIMARY KEY,
-  chat_id     TEXT NOT NULL REFERENCES chats(id),
-  chat_name   TEXT NOT NULL,
-  sender_name TEXT NOT NULL,
-  body        TEXT NOT NULL,
-  sent_at     INTEGER NOT NULL,
-  stored_at   INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS messages_chat_sent ON messages(chat_id, sent_at DESC, id DESC);
-CREATE TABLE IF NOT EXISTS access_log (
-  seq            INTEGER PRIMARY KEY,
-  prev_hash      BLOB NOT NULL CHECK (length(prev_hash) = 32),
-  hash           BLOB NOT NULL CHECK (length(hash) = 32),
-  principal      TEXT NOT NULL,
-  api_key_id     TEXT NOT NULL,
-  run_id         TEXT NOT NULL,
-  ticket_id      TEXT NOT NULL UNIQUE,
-  grant_id       TEXT NOT NULL,
-  access_epoch   INTEGER NOT NULL,
-  key_generation INTEGER NOT NULL,
-  scope          TEXT NOT NULL,
-  row_count      INTEGER NOT NULL,
-  at_unix_ms     INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS outbox (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  body      BLOB NOT NULL,
+  queued_at INTEGER NOT NULL
 );
 `
 
@@ -293,54 +271,87 @@ func (s *Store) Conn(ctx context.Context) (*sql.Conn, error) {
 	return c, nil
 }
 
-// PutChat upserts a chat.
-func (s *Store) PutChat(ctx context.Context, c provider.Chat) error {
-	if c.ID == "" {
-		return ErrBadInput
+// DB is the encrypted database for whatsmeow's sqlstore.NewWithDB. Its DSN
+// cannot be printed (see keyedConnector).
+func (s *Store) DB() *sql.DB { return s.db }
+
+// Meta reads one metadata value; ok is false when it is absent.
+func (s *Store) Meta(ctx context.Context, key string) (value string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO chats (id, name, updated_at) VALUES (?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET name = excluded.name,
-		   updated_at = max(chats.updated_at, excluded.updated_at)`,
-		c.ID, c.Name, c.UpdatedAt.UnixMilli())
 	if err != nil {
+		return "", false, ErrStore
+	}
+	return value, true, nil
+}
+
+// SetMeta writes metadata values in one transaction.
+func (s *Store) SetMeta(ctx context.Context, kv map[string]string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ErrStore
+	}
+	defer tx.Rollback()
+	for k, v := range kv {
+		if k == "" {
+			return ErrBadInput
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO meta (key, value) VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
+			return ErrStore
+		}
+	}
+	if tx.Commit() != nil {
 		return ErrStore
 	}
 	return nil
 }
 
-// PutMessage inserts a message; a message ID already present is left as is.
-func (s *Store) PutMessage(ctx context.Context, m provider.Message) error {
-	if m.ID == "" || m.ChatID == "" {
-		return ErrBadInput
-	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages (id, chat_id, chat_name, sender_name, body, sent_at, stored_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
-		m.ID, m.ChatID, m.ChatName, m.SenderName, m.Body, m.SentAt.UnixMilli(), time.Now().UnixMilli())
+// OutboxEvent is one event waiting for Rails' acknowledgement. ID is local
+// and strictly increasing; the wire sequence is derived from it.
+type OutboxEvent struct {
+	ID   int64
+	Body []byte
+}
+
+// Enqueue appends events to the outbox in one transaction, in order.
+func (s *Store) Enqueue(ctx context.Context, bodies ...[]byte) error {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return ErrStore
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	for _, b := range bodies {
+		if len(b) == 0 {
+			return ErrBadInput
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO outbox (body, queued_at) VALUES (?, ?)`, b, now); err != nil {
+			return ErrStore
+		}
+	}
+	if tx.Commit() != nil {
 		return ErrStore
 	}
 	return nil
 }
 
-// ListChats returns at most max chats, most recently updated first.
-func (s *Store) ListChats(ctx context.Context, max int) ([]provider.Chat, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, updated_at FROM chats ORDER BY updated_at DESC, id ASC LIMIT ?`, max)
+// Pending returns up to limit undelivered events, oldest first.
+func (s *Store) Pending(ctx context.Context, limit int) ([]OutboxEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, body FROM outbox ORDER BY id LIMIT ?`, limit)
 	if err != nil {
 		return nil, ErrStore
 	}
 	defer rows.Close()
-	out := []provider.Chat{}
+	var out []OutboxEvent
 	for rows.Next() {
-		var c provider.Chat
-		var ms int64
-		if err := rows.Scan(&c.ID, &c.Name, &ms); err != nil {
+		var e OutboxEvent
+		if err := rows.Scan(&e.ID, &e.Body); err != nil {
 			return nil, ErrStore
 		}
-		c.UpdatedAt = time.UnixMilli(ms).UTC()
-		out = append(out, c)
+		out = append(out, e)
 	}
 	if rows.Err() != nil {
 		return nil, ErrStore
@@ -348,27 +359,31 @@ func (s *Store) ListChats(ctx context.Context, max int) ([]provider.Chat, error)
 	return out, nil
 }
 
-// ListMessages returns the newest limit messages of one chat, newest first.
-func (s *Store) ListMessages(ctx context.Context, chatID string, limit int) ([]provider.Message, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, chat_id, chat_name, sender_name, body, sent_at FROM messages
-		 WHERE chat_id = ? ORDER BY sent_at DESC, id DESC LIMIT ?`, chatID, limit)
-	if err != nil {
-		return nil, ErrStore
+// Delivered drops every event up to and including id. secure_delete is on,
+// so the freed pages are zeroed.
+func (s *Store) Delivered(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM outbox WHERE id <= ?`, id); err != nil {
+		return ErrStore
 	}
-	defer rows.Close()
-	out := []provider.Message{}
-	for rows.Next() {
-		var m provider.Message
-		var ms int64
-		if err := rows.Scan(&m.ID, &m.ChatID, &m.ChatName, &m.SenderName, &m.Body, &ms); err != nil {
-			return nil, ErrStore
+	return nil
+}
+
+// OutboxDepth counts undelivered events.
+func (s *Store) OutboxDepth(ctx context.Context) (int, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM outbox`).Scan(&n); err != nil {
+		return 0, ErrStore
+	}
+	return n, nil
+}
+
+// Remove deletes a closed store's files: the database, its WAL and shared
+// memory. A missing file is not an error.
+func Remove(path string) error {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if err := os.Remove(path + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return ErrStore
 		}
-		m.SentAt = time.UnixMilli(ms).UTC()
-		out = append(out, m)
 	}
-	if rows.Err() != nil {
-		return nil, ErrStore
-	}
-	return out, nil
+	return nil
 }
