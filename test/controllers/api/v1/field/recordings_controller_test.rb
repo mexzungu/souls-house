@@ -145,6 +145,29 @@ class Api::V1::Field::RecordingsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "- Ask Priya about the board pack", response.parsed_body.dig("recording", "notes")
   end
 
+  test "summary freshness reaches both resident list and detail without exposing provenance" do
+    @recording.update_columns(summary_short: "Board call", summary_long: "An earlier board call.", summarized_at: Time.current)
+    get api_v1_field_recordings_path, headers: @headers
+    listed = response.parsed_body["recordings"].find { |r| r["id"] == @recording.to_param }
+    assert_equal "unknown", listed["summary_freshness"]
+    assert_equal "An earlier board call.", listed["summary_long"]
+
+    get api_v1_field_recording_path(@recording), headers: @headers
+    body = response.parsed_body["recording"]
+    assert_equal "unknown", body["summary_freshness"]
+    assert_equal false, body["summary_pending"]
+    assert_not body.key?("summary_input_digest")
+    assert_not body.key?("summary_claim_token")
+
+    @recording.update_columns(summary_input_digest: FieldSummaries.current_input_digest(@recording))
+    get api_v1_field_recording_path(@recording), headers: @headers
+    assert_equal "current", response.parsed_body.dig("recording", "summary_freshness")
+
+    @recording.update!(transcript_text: "#{@recording.transcript_text}\nA correction.")
+    get api_v1_field_recording_path(@recording), headers: @headers
+    assert_equal "stale", response.parsed_body.dig("recording", "summary_freshness")
+  end
+
   test "two diarized speakers linked to one voice are one speaker to a resident" do
     ioan = @account.field_voices.create!(name: "Ioan")
     @recording.speakers.each { |speaker| speaker.name_as!(ioan, by: @user) }

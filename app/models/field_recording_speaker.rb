@@ -87,6 +87,11 @@ class FieldRecordingSpeaker < ApplicationRecord
       update!(field_voice: voices.first, naming_source: source, named_by: by, named_at: Time.current,
         decision_generation: decision_generation + 1, **SUGGESTION_FIELDS, **RECOGNITION_FIELDS, **NOT_IGNORED)
       recording.update!(transcript_text: recording.render_transcript_text)
+      # The explicit naming API and attributed confirmations are deliberate
+      # edits. An automatic write with no confirmer must not queue inference.
+      if (source == "human" || by.present?) && recording.saved_change_to_transcript_text?
+        recording.schedule_summary_refresh
+      end
     end
   end
 
@@ -180,6 +185,7 @@ class FieldRecordingSpeaker < ApplicationRecord
       update!(field_voice: nil, naming_source: nil, named_by: nil, named_at: nil,
         decision_generation: decision_generation + 1, **SUGGESTION_FIELDS, **NOT_IGNORED)
       recording.update!(transcript_text: recording.render_transcript_text)
+      recording.schedule_summary_refresh if recording.saved_change_to_transcript_text?
     end
   end
 

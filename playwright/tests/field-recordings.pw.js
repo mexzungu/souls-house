@@ -1144,6 +1144,25 @@ test('while a new summary is being written, the old one stays and the page says 
   await expect(page.getByTestId('summary-refresh')).toBeDisabled();
 });
 
+test('a stale summary stays visible with manual refresh available during the delayed wait', async ({ mount, page }) => {
+  const sent = await captureResummaries(page);
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_freshness: 'stale' } } });
+  await expect(page.getByTestId('field-recording-summary')).toHaveText(summarised.summary_long);
+  await expect(page.getByTestId('summary-stale')).toHaveText('Summary is out of date.');
+  await expect(page.getByTestId('summary-pending')).toHaveCount(0);
+  await expect(page.getByTestId('summary-refresh')).toBeVisible();
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+  await page.screenshot({ path: 'tmp/field-summary-stale.png' });
+  await page.getByTestId('summary-refresh').click();
+  await expect.poll(() => sent).toEqual(['POST']);
+});
+
+test('an older untracked summary says its source is unknown', async ({ mount, page }) => {
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_freshness: 'unknown' } } });
+  await expect(page.getByTestId('summary-unknown')).toContainText("source wasn't tracked");
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+});
+
 test('with no way to redo it, there is no button', async ({ mount, page }) => {
   await mount(RecordingViewer, { props: { recording: { ...summarised, resummarize_url: null } } });
   await expect(page.getByTestId('field-recording-summary')).toBeVisible();
