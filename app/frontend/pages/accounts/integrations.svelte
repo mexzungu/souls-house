@@ -12,6 +12,7 @@
     Bug,
     ShareNetwork,
     TelegramLogo,
+    WhatsappLogo,
     GoogleLogo,
     Heartbeat,
     ArrowLeft,
@@ -100,6 +101,8 @@
                   <ShareNetwork size={22} weight="bold" />
                 {:else if service.key === 'telegram'}
                   <TelegramLogo size={22} weight="fill" />
+                {:else if service.key === 'whatsapp'}
+                  <WhatsappLogo size={22} weight="fill" />
                 {:else}
                   <Heartbeat size={22} weight="fill" />
                 {/if}

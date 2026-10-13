@@ -10,6 +10,7 @@
     GoogleLogo,
     Heartbeat,
     TelegramLogo,
+    WhatsappLogo,
   } from 'phosphor-svelte';
   import { serviceIconClass } from '$lib/service-presentation';
   import ConnectionGoogleAuthority from './connection-google-authority.svelte';
@@ -17,6 +18,8 @@
   import ConnectionResidentAccess from './connection-resident-access.svelte';
   import ConnectionTelegramLogin from './connection-telegram-login.svelte';
   import ConnectionTelegramStatus from './connection-telegram-status.svelte';
+  import ConnectionWhatsappPairing from './connection-whatsapp-pairing.svelte';
+  import ConnectionWhatsappStatus from './connection-whatsapp-status.svelte';
   let { connection, services, account } = $props();
   function updateConnection(connection, attributes) {
     router.patch(`/accounts/${account.id}/service_connections/${connection.id}`, {
@@ -61,6 +64,8 @@
             <ShareNetwork size={26} weight="bold" />
           {:else if connection.provider === 'telegram'}
             <TelegramLogo size={26} weight="fill" />
+          {:else if connection.provider === 'whatsapp'}
+            <WhatsappLogo size={26} weight="fill" />
           {:else}
             <Heartbeat size={26} weight="fill" />
           {/if}
@@ -80,7 +85,9 @@
             </span>
             <span class="truncate">Connected by {connection.connected_by_name}</span>
           </p>
-          {#if connection.status === 'reauthorizing'}
+          {#if connection.status === 'reauthorizing' && connection.provider === 'whatsapp'}
+            <p class="text-sm text-amber-700">Pair again before residents can use this connection.</p>
+          {:else if connection.status === 'reauthorizing'}
             <p class="text-sm text-amber-700">Reauthorization required before residents can use this connection.</p>
           {:else if connection.status === 'pairing' && connection.provider === 'telegram'}
             <p class="text-sm text-amber-700">Waiting for sign-in. Residents can use this once it is signed in.</p>
@@ -110,6 +117,12 @@
         <ConnectionTelegramLogin {connection} {account} />
       {:else if connection.status === 'connected'}
         <ConnectionTelegramStatus {connection} {account} />
+      {/if}
+    {:else if connection.provider === 'whatsapp'}
+      {#if ['pairing', 'reauthorizing', 'error'].includes(connection.status)}
+        <ConnectionWhatsappPairing {connection} {account} />
+      {:else if connection.status === 'connected'}
+        <ConnectionWhatsappStatus {connection} />
       {/if}
     {/if}
 

@@ -158,6 +158,77 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
     assert_not ServiceConnection.exists?(@connection.id)
   end
 
+  test "the owner's QR carries when it was issued, so the page never shows an older code over a newer one" do
+    issued = 5.seconds.ago.change(usec: 123_000)
+    @connection.update!(pairing_qr_issued_at: issued)
+    sign_in @owner
+    get account_service_connection_pairing_path(@account, @connection.public_id)
+
+    assert_equal issued.utc.iso8601(3), response.parsed_body.dig("qr", "issued_at")
+  end
+
+  test "the owner restarts pairing after the codes expired: back to pairing with no code, start_pairing sent" do
+    @connection.update!(pairing_qr_expires_at: 1.second.ago, pairing_qr_issued_at: 61.seconds.ago)
+    started = []
+    sign_in @owner
+    CommsConnector.stub(:start_pairing, ->(connection) { started << connection.id; :sent }) do
+      post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert_response :ok
+    assert_equal "no-store", response.headers["Cache-Control"]
+    assert_equal({ "status" => "pairing", "qr" => nil }, response.parsed_body)
+    assert_equal [ @connection.id ], started
+    @connection.reload
+    assert_nil @connection.pairing_qr
+    assert_nil @connection.pairing_qr_issued_at
+    assert AuditLog.exists?(action: "restart_service_pairing", auditable: @connection)
+  end
+
+  test "after WhatsApp logs the device out, the owner pairs again" do
+    @connection.update!(status: "reauthorizing", pairing_qr: nil, pairing_qr_expires_at: nil)
+    sign_in @owner
+    CommsConnector.stub(:start_pairing, :sent) do
+      post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert_response :ok
+    assert_equal "pairing", @connection.reload.status
+  end
+
+  test "a connected connection is not restarted" do
+    @connection.update!(status: "connected", pairing_qr: nil, pairing_qr_expires_at: nil)
+    sign_in @owner
+    CommsConnector.stub(:start_pairing, ->(_) { flunk "start_pairing sent for a connected connection" }) do
+      post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert_response :conflict
+    assert_equal "connected", @connection.reload.status
+  end
+
+  test "an unreachable connector is reported, not raised" do
+    sign_in @owner
+    CommsConnector.stub(:start_pairing, ->(_) { raise CommsConnector::Error, "down" }) do
+      post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert_response :bad_gateway
+    assert_match(/Could not reach the WhatsApp connector/, response.parsed_body["error"])
+  end
+
+  test "only the owner can restart pairing" do
+    [ @account_admin, @member ].each do |user|
+      sign_in user
+      CommsConnector.stub(:start_pairing, ->(_) { flunk "start_pairing sent for #{user.email_address}" }) do
+        post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+      end
+      assert_response :not_found
+      assert_not_includes response.body, "QR-SECRET"
+    end
+    assert_equal "2@QR-SECRET", @connection.reload.pairing_qr
+  end
+
   private
 
   def with_connector_url(&block)

@@ -10,6 +10,7 @@
     GoogleLogo,
     Heartbeat,
     TelegramLogo,
+    WhatsappLogo,
   } from 'phosphor-svelte';
   import { serviceIconClass } from '$lib/service-presentation';
   import { submitNativePost } from '$lib/integration-forms';
@@ -108,6 +109,8 @@
         <ShareNetwork size={26} weight="bold" />
       {:else if focusedService.key === 'telegram'}
         <TelegramLogo size={26} weight="fill" />
+      {:else if focusedService.key === 'whatsapp'}
+        <WhatsappLogo size={26} weight="fill" />
       {:else}
         <Heartbeat size={26} weight="fill" />
       {/if}

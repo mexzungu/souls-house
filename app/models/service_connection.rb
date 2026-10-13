@@ -259,7 +259,25 @@ class ServiceConnection < ApplicationRecord
     return unless status == "pairing" && pairing_qr.present?
     return unless pairing_qr_expires_at.present? && pairing_qr_expires_at > now
 
-    { code: pairing_qr, expires_at: pairing_qr_expires_at.utc.iso8601 }
+    { code: pairing_qr, issued_at: pairing_qr_issued_at&.utc&.iso8601(3), expires_at: pairing_qr_expires_at.utc.iso8601 }
+  end
+
+  # WhatsApp: pair (again) from the start, after the codes ran out, an error,
+  # or WhatsApp logging the linked device out. Back to "pairing" with no code
+  # under the row lock; the caller then sends start_pairing, and the
+  # connector's fresh session pushes new codes. false when this connection
+  # cannot pair (connected, revoked, suspended).
+  def restart_pairing!
+    with_lock do
+      return false unless status.in?(%w[pairing reauthorizing error])
+
+      update!(
+        status: "pairing",
+        connector_state: connector_state.to_h.except("login"),
+        pairing_qr: nil, pairing_qr_expires_at: nil, pairing_qr_issued_at: nil
+      )
+      true
+    end
   end
 
   def begin_reauthorization!
