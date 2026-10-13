@@ -40,3 +40,9 @@ Rails.application.config.filter_parameters += [ /\Acredentials\z/ ]
 Rails.application.config.filter_parameters += [
   /\A(?:chats|body|caption|sender_name|sender_id|qr|pairing_qr)\z/, /\Achats\.name\z/
 ]
+
+# A connector's status.changed event names the paired account: its phone
+# number and display name (`identity`), which land in the connection's
+# external_subject_id and external_identity. The connector end-to-end test's
+# log check found both in the request parameters and the SQL binds.
+Rails.application.config.filter_parameters += [ /\A(?:identity|external_identity|external_subject_id)\z/ ]

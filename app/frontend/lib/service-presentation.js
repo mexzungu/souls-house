@@ -10,6 +10,8 @@ export function serviceDescription(service) {
     return 'Read production errors, their backtraces and request context, with your personal auth token.';
   if (service.key === 'tailscale') return 'SSH to your own machines over a private tailnet, one node per resident.';
   if (service.key === 'telegram') return 'Your own Telegram account: residents can read and search the chats it syncs.';
+  if (service.key === 'whatsapp')
+    return 'Your own WhatsApp, linked as a device: residents can read the chats it receives. Nothing is sent.';
   if (service.key === 'porkbun') return 'DNS records, URL forwards and nameservers for your Porkbun domains.';
   if (service.key === 'cloudflare')
     return 'DNS records and redirects for your Cloudflare zones, with a scoped API token.';
@@ -24,6 +26,7 @@ export function serviceIconClass(serviceKey) {
   if (serviceKey === 'honeybadger') return 'bg-amber-600 text-white';
   if (serviceKey === 'tailscale') return 'bg-slate-700 text-white';
   if (serviceKey === 'telegram') return 'bg-sky-500 text-white';
+  if (serviceKey === 'whatsapp') return 'bg-green-500 text-white';
   if (serviceKey === 'porkbun') return 'bg-pink-600 text-white';
   if (serviceKey === 'cloudflare') return 'bg-orange-500 text-white';
   return 'bg-red-500 text-white';

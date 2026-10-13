@@ -7,6 +7,7 @@
     Bug,
     ShareNetwork,
     TelegramLogo,
+    WhatsappLogo,
     GlobeHemisphereWest,
     Cloud,
     Heartbeat,
@@ -25,6 +26,7 @@
     honeybadger: [Bug, 'bold'],
     tailscale: [ShareNetwork, 'bold'],
     telegram: [TelegramLogo, 'fill'],
+    whatsapp: [WhatsappLogo, 'fill'],
     porkbun: [GlobeHemisphereWest, 'bold'],
     cloudflare: [Cloud, 'fill'],
   };
