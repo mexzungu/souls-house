@@ -177,21 +177,128 @@ func TestUnpairLogsOutAndDeletes(t *testing.T) {
 // a new store begins, and an older secret version is refused.
 func TestStartPairingAgainStartsOverAndRefusesOlderSecret(t *testing.T) {
 	r := newRig(t)
-	r.rails.expect(ref, secret)
+	r.rails.expectAttempt(ref, secret, 2)
 	m := r.manager()
 	m.StartPairing(context.Background(), ref, secret, 2)
 	r.wantAllDelivered(15)
 	if err := m.StartPairing(context.Background(), ref, secret, 1); !errors.Is(err, worker.ErrStaleSecret) {
 		t.Fatalf("older secret version: %v", err)
 	}
-	r.rails.expect(ref, secret) // the owner restarted pairing: Rails is pairing again
-	if err := m.StartPairing(context.Background(), ref, secret, 2); err != nil {
+	r.rails.expectAttempt(ref, secret, 3) // the owner restarted pairing: Rails is pairing again, attempt 3
+	if err := m.StartPairing(context.Background(), ref, secret, 3); err != nil {
 		t.Fatal(err)
 	}
 	if r.syn.Logouts() != 1 {
 		t.Fatalf("old device not logged out: %d", r.syn.Logouts())
 	}
 	eventually(t, "re-paired", func() bool { _, qrs, _, c := r.rails.snapshot(ref); return len(qrs) == 4 && c == 6 })
+}
+
+// Mira's finding 1, connector side: every event names the pairing attempt
+// it belongs to (the callback secret version start_pairing carried), so
+// Rails can refuse whatever an older attempt still had in flight.
+func TestEveryEventCarriesItsPairingAttempt(t *testing.T) {
+	r := newRig(t)
+	r.rails.expectAttempt(ref, secret, 4)
+	m := r.manager()
+	if err := m.StartPairing(context.Background(), ref, secret, 4); err != nil {
+		t.Fatal(err)
+	}
+	r.wantAllDelivered(15)
+	_, qrs, events, _ := r.rails.snapshot(ref)
+	if len(qrs) != 2 {
+		t.Fatalf("codes %d", len(qrs))
+	}
+	for _, ev := range events {
+		if n, ok := ev["attempt"].(interface{ String() string }); !ok || n.String() != "4" {
+			t.Fatalf("%v event without attempt 4: %v", ev["type"], ev["attempt"])
+		}
+	}
+	if n := r.rails.staleCount(ref); n != 0 {
+		t.Fatalf("%d events refused as another attempt's", n)
+	}
+}
+
+// Mira's finding 4: WhatsApp paired while Rails was down, so its messages
+// were acknowledged to WhatsApp and are only in the outbox, and Rails still
+// says pairing. The owner restarts pairing. The old device goes, but the
+// messages it received do not: they reach Rails after the new pairing.
+func TestRestartKeepsMessagesTheOldPairingAcknowledged(t *testing.T) {
+	r := newRig(t)
+	r.rails.expect(ref, secret)
+	r.syn.QRCodes = 0 // the phone scanned at once
+	r.rails.setDown(true)
+	m := r.manager()
+	if err := m.StartPairing(context.Background(), ref, secret, 1); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "first pairing connected", func() bool { return m.State(ref) == "connected" })
+	time.Sleep(100 * time.Millisecond) // its chats and messages are queued
+
+	// The new pairing's device has seen only one message; the other
+	// fourteen exist only in the old outbox.
+	r.syn.Chats, r.syn.MessagesPerChat = 1, 1
+	r.rails.expectAttempt(ref, secret, 2)
+	if err := m.StartPairing(context.Background(), ref, secret, 2); err != nil {
+		t.Fatal(err)
+	}
+	r.rails.setDown(false)
+	r.wantAllDelivered(15)
+	status, _, events, _ := r.rails.snapshot(ref)
+	if status != "connected" || events[0]["type"] != "status.changed" {
+		t.Fatalf("status %s, first event %v", status, events[0]["type"])
+	}
+	if r.syn.Logouts() != 1 {
+		t.Fatalf("old device not logged out: %d", r.syn.Logouts())
+	}
+}
+
+// Mira's finding 2, connector side: a disconnect whose unpair never reached
+// the connector. Rails answers the connection's next event with 410
+// connection_revoked; the connector then stops collecting, logs the device
+// out and deletes the store, instead of retrying for ever.
+func TestRevokedConnectionIsReconciledByDeletingIt(t *testing.T) {
+	r := newRig(t)
+	r.rails.expect(ref, secret)
+	m := r.manager()
+	m.StartPairing(context.Background(), ref, secret, 1)
+	r.wantAllDelivered(15)
+	m.Close()
+
+	r.rails.revoke(ref)
+	// The connector restarts; its resumed session has something to deliver.
+	m = r.manager()
+	if err := m.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "store deleted", func() bool {
+		_, err := os.Stat(filepath.Join(r.data, ref))
+		return errors.Is(err, os.ErrNotExist)
+	})
+	eventually(t, "worker gone", func() bool { return m.State(ref) == "" })
+	if r.syn.Logouts() != 1 {
+		t.Fatalf("device not logged out: %d", r.syn.Logouts())
+	}
+}
+
+// The lease lives outside the connection directory, so deleting that
+// directory (unpair, or a restart's cleanup) never frees a live lease for a
+// second worker to take on a new inode.
+func TestLeaseSurvivesDeletionOfTheConnectionDirectory(t *testing.T) {
+	r := newRig(t)
+	r.rails.expect(ref, secret)
+	m := r.manager()
+	m.StartPairing(context.Background(), ref, secret, 1)
+	r.wantAllDelivered(15)
+
+	dir, _ := keys.ConnDir(r.data, ref)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	m2 := r.manager()
+	if err := m2.StartPairing(context.Background(), ref, secret, 1); err == nil {
+		t.Fatal("a second manager took the connection after its directory was deleted")
+	}
 }
 
 // The lease holds across processes' worth of managers on one volume: a
@@ -203,8 +310,8 @@ func TestSecondManagerCannotTakeALiveConnection(t *testing.T) {
 	m.StartPairing(context.Background(), ref, secret, 1)
 	r.wantAllDelivered(15)
 
-	dir, _ := keys.ConnDir(r.data, ref)
-	if _, err := lease.Acquire(dir); !errors.Is(err, lease.ErrHeld) {
+	path, _ := keys.LeasePath(r.data, ref)
+	if _, err := lease.Acquire(path); !errors.Is(err, lease.ErrHeld) {
 		t.Fatalf("lease not held: %v", err)
 	}
 	m2 := r.manager()

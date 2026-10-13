@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"services/comms-connector/internal/ids"
 	"services/comms-connector/internal/keys"
+	"services/comms-connector/internal/lease"
 	"services/comms-connector/internal/worker"
 )
 
@@ -34,6 +36,7 @@ func (m *Manager) configFor(ref string) worker.Config {
 		logID = "unknown"
 	}
 	c.Log = m.log.With(slog.String("conn", logID))
+	c.OnRevoked = m.revoked
 	return c
 }
 
@@ -73,9 +76,13 @@ func (m *Manager) Boot(ctx context.Context) error {
 	return nil
 }
 
-// StartPairing begins pairing afresh: any device, store and queued events
-// the connection had are logged out and deleted first, then a new store
-// holds the handed-over callback secret and the session pushes QR codes.
+// StartPairing begins pairing afresh. A connection that already has a store
+// is reset in place (worker.ResetForPairing): its device is logged out and
+// its session and metadata wiped, while chats and messages Rails has not yet
+// acknowledged are carried over to follow the new pairing's "connected".
+// Then the store holds the handed-over callback secret, whose version is
+// the pairing attempt every event will carry, and the session pushes QR
+// codes.
 func (m *Manager) StartPairing(ctx context.Context, ref, secret string, version int64) error {
 	if secret == "" {
 		return worker.ErrNoSecret
@@ -85,28 +92,25 @@ func (m *Manager) StartPairing(ctx context.Context, ref, secret string, version 
 	cfg := m.configFor(ref)
 
 	w := m.workers[ref]
-	if w == nil && worker.Exists(m.cfg.DataDir, ref) {
+	existed := w != nil || worker.Exists(m.cfg.DataDir, ref)
+	if w == nil {
 		var err error
 		if w, err = worker.Open(ctx, cfg); err != nil {
 			return err
 		}
 	}
-	if w != nil {
-		if version < w.SecretVersion(ctx) {
-			if m.workers[ref] == nil {
-				w.Close()
-			}
-			return worker.ErrStaleSecret
+	if version < w.SecretVersion(ctx) {
+		if m.workers[ref] == nil {
+			w.Close()
 		}
-		delete(m.workers, ref)
-		if err := w.Unpair(ctx); err != nil {
+		return worker.ErrStaleSecret
+	}
+	delete(m.workers, ref)
+	if existed {
+		if err := w.ResetForPairing(ctx); err != nil {
+			w.Close()
 			return err
 		}
-	}
-
-	w, err := worker.Open(ctx, cfg)
-	if err != nil {
-		return err
 	}
 	if err := w.SetSecret(ctx, secret, version); err != nil {
 		w.Close()
@@ -131,10 +135,7 @@ func (m *Manager) Unpair(ctx context.Context, ref string) error {
 	delete(m.workers, ref)
 	if w == nil {
 		if !worker.Exists(m.cfg.DataDir, ref) {
-			if dir, err := keys.ConnDir(m.cfg.DataDir, ref); err == nil {
-				os.RemoveAll(dir)
-			}
-			return nil
+			return m.removeLeftovers(ref)
 		}
 		var err error
 		if w, err = worker.Open(ctx, cfg); err != nil {
@@ -143,6 +144,45 @@ func (m *Manager) Unpair(ctx context.Context, ref string) error {
 	}
 	cfg.Log.Info("command", slog.String("op", "unpair"))
 	return w.Unpair(ctx)
+}
+
+// removeLeftovers deletes a store-less connection directory under its
+// lease, so it never races a worker that is opening it.
+func (m *Manager) removeLeftovers(ref string) error {
+	dir, err := keys.ConnDir(m.cfg.DataDir, ref)
+	if err != nil {
+		return err
+	}
+	path, err := keys.LeasePath(m.cfg.DataDir, ref)
+	if err != nil {
+		return err
+	}
+	l, err := lease.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	return os.RemoveAll(dir)
+}
+
+// revoked: Rails says this connection is revoked (a disconnect whose unpair
+// never arrived). Unpair it as if the command had come, unless the worker
+// has already been replaced or removed.
+func (m *Manager) revoked(w *worker.Worker) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ref := w.Ref()
+	if m.workers[ref] != w {
+		return
+	}
+	delete(m.workers, ref)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := w.Unpair(ctx); err != nil {
+		m.configFor(ref).Log.Error("revoked", slog.String("reason", "delete_failed"))
+		return
+	}
+	m.configFor(ref).Log.Info("revoked", slog.String("state", "deleted"))
 }
 
 // State reports a worker's state word, or "" when there is none.

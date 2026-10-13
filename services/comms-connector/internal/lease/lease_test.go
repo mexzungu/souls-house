@@ -4,23 +4,24 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestSecondAcquisitionFailsUntilRelease(t *testing.T) {
-	dir := t.TempDir()
-	l1, err := Acquire(dir)
+	path := filepath.Join(t.TempDir(), ".leases", "svc_1")
+	l1, err := Acquire(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Acquire(dir); !errors.Is(err, ErrHeld) {
+	if _, err := Acquire(path); !errors.Is(err, ErrHeld) {
 		t.Fatalf("second acquisition: got %v, want ErrHeld", err)
 	}
 	if err := l1.Release(); err != nil {
 		t.Fatal(err)
 	}
-	l2, err := Acquire(dir)
+	l2, err := Acquire(path)
 	if err != nil {
 		t.Fatalf("acquisition after release failed: %v", err)
 	}
@@ -33,7 +34,7 @@ func TestSecondProcess(t *testing.T) {
 	if os.Getenv("LEASE_HELPER_DIR") != "" {
 		t.Skip("helper")
 	}
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "lease")
 	l, err := Acquire(dir)
 	if err != nil {
 		t.Fatal(err)

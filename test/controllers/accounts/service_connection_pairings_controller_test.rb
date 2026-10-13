@@ -229,6 +229,113 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
     assert_equal "2@QR-SECRET", @connection.reload.pairing_qr
   end
 
+  # Mira's review, finding 1. Restarting pairing is a new attempt: the
+  # connector deletes the old device, so nothing the old attempt still had
+  # in flight may change the connection. Her witness: the old attempt's
+  # "connected" (already verified, waiting on the row lock) is applied while
+  # start_pairing is being sent. Expected: pairing.
+  test "an old attempt's connected event arriving during start_pairing is refused: the connection stays pairing" do
+    old_attempt = @connection.credential_payload_hash["callback_secret_version"]
+    secret = @connection.credential_payload_hash["callback_secret"]
+    sent = []
+    refused = []
+    inject = lambda do |connection|
+      sent << connection.credential_payload_hash.slice("callback_secret", "callback_secret_version")
+      old_connected = { "type" => "status.changed", "status" => "connected", "attempt" => old_attempt,
+                        "identity" => { "user_id" => "447700900111", "display_name" => "Old Device" } }
+      begin
+        CommsEvents.receive!(ServiceConnection.find(connection.id), old_connected, nonce: SecureRandom.hex(16))
+      rescue CommsEvents::Refused => error
+        refused << error.code
+      end
+      :sent
+    end
+    sign_in @owner
+    CommsConnector.stub(:start_pairing, inject) do
+      post restart_account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert_response :ok
+    @connection.reload
+    assert_equal "pairing", @connection.status
+    assert_nil @connection.external_identity
+    assert_equal [ :stale_attempt ], refused
+    # The command carried the new attempt; the secret itself is unchanged.
+    assert_equal [ { "callback_secret" => secret, "callback_secret_version" => old_attempt + 1 } ], sent
+  end
+
+  # Mira's review, finding 3. Her witness: a rotated code is committed
+  # between the poll loading the row (with the expired code) and clearing
+  # it. Expected: the fresh code is kept, and served.
+  test "a fresh code rotated in just before the expiry cleanup is kept and served" do
+    @connection.update!(pairing_qr: "2@EXPIRED", pairing_qr_expires_at: 1.second.ago, pairing_qr_issued_at: 61.seconds.ago)
+    loaded = ServiceConnection.find(@connection.id)
+    rotated = false
+    loaded.define_singleton_method(:current_pairing_qr) do |**options|
+      unless rotated
+        rotated = true
+        ServiceConnection.find(id).update!(pairing_qr: "2@FRESH", pairing_qr_expires_at: 40.seconds.from_now,
+                                           pairing_qr_issued_at: Time.current)
+      end
+      super(**options)
+    end
+    sign_in @owner
+    ServiceConnection.stub(:find_by_public_id!, loaded) do
+      get account_service_connection_pairing_path(@account, @connection.public_id)
+    end
+
+    assert rotated, "the rotation was injected"
+    assert_response :ok
+    assert_equal "2@FRESH", @connection.reload.pairing_qr
+    assert_equal "2@FRESH", response.parsed_body.dig("qr", "code")
+  end
+
+  # Mira's review, finding 2. A disconnect whose unpair never reaches the
+  # connector must not look finished: the connection is revoked here at
+  # once (no resident can read it, the secret is gone), but it stays, marked
+  # as waiting for the connector, and the house retries until the connector
+  # confirms. Then a connection without history goes, as usual.
+  test "a disconnect the connector never received stays pending and visible, and is retried until confirmed" do
+    sign_in @owner
+    CommsConnector.stub(:unpair, ->(_) { raise CommsConnector::Error, "unreachable" }) do
+      delete account_service_connection_path(@account, @connection.public_id)
+    end
+
+    connection = ServiceConnection.find_by(id: @connection.id)
+    assert connection, "the connection was destroyed although the connector never unpaired it"
+    assert_equal "revoked", connection.status
+    assert_nil connection.credential_payload
+    assert connection.unpair_pending?
+    get account_integrations_path(@account)
+    shown = inertia_props.dig("props", "connections").find { |entry| entry["id"] == connection.public_id }
+    assert_equal 1, shown.dig("comms", "unpair_pending", "attempts")
+
+    # Still unreachable: counted, still pending.
+    CommsConnector.stub(:unpair, ->(_) { raise Errno::ECONNREFUSED }) { CommsUnpairJob.perform_now }
+    assert_equal 2, connection.reload.connector_state.dig("unpair", "attempts")
+
+    # The connector is back and confirms: the connection is gone.
+    unpaired = []
+    CommsConnector.stub(:unpair, ->(c) { unpaired << c.id; {} }) { CommsUnpairJob.perform_now }
+    assert_equal [ connection.id ], unpaired
+    assert_not ServiceConnection.exists?(connection.id)
+  end
+
+  test "with history, a confirmed retry clears the pending unpair and keeps the revoked connection" do
+    @connection.comms_chats.create!(provider_chat_id: "c1@s.whatsapp.net")
+    sign_in @owner
+    CommsConnector.stub(:unpair, ->(_) { raise CommsConnector::Error, "unreachable" }) do
+      delete account_service_connection_path(@account, @connection.public_id)
+    end
+    assert @connection.reload.unpair_pending?
+
+    CommsConnector.stub(:unpair, {}) { CommsUnpairJob.perform_now }
+    @connection.reload
+    assert_not @connection.unpair_pending?
+    assert_equal "revoked", @connection.status
+    assert_equal 1, @connection.comms_chats.count
+  end
+
   private
 
   def with_connector_url(&block)

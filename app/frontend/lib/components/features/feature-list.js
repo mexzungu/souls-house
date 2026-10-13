@@ -251,7 +251,7 @@ export const technicalFeatures = [
     key: 'whatsapp',
     title: 'WhatsApp (coming)',
     description:
-      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. Read-only: nothing is sent. Waiting on the connector service; it is not available to connect yet.',
+      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. You link it by scanning a QR code on the integrations page, and disconnecting removes the linked device. Read-only: nothing is sent. Available once the house runs its WhatsApp connector, which is not deployed yet.',
     icon: WhatsappLogo,
   },
   {

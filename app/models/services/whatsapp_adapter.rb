@@ -42,13 +42,17 @@ module Services
     end
 
     # Disconnecting unpairs: the connector logs the linked device out and
-    # deletes its session store. A failure is logged, not raised, as for
-    # Oura's revocation; the local secret is erased either way, so the
-    # connector can no longer write to this connection.
+    # deletes its session store. The local secret is erased either way, so
+    # the connector can no longer write to this connection; but until the
+    # connector has unpaired, its device may still be receiving. So a failure
+    # does not stop the disconnect: it is recorded on the connection (shown
+    # to the owner, and keeping the revoked connection), and CommsUnpairJob
+    # retries until the connector confirms.
     def revoke(connection)
       CommsConnector.unpair(connection)
     rescue StandardError => e
       Rails.logger.warn("Comms unpair failed for service connection #{connection.id}: #{e.class}")
+      connection.record_unpair_failure!(e)
     end
 
     private

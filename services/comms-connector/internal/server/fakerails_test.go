@@ -19,26 +19,34 @@ import (
 // do with a connector's request: verify the per-connection signature
 // (connection, method, path, time, nonce, body), refuse a replayed nonce,
 // apply sequenced events exactly once and in order, refuse a gap with 409
-// sequence_gap and the committed number, and keep the connection's status.
+// sequence_gap and the committed number, refuse an event from any pairing
+// attempt but the current one (409 stale_attempt; a sequenced lifecycle
+// event from an old attempt is acknowledged as skipped), answer 410
+// connection_revoked for a disconnected connection, and keep the
+// connection's status.
 // The real endpoint is driven end to end by
 // test/integration/comms_whatsapp_connector_test.rb.
 type fakeRails struct {
-	t      *testing.T
-	mu     sync.Mutex
-	down   bool
-	secret map[string]string
-	nonces map[string]bool
-	seq    map[string]int64
-	status map[string]string
-	qrs    map[string][]string
-	events map[string][]map[string]any
-	raw    []string // every body received, for canary checks
-	srv    *httptest.Server
+	t       *testing.T
+	mu      sync.Mutex
+	down    bool
+	secret  map[string]string
+	attempt map[string]int64
+	revoked map[string]bool
+	nonces  map[string]bool
+	seq     map[string]int64
+	status  map[string]string
+	qrs     map[string][]string
+	events  map[string][]map[string]any
+	stale   map[string]int // events refused or skipped as another attempt's
+	raw     []string       // every body received, for canary checks
+	srv     *httptest.Server
 }
 
 func newFakeRails(t *testing.T) *fakeRails {
-	f := &fakeRails{t: t, secret: map[string]string{}, nonces: map[string]bool{}, seq: map[string]int64{},
-		status: map[string]string{}, qrs: map[string][]string{}, events: map[string][]map[string]any{}}
+	f := &fakeRails{t: t, secret: map[string]string{}, attempt: map[string]int64{}, revoked: map[string]bool{},
+		nonces: map[string]bool{}, seq: map[string]int64{}, status: map[string]string{}, qrs: map[string][]string{},
+		events: map[string][]map[string]any{}, stale: map[string]int{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -52,11 +60,27 @@ func (f *fakeRails) client(t *testing.T) *rails.Client {
 	return c
 }
 
-// expect registers a connection the way Rails creates one: status pairing.
+// expect registers a connection the way Rails creates one: status pairing,
+// attempt 1.
 func (f *fakeRails) expect(ref, secret string) {
+	f.expectAttempt(ref, secret, 1)
+}
+
+// expectAttempt is Rails after the owner (re)started pairing: status
+// pairing, and only events stamped with this attempt are accepted.
+func (f *fakeRails) expectAttempt(ref, secret string, attempt int64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.secret[ref], f.status[ref] = secret, "pairing"
+	f.secret[ref], f.status[ref], f.attempt[ref] = secret, "pairing", attempt
+}
+
+// revoke is Rails after a disconnect whose unpair never reached the
+// connector: the connection is revoked and its secret erased.
+func (f *fakeRails) revoke(ref string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked[ref], f.status[ref] = true, "revoked"
+	delete(f.secret, ref)
 }
 
 func (f *fakeRails) setDown(down bool) {
@@ -86,6 +110,10 @@ func (f *fakeRails) serve(w http.ResponseWriter, r *http.Request) {
 	ref := parts[4]
 	body, _ := io.ReadAll(r.Body)
 	f.raw = append(f.raw, string(body))
+	if f.revoked[ref] {
+		reply(w, 410, map[string]string{"error": "connection_revoked"})
+		return
+	}
 	secret, ok := f.secret[ref]
 	ts, nonce := r.Header.Get(sig.HeaderTimestamp), r.Header.Get(sig.HeaderNonce)
 	if !ok || r.Header.Get(sig.HeaderConnection) != ref ||
@@ -118,6 +146,18 @@ func (f *fakeRails) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if f.nonces[nonce] {
 		reply(w, 401, map[string]string{"error": "replayed_nonce"})
+		return
+	}
+	if n, ok := ev["attempt"].(json.Number); !ok || n.String() != strconv.FormatInt(f.attempt[ref], 10) {
+		f.stale[ref]++
+		lifecycle := ev["type"] == "pairing.qr" || ev["type"] == "status.changed"
+		if seq > 0 && lifecycle {
+			f.nonces[nonce] = true
+			f.seq[ref] = seq
+			reply(w, 200, map[string]any{"committed_seq": seq, "skipped": "stale_attempt"})
+			return
+		}
+		reply(w, 409, map[string]string{"error": "stale_attempt"})
 		return
 	}
 	switch ev["type"] {
@@ -157,6 +197,12 @@ func (f *fakeRails) snapshot(ref string) (status string, qrs []string, events []
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.status[ref], append([]string(nil), f.qrs[ref]...), append([]map[string]any(nil), f.events[ref]...), f.seq[ref]
+}
+
+func (f *fakeRails) staleCount(ref string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stale[ref]
 }
 
 // messages counts message.upsert items received for ref, by provider id.

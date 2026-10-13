@@ -72,6 +72,19 @@ func LogID(master []byte, ref string) (string, error) {
 	return hex.EncodeToString(m.Sum(nil))[:16], nil
 }
 
+// LeaseDir holds every connection's lease file. It is not a valid
+// connection ref, so Boot never takes it for a connection.
+const LeaseDir = ".leases"
+
+// LeasePath returns <dataDir>/.leases/<ref> after validating ref. It is
+// outside ConnDir, which unpair deletes.
+func LeasePath(dataDir, ref string) (string, error) {
+	if !ids.ValidConnectionRef(ref) {
+		return "", ErrBadRef
+	}
+	return filepath.Join(dataDir, LeaseDir, ref), nil
+}
+
 // ConnDir returns <dataDir>/<ref> after validating ref.
 func ConnDir(dataDir, ref string) (string, error) {
 	if !ids.ValidConnectionRef(ref) {

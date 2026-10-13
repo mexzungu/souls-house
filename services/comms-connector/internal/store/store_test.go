@@ -264,3 +264,67 @@ func TestOpenErrorsAreFixed(t *testing.T) {
 		}
 	}
 }
+
+// ResetSession starts a pairing over in one transaction: the session's own
+// tables (including foreign keys between them) and every metadata value go,
+// status events are dropped, and chats and messages move, in order, to the
+// carryover, which EnqueueReleasingCarryover sends after a new status. The
+// result survives a reopen.
+func TestResetSessionCarriesOverChatsAndMessages(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "store.db")
+	key := randKey(t)
+	s := openT(t, path, key)
+	for _, stmt := range []string{
+		`CREATE TABLE whatsmeow_device (jid TEXT PRIMARY KEY)`,
+		`CREATE TABLE whatsmeow_sessions (our_jid TEXT REFERENCES whatsmeow_device(jid) ON DELETE CASCADE, k TEXT)`,
+		`INSERT INTO whatsmeow_device VALUES ('old@s.whatsapp.net')`,
+		`INSERT INTO whatsmeow_sessions VALUES ('old@s.whatsapp.net', 'x')`,
+	} {
+		if _, err := s.DB().ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.SetMeta(ctx, map[string]string{"callback_secret": "old", "seq_offset": "9"})
+	s.Enqueue(ctx, []byte(`{"type":"status.changed","status":"connected"}`), []byte(`{"type":"chat.upsert","n":1}`),
+		[]byte(`{"type":"message.upsert","n":2}`))
+	keep := func(b []byte) bool { return !bytes.Contains(b, []byte("status.changed")) }
+	if err := s.ResetSession(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+	s.Enqueue(ctx, []byte(`{"type":"message.upsert","n":3}`)) // reset again with more queued
+	if err := s.ResetSession(ctx, keep); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	s = openT(t, path, key)
+	defer s.Close()
+	var tables int
+	s.DB().QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name LIKE 'whatsmeow_%'`).Scan(&tables)
+	if _, ok, _ := s.Meta(ctx, "callback_secret"); ok || tables != 0 {
+		t.Fatalf("session survived: secret kept %v, %d session tables", ok, tables)
+	}
+	if depth, _ := s.OutboxDepth(ctx); depth != 0 {
+		t.Fatalf("outbox %d", depth)
+	}
+	if n, _ := s.CarryoverDepth(ctx); n != 3 {
+		t.Fatalf("carryover %d", n)
+	}
+	if err := s.EnqueueReleasingCarryover(ctx, []byte(`{"type":"status.changed","status":"connected","new":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ := s.Pending(ctx, 10)
+	var order []string
+	for _, e := range pending {
+		order = append(order, string(e.Body))
+	}
+	want := []string{`{"type":"status.changed","status":"connected","new":1}`, `{"type":"chat.upsert","n":1}`,
+		`{"type":"message.upsert","n":2}`, `{"type":"message.upsert","n":3}`}
+	if strings.Join(order, "|") != strings.Join(want, "|") {
+		t.Fatalf("order %v", order)
+	}
+	if n, _ := s.CarryoverDepth(ctx); n != 0 {
+		t.Fatalf("carryover not released: %d", n)
+	}
+}

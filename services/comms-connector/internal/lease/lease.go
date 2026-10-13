@@ -1,6 +1,12 @@
 // Package lease enforces one worker per connection with an exclusive,
-// non-blocking flock on <dataDir>/<ref>/lease. The kernel drops the lock when
-// the process dies, so a crashed worker never leaves a stale lease.
+// non-blocking flock on <dataDir>/.leases/<ref> (keys.LeasePath). The kernel
+// drops the lock when the process dies, so a crashed worker never leaves a
+// stale lease.
+//
+// The lease file lives outside the connection's directory and is never
+// deleted. A flock belongs to an inode: were the file deleted (with the
+// directory, on unpair) and recreated, a second worker could lock the new
+// inode while the first still held the old one, and both would run.
 package lease
 
 import (
@@ -20,9 +26,13 @@ var (
 
 type Lease struct{ f *os.File }
 
-// Acquire takes the lease in connDir, which must exist.
-func Acquire(connDir string) (*Lease, error) {
-	f, err := os.OpenFile(filepath.Join(connDir, "lease"), os.O_RDWR|os.O_CREATE, 0o600)
+// Acquire takes the lease at path, creating the file (and its directory)
+// if needed.
+func Acquire(path string) (*Lease, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, ErrLease
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, ErrLease
 	}

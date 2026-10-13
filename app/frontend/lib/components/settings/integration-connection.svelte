@@ -93,6 +93,11 @@
             <p class="text-sm text-amber-700">Waiting for sign-in. Residents can use this once it is signed in.</p>
           {:else if connection.status === 'pairing'}
             <p class="text-sm text-amber-700">Waiting for pairing. Residents can use this once it is linked.</p>
+          {:else if connection.status === 'revoked' && connection.comms?.unpair_pending}
+            <p class="text-sm text-amber-700" data-testid="unpair-pending">
+              Disconnected here, but the WhatsApp connector has not yet confirmed removing the linked device. The house
+              keeps trying. To remove it now, open WhatsApp on your phone: Settings, Linked devices.
+            </p>
           {/if}
         </div>
       </div>

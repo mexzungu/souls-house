@@ -100,6 +100,48 @@ class CommsWhatsappConnectorE2eTest < ActionDispatch::IntegrationTest
     assert_not_includes rails_log, CANARY
   end
 
+  # Mira's review, findings 1 and 2, through the real binary. Restarting
+  # pairing is a new attempt: the connector resets the store and pairs again
+  # under attempt 2, and Rails accepts only that. Then a disconnect the
+  # connector never receives: Rails keeps the connection revoked and pending;
+  # the connector's next event is answered 410, so it deletes the store
+  # itself; the retry job's unpair then succeeds and clears the mark.
+  test "a restart pairs as a new attempt, and a disconnect the connector missed is reconciled" do
+    sign_in @owner
+    post account_service_connections_path(@account), params: { provider: "whatsapp", management_scope: "personal" }
+    connection = @account.service_connections.where(provider: "whatsapp").order(:id).last
+    wait_until("the first pairing") { connection.reload.status == "connected" && connection.comms_messages.count == 15 }
+    first_seq = connection.comms_event_seq
+
+    connection.update_columns(status: "error")
+    post restart_account_service_connection_pairing_path(@account, connection.public_id)
+    assert_response :ok
+    assert_equal 2, connection.reload.pairing_attempt
+    wait_until("the second attempt to pair") { connection.reload.status == "connected" && connection.comms_event_seq > first_seq }
+    assert_equal 15, connection.comms_messages.count
+
+    store = File.join(@data, connection.public_id)
+    ENV["COMMS_WHATSAPP_CONNECTOR_URL"] = "https://127.0.0.1:#{free_port}" # the unpair goes nowhere
+    delete account_service_connection_path(@account, connection.public_id)
+    connection.reload
+    assert_equal "revoked", connection.status
+    assert connection.unpair_pending?
+    assert Dir.exist?(store), "the connector never heard of the disconnect"
+
+    # The connector restarts; its resumed session posts, Rails answers 410.
+    Process.kill("TERM", @connector)
+    Process.wait(@connector)
+    @connector = spawn_connector
+    wait_for_connector
+    wait_until("the connector to delete the revoked connection's store") { !Dir.exist?(store) }
+
+    ENV["COMMS_WHATSAPP_CONNECTOR_URL"] = "https://127.0.0.1:#{@connector_port}"
+    CommsUnpairJob.perform_now
+    connection.reload
+    assert_not connection.unpair_pending?
+    assert_equal "revoked", connection.status
+  end
+
   test "the connector refuses a command not signed with the command key" do
     connection = whatsapp_connection
     ENV["COMMS_COMMAND_KEY"] = SecureRandom.hex(32)
@@ -130,7 +172,7 @@ class CommsWhatsappConnectorE2eTest < ActionDispatch::IntegrationTest
 
   def spawn_connector
     env = {
-      "COMMS_STORE_KEY" => Base64.strict_encode64(SecureRandom.bytes(32)),
+      "COMMS_STORE_KEY" => (@store_key ||= Base64.strict_encode64(SecureRandom.bytes(32))),
       "COMMS_COMMAND_KEY" => @command_key,
       "COMMS_RAILS_URL" => "http://127.0.0.1:#{@rails.port}",
       "COMMS_TLS_CERT" => @tls[:server_cert], "COMMS_TLS_KEY" => @tls[:server_key],

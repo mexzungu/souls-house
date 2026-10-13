@@ -1,7 +1,8 @@
 # The pairing QR for a comms (WhatsApp) connection, as JSON for the owner's
 # integrations page. Only the person who connected it sees the code: not
 # account admins (who can still manage and disconnect it), other members, or
-# residents. An expired code is cleared here and never served.
+# residents. An expired code is cleared here and never served; only that
+# code is cleared, never one the connector rotated in meanwhile.
 class Accounts::ServiceConnectionPairingsController < ApplicationController
 
   before_action :set_connection
@@ -10,7 +11,7 @@ class Accounts::ServiceConnectionPairingsController < ApplicationController
     connection = @connection
 
     if connection.pairing_qr.present? && connection.current_pairing_qr.nil?
-      connection.update_columns(pairing_qr: nil, pairing_qr_expires_at: nil, updated_at: Time.current)
+      connection.clear_expired_pairing_qr!
     end
 
     json = { status: connection.status, qr: connection.current_pairing_qr }

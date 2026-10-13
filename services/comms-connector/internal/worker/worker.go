@@ -13,11 +13,22 @@
 // number (writing nothing), and the offset is set so the first row follows
 // it. A re-paired connection therefore never reuses a number Rails has seen.
 //
+// Every event also names its pairing attempt ("attempt": the callback secret
+// version the start_pairing command carried; Rails bumps it on each
+// restart). Rails refuses anything from another attempt, so an event still
+// in flight from a pairing the owner restarted cannot change the
+// connection.
+//
+// A connection Rails has revoked (a disconnect whose unpair never arrived)
+// answers 410 connection_revoked; the worker then asks its manager to
+// unpair it, which stops collection and deletes the store.
+//
 // QR codes are not queued: they are short-lived and are posted at once.
 package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -64,6 +75,9 @@ type Config struct {
 	Log      *slog.Logger // already carries the connection's log id
 	// Backoff bounds for delivery retries.
 	MinBackoff, MaxBackoff time.Duration
+	// OnRevoked is called (once, on its own goroutine) when Rails answers
+	// that the connection is revoked. The manager unpairs the worker.
+	OnRevoked func(*Worker)
 }
 
 type Worker struct {
@@ -74,22 +88,34 @@ type Worker struct {
 
 	mu      sync.Mutex
 	secret  []byte
+	attempt int64 // the secret version: which pairing attempt this is
 	session provider.Session
 	cancel  context.CancelFunc
 	done    chan struct{}
 	wake    chan struct{}
 	state   string // idle | pairing | connected | logged_out | not_paired
+	revoked sync.Once
 
-	// refusals counts consecutive content refusals of the head event.
+	// refusals counts consecutive content refusals of the head event: any
+	// other outcome of a delivery attempt (a transport failure, another
+	// status) sets it back to zero. It is kept in memory only, so a process
+	// restart also starts it again.
 	refusedID int64
 	refusals  int
 }
 
 // maxRefusals: an event Rails refuses as invalid (422) or too large (413)
-// this many times running is dropped, so one poison event cannot stop
-// every later message. Its sequence number is never committed, so the next
-// event draws a sequence_gap and the offset is relearned.
+// this many times in a row is dropped, so one poison event cannot stop
+// every later message. The whole event goes, i.e. the whole batch of up to
+// 200 chats or messages, valid ones included: Rails refuses a batch as a
+// unit and the outbox does not split one. Its sequence number is never
+// committed, so the next event draws a sequence_gap and the offset is
+// relearned.
 const maxRefusals = 5
+
+// testHookBeforeLeaseRelease runs in Unpair after the store and directory
+// are gone and before the lease is released (tests only).
+var testHookBeforeLeaseRelease func()
 
 // Open takes the connection's lease and opens (creating if needed) its store.
 func Open(ctx context.Context, cfg Config) (*Worker, error) {
@@ -103,12 +129,17 @@ func Open(ctx context.Context, cfg Config) (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, errors.New("connection directory could not be created")
-	}
-	l, err := lease.Acquire(dir)
+	leasePath, err := keys.LeasePath(cfg.DataDir, cfg.Ref)
 	if err != nil {
 		return nil, err
+	}
+	l, err := lease.Acquire(leasePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		l.Release()
+		return nil, errors.New("connection directory could not be created")
 	}
 	k, err := keys.StoreKey(cfg.StoreKey, cfg.Ref)
 	if err != nil {
@@ -125,8 +156,12 @@ func Open(ctx context.Context, cfg Config) (*Worker, error) {
 	if v, ok, err := st.Meta(ctx, metaSecret); err == nil && ok {
 		w.secret = []byte(v)
 	}
+	w.attempt = w.SecretVersion(ctx)
 	return w, nil
 }
+
+// Ref is the connection this worker runs.
+func (w *Worker) Ref() string { return w.cfg.Ref }
 
 // Exists reports whether ref has a store on disk.
 func Exists(dataDir, ref string) bool {
@@ -163,6 +198,7 @@ func (w *Worker) SetSecret(ctx context.Context, secret string, version int64) er
 	}
 	w.mu.Lock()
 	w.secret = []byte(secret)
+	w.attempt = version
 	w.mu.Unlock()
 	return nil
 }
@@ -256,26 +292,83 @@ func (w *Worker) Close() {
 
 // Unpair stops the worker, logs the linked device out at the network side
 // (best effort, bounded), then deletes the store and the connection's
-// directory and releases the lease.
+// directory, and only then releases the lease (which lives outside that
+// directory and is never deleted), so no other worker can open the
+// connection while its files are going.
 func (w *Worker) Unpair(ctx context.Context) error {
 	w.Stop()
-	if session, err := w.cfg.Factory(w.st); err == nil {
-		lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		if err := session.Logout(lctx); err != nil {
-			w.cfg.Log.Warn("unpair", slog.String("reason", "logout_failed"))
-		}
-		cancel()
-	}
+	w.logout(ctx)
 	w.st.Close()
 	err := store.Remove(filepath.Join(w.dir, StoreFile))
-	w.lease.Release()
 	if err == nil {
 		if rmErr := os.RemoveAll(w.dir); rmErr != nil {
 			err = rmErr
 		}
 	}
+	if testHookBeforeLeaseRelease != nil {
+		testHookBeforeLeaseRelease()
+	}
+	w.lease.Release()
 	return err
 }
+
+// logout removes the linked device at the network side: best effort,
+// bounded. Only while the session is stopped.
+func (w *Worker) logout(ctx context.Context) {
+	session, err := w.cfg.Factory(w.st)
+	if err != nil {
+		return
+	}
+	lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := session.Logout(lctx); err != nil {
+		w.cfg.Log.Warn("unpair", slog.String("reason", "logout_failed"))
+	}
+}
+
+// ResetForPairing is start_pairing on a connection that already has a
+// store: the worker stops, the old device is logged out (best effort) and
+// the store becomes a fresh one (store.ResetSession) holding no secret.
+// Chats and messages still waiting for Rails are not lost with the old
+// device: they are carried over and sent after the new pairing's
+// "connected". The lease stays held throughout.
+func (w *Worker) ResetForPairing(ctx context.Context) error {
+	w.Stop()
+	w.logout(ctx)
+	if err := w.st.ResetSession(ctx, carriedOver); err != nil {
+		return err
+	}
+	w.mu.Lock()
+	w.secret, w.attempt, w.state = nil, 0, "idle"
+	w.refusedID, w.refusals = 0, 0
+	w.mu.Unlock()
+	return nil
+}
+
+// carriedOver: the events a restarted pairing keeps. Status events describe
+// the old device and are dropped with it.
+func carriedOver(body []byte) bool {
+	var ev struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(body, &ev) != nil {
+		return false
+	}
+	return ev.Type == "chat.upsert" || ev.Type == "message.upsert"
+}
+
+// revoke runs once, when Rails says the connection is revoked.
+func (w *Worker) revoke() {
+	w.revoked.Do(func() {
+		w.setState("revoked")
+		w.cfg.Log.Warn("deliver", slog.String("reason", "connection_revoked"))
+		if w.cfg.OnRevoked != nil {
+			go w.cfg.OnRevoked(w)
+		}
+	})
+}
+
+func isRevoked(r rails.Reply) bool { return r.Status == 410 && r.Error == "connection_revoked" }
 
 func (w *Worker) poke() {
 	select {
@@ -318,7 +411,7 @@ func (w *Worker) sendOne(ctx context.Context) (bool, error) {
 	}
 	ev := pending[0]
 	w.mu.Lock()
-	secret := w.secret
+	secret, attempt := w.secret, w.attempt
 	w.mu.Unlock()
 
 	offStr, known, err := w.st.Meta(ctx, metaSeqOffset)
@@ -330,12 +423,18 @@ func (w *Worker) sendOne(ctx context.Context) (bool, error) {
 		off, _ := strconv.ParseInt(offStr, 10, 64)
 		seq = ev.ID + off
 	}
-	reply, err := w.cfg.Rails.Post(ctx, w.cfg.Ref, secret, withSeq(ev.Body, seq))
+	reply, err := w.cfg.Rails.Post(ctx, w.cfg.Ref, secret, stamp(ev.Body, seq, attempt))
+	if err != nil || (reply.Status != 422 && reply.Status != 413) {
+		w.refusedID, w.refusals = 0, 0 // the run of refusals is broken
+	}
 	if err != nil {
 		w.cfg.Log.Warn("deliver", slog.String("reason", "rails_unreachable"))
 		return false, errRetry
 	}
 	switch {
+	case isRevoked(reply):
+		w.revoke()
+		return false, errRetry
 	case reply.Status == 409 && reply.Error == "sequence_gap" && reply.CommittedSeq != nil:
 		// Learn (or relearn) where Rails is: this event becomes the next one.
 		off := *reply.CommittedSeq + 1 - ev.ID
@@ -367,11 +466,18 @@ func (w *Worker) sendOne(ctx context.Context) (bool, error) {
 	}
 }
 
-// withSeq puts "seq":N first in a JSON object body.
-func withSeq(body []byte, seq int64) []byte {
-	out := make([]byte, 0, len(body)+32)
-	out = append(out, `{"seq":`...)
-	out = strconv.AppendInt(out, seq, 10)
+// stamp puts "seq":N (when seq > 0) and "attempt":A first in a JSON object
+// body.
+func stamp(body []byte, seq, attempt int64) []byte {
+	out := make([]byte, 0, len(body)+48)
+	out = append(out, '{')
+	if seq > 0 {
+		out = append(out, `"seq":`...)
+		out = strconv.AppendInt(out, seq, 10)
+		out = append(out, ',')
+	}
+	out = append(out, `"attempt":`...)
+	out = strconv.AppendInt(out, attempt, 10)
 	if len(body) > 2 {
 		out = append(out, ',')
 	}
@@ -404,17 +510,23 @@ func (s *sink) enqueue(ctx context.Context, bodies ...[]byte) error {
 // QR posts a pairing code straight to Rails, retrying until it expires. It
 // is never written to the store or a log.
 func (s *sink) QR(ctx context.Context, code string, issuedAt, expiresAt time.Time) error {
-	body, err := encodeQR(code, issuedAt, expiresAt)
+	raw, err := encodeQR(code, issuedAt, expiresAt)
 	if err != nil {
 		return err
 	}
 	w := s.w()
 	w.mu.Lock()
-	secret := w.secret
+	secret, attempt := w.secret, w.attempt
 	w.mu.Unlock()
+	body := stamp(raw, 0, attempt)
+	clear(raw)
 	backoff := w.cfg.MinBackoff
 	for time.Now().Before(expiresAt) {
 		reply, err := w.cfg.Rails.Post(ctx, w.cfg.Ref, secret, body)
+		if err == nil && isRevoked(reply) {
+			w.revoke()
+			return nil
+		}
 		if err == nil && (reply.Status < 300 || reply.Status == 409 || reply.Status == 422) {
 			// Accepted, or refused as stale/expired/not pairing: either way
 			// resending this code cannot help.
@@ -438,7 +550,13 @@ func (s *sink) Connected(ctx context.Context, id provider.Identity) error {
 	if err != nil {
 		return err
 	}
-	return s.enqueue(ctx, body)
+	// Anything an earlier, restarted pairing left undelivered follows the
+	// status that lets Rails accept it.
+	if err := s.w().st.EnqueueReleasingCarryover(ctx, body); err != nil {
+		return err
+	}
+	s.w().poke()
+	return nil
 }
 
 func (s *sink) LoggedOut(ctx context.Context) error {

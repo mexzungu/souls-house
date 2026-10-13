@@ -16,9 +16,9 @@ internal/worker/       one connection: lease, store, session, ordered delivery t
 internal/rails/        signed POST /internal/comms/connections/:id/events
 internal/provider/     Session/Sink seam; deterministic Synthetic provider
 internal/whatsapp/     whatsmeow provider (sqlstore.NewWithDB on our *sql.DB)
-internal/store/        per-connection SQLCipher store: meta, outbox, whatsmeow_* tables
+internal/store/        per-connection SQLCipher store: meta, outbox, carryover, whatsmeow_* tables
 internal/keys/         store key = HKDF(COMMS_STORE_KEY, connection); log ids
-internal/lease/        flock on <data>/<connection>/lease
+internal/lease/        flock on <data>/.leases/<connection>, outside the deletable connection dir
 internal/harden/       PR_SET_DUMPABLE=0, RLIMIT_CORE=0, umask 077, GOTRACEBACK check
 ```
 
@@ -44,11 +44,36 @@ connection's `callback_secret` and `callback_secret_version`; that is how the
 connector learns the secret (the spec's open "secret bootstrap", settled as
 for Telegram). An older secret version than the one held is refused (409).
 
+The secret version is also the **pairing attempt**. Rails starts at 1 and
+adds one each time the owner restarts pairing (the secret itself is kept),
+and the connector stamps `"attempt": N` on every event it posts. Rails
+refuses an event from any other attempt (409 `stale_attempt`, checked under
+the connection's row lock); a sequenced status event from an older attempt
+is acknowledged as skipped, so the outbox behind it moves on. So nothing an
+earlier attempt still has in flight, such as the `connected` of a device
+being deleted, can change the connection.
+
 `start_pairing` always starts over: any previous device for the connection is
-logged out and its store deleted, then a fresh store pairs and pushes QR
+logged out (best effort) and the store is reset in one transaction (its
+session tables and metadata dropped, the outbox emptied). Chats and messages
+the old pairing had received but Rails had not yet acknowledged are not
+dropped with it: they exist nowhere else (WhatsApp was told they were
+received), so they move to a carryover table and are queued right after the
+new pairing's `connected`, under the new attempt. Status events of the old
+device are dropped. If the new pairing is a different WhatsApp account, those
+messages still land on this connection. Then the fresh session pushes QR
 codes. `unpair` logs the device out at WhatsApp (best effort, 20 s bound),
-then deletes the store and the connection's directory. Unpairing an unknown
-connection succeeds.
+then deletes the store and the connection's directory, and only then
+releases the lease. Unpairing an unknown connection succeeds.
+
+**Revocation.** If the owner's disconnect cannot reach the connector, Rails
+still revokes the connection (and erases the secret), keeps it marked
+`unpair` pending, shows that on the owner's card, and retries `unpair` every
+5 minutes (`CommsUnpairJob`) until the connector confirms. Meanwhile Rails
+answers any event for a revoked connection with 410 `connection_revoked`
+(before verification; it has no secret left), and the connector treats that
+as an unpair: it stops the session, logs the device out and deletes the
+store.
 
 **Connector → Rails**: `POST COMMS_RAILS_URL/internal/comms/connections/<svc_id>/events`,
 signed with the connection's callback secret (`CommsSignature`):
@@ -62,8 +87,13 @@ stored, retried only until it expires), and, through the store's outbox,
 64 KiB is cut). Outbox events carry a sequence number; Rails applies them
 exactly once and in order and acknowledges the highest it committed, and only
 then does an event leave the outbox. A fresh store learns where Rails is from
-a deliberate `sequence_gap` reply. An event Rails refuses as invalid or too
-large five times running is dropped so it cannot block the rest.
+a deliberate `sequence_gap` reply. An event Rails refuses as invalid (422) or
+too large (413) five times in a row is dropped so it cannot block the rest.
+"In a row" is literal: any other outcome between refusals (Rails unreachable,
+another status) starts the count again, and the count is held in memory, so
+a connector restart starts it again too. What is dropped is the whole event,
+which is a batch of up to 200 chats or messages, valid ones included; the
+outbox does not split a batch Rails refused.
 
 whatsmeow acknowledges a message to WhatsApp only after it is in the outbox
 (`SynchronousAck`).

@@ -50,9 +50,11 @@ function iso(ms) {
   return new Date(ms).toISOString();
 }
 
+// Like the connector, every event names its pairing attempt: 1 when the
+// connection is created, one more for each restart.
 async function sendEvent(request, connection, event) {
   const path = `/internal/comms/connections/${connection.id}/events`;
-  const body = JSON.stringify(event);
+  const body = JSON.stringify({ attempt: connection.attempt ?? 1, ...event });
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const nonce = randomBytes(16).toString('hex');
   const signed = [connection.id, 'POST', path, timestamp, nonce, body].join('\n');
@@ -156,6 +158,13 @@ test('the owner scans rotating WhatsApp codes, restarts after expiry and sees th
     expect((await restarted).status()).toBe(200);
     await expect(pairing).toContainText('Waiting for a pairing code from WhatsApp.');
     await expect(qr).toHaveCount(0);
+
+    // The restart is a new attempt: the old attempt's late "connected" (for
+    // a device the connector has deleted) is refused, and nothing changes.
+    const late = await sendEvent(request, connection, { type: 'status.changed', status: 'connected' });
+    expect(late.status()).toBe(409);
+    expect((await late.json()).error).toBe('stale_attempt');
+    connection.attempt = 2;
 
     // A fresh code after the restart, then WhatsApp reports the link.
     const fresh = secret('fresh');
