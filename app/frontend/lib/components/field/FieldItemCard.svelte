@@ -40,9 +40,9 @@
               data-testid="field-item-summary">
               {item.summary_short}
             </p>
-            {#if item.summary_freshness === 'stale' || item.summary_freshness === 'unknown'}
+            {#if item.summary_freshness === 'stale'}
               <p class="text-xs text-muted-foreground" data-testid="field-item-summary-freshness">
-                {item.summary_freshness === 'stale' ? 'Summary out of date' : 'Summary source untracked'}
+                Summary out of date
               </p>
             {/if}
           {/if}

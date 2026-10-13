@@ -85,9 +85,10 @@ module FieldSummarizable
   # Explicit human edit call sites only, not an after_update hook. This also
   # waits for an enclosing controller transaction and disappears on rollback.
   # The marker is the earliest outstanding human check, NOT a sliding debounce:
-  # further edits queue their own checks but never postpone the first one.
+  # Further edits never postpone a future marker. Once its time has passed,
+  # an edit during regeneration starts a new thirty-minute window.
   def schedule_summary_refresh
-    update_columns(summary_refresh_due_at: Time.current + REFRESH_DELAY) unless summary_refresh_due_at
+    update_columns(summary_refresh_due_at: Time.current + REFRESH_DELAY) unless summary_refresh_due_at&.future?
     ActiveRecord.after_all_transactions_commit do
       FieldItems::RefreshSummaryJob.set(wait: REFRESH_DELAY).perform_later(self)
     end

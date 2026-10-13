@@ -332,7 +332,12 @@ class FieldSummaryFreshnessTest < ActiveJob::TestCase
       assert_equal "stale", @recording.reload.summary_freshness
       assert_equal FieldSummaries.input_digest(inference.calls.sole[:user]), @recording.summary_input_digest
       assert @recording.summary_refresh_due_at
-      run_commit_callbacks { FieldItems::RefreshSummaryJob.perform_now(@recording, inference: Inference.new) }
+      followup = Inference.new
+      run_commit_callbacks { FieldItems::RefreshSummaryJob.perform_now(@recording, inference: followup) }
+      assert_empty followup.calls, "the in-call edit gets its own thirty-minute delay"
+      travel 30.minutes
+      run_commit_callbacks { FieldItems::RefreshSummaryJob.perform_now(@recording, inference: followup) }
+      assert_equal 1, followup.calls.size
       assert_equal "current", @recording.reload.summary_freshness
     end
   end
@@ -348,6 +353,26 @@ class FieldSummaryFreshnessTest < ActiveJob::TestCase
     assert_equal new_claim, @recording.reload.summary_claim_token
     assert @recording.store_summary!(short: "New", long: "New", input_digest: old_input, claim: new_claim)
     assert_equal "New", @recording.reload.summary_short
+  end
+
+  test "an edit during a delayed regeneration waits thirty minutes not the length of one call" do
+    summarize
+    run_commit_callbacks do
+      correct("first correction")
+      clear_enqueued_jobs
+      at_check_time do
+        edited_at = nil
+        inference = Inference.new do
+          edited_at = Time.current
+          correct("second correction during the call")
+        end
+        FieldItems::RefreshSummaryJob.perform_now(@recording, inference:)
+        times = enqueued_jobs.select { it["job_class"] == "FieldItems::RefreshSummaryJob" }
+          .map { Time.iso8601(it["scheduled_at"]) }
+        assert_not_empty times
+        assert_empty times.select { it < edited_at + 30.minutes }
+      end
+    end
   end
 
   test "duplicates cannot reset or take a second claim during an automatic refresh" do
