@@ -1,5 +1,6 @@
 # Build context: services/comms-connector (as for services/mnemodyne-embeddings).
-# Not built or deployed in slice 1. Pin both base images by digest before use.
+#   docker build -t <registry>/souls-house-comms-whatsapp services/comms-connector
+# Pin both base images by digest before publishing (see README.md "Deploying").
 FROM golang:1.27.2-bookworm AS build
 WORKDIR /src
 ENV CGO_ENABLED=1 \
@@ -20,5 +21,5 @@ COPY --from=build --chown=65532:65532 /out/data /data
 ENV GOTRACEBACK=none COMMS_DATA_DIR=/data
 USER 65532:65532
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 8443
 ENTRYPOINT ["/comms-connector"]
