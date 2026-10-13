@@ -1,38 +1,50 @@
-// Command comms-connector runs one connection's worker: lease, envelope,
-// encrypted store, provider and the ticketed read API.
+// Command comms-connector is the house's WhatsApp connector: a Kamal
+// accessory on the private network holding one linked device per
+// ServiceConnection, each in its own SQLCipher store on the comms volume.
 //
-// Required environment: COMMS_KEK, COMMS_TICKET_SECRET, COMMS_CONSUME_URL.
-// GOTRACEBACK must be unset or "none". See README.md.
+// Rails → connector: start_pairing and unpair over mutual TLS, signed with
+// COMMS_COMMAND_KEY. Connector → Rails: signed events to
+// COMMS_RAILS_URL/internal/comms/connections/:id/events.
+//
+// Required environment (see README.md):
+//
+//	COMMS_STORE_KEY        base64 of 32 bytes; each store's key is HKDF(it, connection)
+//	COMMS_COMMAND_KEY      the same value as Rails's COMMS_COMMAND_KEY
+//	COMMS_COMMAND_KEY_ID   default k1, as Rails
+//	COMMS_RAILS_URL        e.g. http://souls-house-web:80 (private network)
+//	COMMS_TLS_CERT, COMMS_TLS_KEY      the connector's certificate and key
+//	COMMS_TLS_CLIENT_CA    the house CA that signed Rails's client certificate
+//	COMMS_TLS_CLIENT_NAME  optional: the client certificate's CN/SAN (e.g. rails)
+//	COMMS_LISTEN           default :8443
+//	COMMS_DATA_DIR         default /data
+//	COMMS_PROVIDER         whatsapp (default) or synthetic (needs COMMS_ALLOW_SYNTHETIC=1)
+//
+// GOTRACEBACK must be unset or "none".
 package main
 
 import (
 	"context"
 	"errors"
-	"flag"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 
-	"services/comms-connector/internal/api"
+	"services/comms-connector/internal/command"
 	"services/comms-connector/internal/harden"
-	"services/comms-connector/internal/ids"
 	"services/comms-connector/internal/keys"
-	"services/comms-connector/internal/lease"
 	"services/comms-connector/internal/provider"
-	"services/comms-connector/internal/store"
-	"services/comms-connector/internal/ticket"
+	"services/comms-connector/internal/rails"
+	"services/comms-connector/internal/server"
+	"services/comms-connector/internal/whatsapp"
+	"services/comms-connector/internal/worker"
 )
 
-func main() { os.Exit(run(os.Args[1:])) }
+func main() { os.Exit(run()) }
 
-func envOr(name, def string) string {
+func env(name, def string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
 	}
@@ -45,7 +57,7 @@ func refuse(log *slog.Logger, reason string) int {
 	return 2
 }
 
-func run(args []string) int {
+func run() int {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	if err := harden.Apply(); err != nil {
@@ -55,120 +67,73 @@ func run(args []string) int {
 		return refuse(log, "harden")
 	}
 
-	fs := flag.NewFlagSet("comms-connector", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	dataDir := fs.String("data", envOr("COMMS_DATA_DIR", "/data"), "data directory (env COMMS_DATA_DIR)")
-	listen := fs.String("listen", os.Getenv("COMMS_LISTEN"), "private listen address host:port (env COMMS_LISTEN); required")
-	ref := fs.String("connection", os.Getenv("COMMS_CONNECTION_REF"), "connection ref (env COMMS_CONNECTION_REF); required")
-	genStr := fs.String("key-generation", os.Getenv("COMMS_KEY_GENERATION"), "current key generation (env COMMS_KEY_GENERATION); required")
-	initConn := fs.Bool("init", false, "create the wrapped DEK for a new connection/generation; refuses if one exists")
-	prov := fs.String("provider", "none", "message provider: none | synthetic")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-
-	kek, err := keys.ParseKEK(os.Getenv("COMMS_KEK"))
+	storeKey, err := keys.ParseStoreKey(os.Getenv("COMMS_STORE_KEY"))
 	if err != nil {
-		return refuse(log, "kek")
+		return refuse(log, "store_key")
 	}
-	secret, err := ticket.NewSecret(os.Getenv("COMMS_TICKET_SECRET"))
+	commandKey := os.Getenv("COMMS_COMMAND_KEY")
+	if len(commandKey) < 32 {
+		return refuse(log, "command_key")
+	}
+	railsClient, err := rails.New(os.Getenv("COMMS_RAILS_URL"), nil)
 	if err != nil {
-		return refuse(log, "ticket_secret")
+		return refuse(log, "rails_url")
 	}
-	consumer, err := ticket.NewConsumer(os.Getenv("COMMS_CONSUME_URL"), secret, ticket.DefaultTimeout)
+	tlsConfig, err := server.TLSConfig(os.Getenv("COMMS_TLS_CERT"), os.Getenv("COMMS_TLS_KEY"),
+		os.Getenv("COMMS_TLS_CLIENT_CA"), os.Getenv("COMMS_TLS_CLIENT_NAME"))
 	if err != nil {
-		return refuse(log, "consume_url")
+		return refuse(log, "tls")
 	}
-	if !ids.ValidConnectionRef(*ref) {
-		return refuse(log, "connection_ref")
-	}
-	gen, err := strconv.ParseUint(*genStr, 10, 64)
-	if err != nil || gen == 0 {
-		return refuse(log, "key_generation")
-	}
-	if _, _, err := net.SplitHostPort(*listen); err != nil || *listen == "" {
-		return refuse(log, "listen")
-	}
-	if *prov != "none" && *prov != "synthetic" {
-		return refuse(log, "provider")
-	}
-	logID, err := keys.LogID(kek, *ref)
-	if err != nil {
-		return refuse(log, "kek")
-	}
-	baseLog := log
-	log = log.With(slog.String("conn", logID))
-
-	connDir, err := keys.ConnDir(*dataDir, *ref)
-	if err != nil {
-		return refuse(log, "connection_ref")
-	}
-	if err := os.MkdirAll(connDir, 0o700); err != nil {
+	dataDir := env("COMMS_DATA_DIR", "/data")
+	if fi, err := os.Stat(dataDir); err != nil || !fi.IsDir() {
 		return refuse(log, "data_dir")
 	}
 
-	// The lease comes before any key or store access.
-	l, err := lease.Acquire(connDir)
-	if err != nil {
-		if errors.Is(err, lease.ErrHeld) {
-			fmt.Fprintln(os.Stderr, "comms-connector: "+lease.ErrHeld.Error())
-			return refuse(log, "lease_held")
+	var factory provider.Factory
+	switch env("COMMS_PROVIDER", "whatsapp") {
+	case "whatsapp":
+		factory = whatsapp.Factory()
+	case "synthetic":
+		// The log smoke test and the Rails end-to-end test. Never in production.
+		if os.Getenv("COMMS_ALLOW_SYNTHETIC") != "1" {
+			return refuse(log, "synthetic_not_allowed")
 		}
-		return refuse(log, "lease")
+		syn := provider.DefaultSynthetic()
+		syn.Marker = os.Getenv("COMMS_SYNTHETIC_MARKER")
+		factory = syn.Factory()
+	default:
+		return refuse(log, "provider")
 	}
-	defer l.Release()
 
-	dbPath := filepath.Join(connDir, fmt.Sprintf("store-%d.db", gen))
-	var dek []byte
-	if *initConn {
-		if _, err := os.Stat(dbPath); err == nil {
-			return refuse(log, "init_store_exists")
-		}
-		dek, err = keys.CreateDEK(*dataDir, kek, *ref, gen)
-	} else {
-		dek, err = keys.LoadDEK(*dataDir, kek, *ref, gen)
-	}
-	if err != nil {
-		return refuse(log, "dek")
-	}
-	dbKey, err := keys.SQLCipherKey(dek)
-	clear(dek)
-	if err != nil {
-		return refuse(log, "dek")
-	}
+	manager := server.NewManager(worker.Config{
+		DataDir: dataDir, StoreKey: storeKey, Rails: railsClient, Factory: factory,
+	}, log)
+	defer manager.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
-
-	st, err := store.Open(ctx, dbPath, dbKey)
-	clear(dbKey)
-	if err != nil {
-		return refuse(log, "store_open")
-	}
-	defer st.Close()
-
-	if *prov == "synthetic" {
-		go func() {
-			if err := provider.DefaultSynthetic().Run(ctx, st); err != nil {
-				log.Error("provider", slog.String("reason", "synthetic_failed"))
-				return
-			}
-			log.Info("provider", slog.String("reason", "synthetic_done"))
-		}()
+	if err := manager.Boot(ctx); err != nil {
+		return refuse(log, "boot")
 	}
 
-	srv := api.NewHTTPServer(*listen, api.New(api.Config{
-		ConnectionRef: *ref,
-		KeyGeneration: gen,
-		Secret:        secret,
-		Consumer:      consumer,
-		Store:         st,
-		Log:           baseLog, // the API adds conn itself
-		LogID:         logID,
-	}))
+	srv := &http.Server{
+		Addr: env("COMMS_LISTEN", ":8443"),
+		Handler: &server.Handler{
+			Verifier: command.NewVerifier(env("COMMS_COMMAND_KEY_ID", "k1"), []byte(commandKey), nil),
+			Commands: manager,
+			Log:      log,
+		},
+		TLSConfig:         tlsConfig,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		// The server's own error log would print client addresses and TLS
+		// errors; it carries no content, but stays quiet like the rest.
+		ErrorLog: slog.NewLogLogger(slog.DiscardHandler, slog.LevelError),
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("started", slog.Uint64("key_generation", gen))
+	go func() { errc <- srv.ListenAndServeTLS("", "") }()
+	log.Info("started")
 
 	select {
 	case <-ctx.Done():
