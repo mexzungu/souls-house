@@ -1,6 +1,9 @@
 require "test_helper"
+require "support/whatsapp_comms_helpers"
 
 class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::IntegrationTest
+
+  include WhatsappCommsHelpers
 
   setup do
     @account = accounts(:team)
@@ -95,24 +98,40 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
   end
 
   test "without a configured connector, WhatsApp is neither offered nor connectable" do
-    previous = ENV.delete("COMMS_CONNECTOR_URL")
     sign_in @owner
-    assert_not Services::Definition.fetch("whatsapp").available?
-    get account_integrations_path(@account)
-    assert_response :success
-    keys = inertia_props.dig("props", "services").map { |service| service["key"] }
-    assert_includes keys, "github"
-    assert_not_includes keys, "whatsapp"
+    with_whatsapp_connector(url: nil, stub_http: false) do
+      assert_not Services::Definition.fetch("whatsapp").available?
+      get account_integrations_path(@account)
+      assert_response :success
+      keys = inertia_props.dig("props", "services").map { |service| service["key"] }
+      assert_includes keys, "github"
+      assert_not_includes keys, "whatsapp"
+      assert_no_difference -> { @account.service_connections.where(provider: "whatsapp").count } do
+        post account_service_connections_path(@account), params: { provider: "whatsapp", management_scope: "personal" }
+      end
+    end
     with_connector_url do
       @inertia_props = nil
       get account_integrations_path(@account)
       assert_includes inertia_props.dig("props", "services").map { |service| service["key"] }, "whatsapp"
     end
-    assert_no_difference -> { @account.service_connections.where(provider: "whatsapp").count } do
-      post account_service_connections_path(@account), params: { provider: "whatsapp", management_scope: "personal" }
+  end
+
+  # A URL alone is not enough: without the command key or any mutual-TLS
+  # file, start_pairing could never be sent, so the owner is not offered a
+  # connection that would only fail.
+  test "WhatsApp stays hidden until the command key and mutual TLS are configured too" do
+    sign_in @owner
+    [ "COMMS_COMMAND_KEY", *TelegramCommsHelpers::TLS_ENV ].each do |absent|
+      tls = TelegramCommsHelpers::TLS_ENV - [ absent ]
+      key = absent == "COMMS_COMMAND_KEY" ? nil : "test-command-key"
+      with_whatsapp_connector(key:, tls:, stub_http: false) do
+        assert_not Services::Definition.fetch("whatsapp").available?, "available without #{absent}"
+        @inertia_props = nil
+        get account_integrations_path(@account)
+        assert_not_includes inertia_props.dig("props", "services").map { |service| service["key"] }, "whatsapp"
+      end
     end
-  ensure
-    ENV["COMMS_CONNECTOR_URL"] = previous if previous
   end
 
   test "disconnecting sends unpair and keeps a connection that has history" do
@@ -141,12 +160,8 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
 
   private
 
-  def with_connector_url
-    previous = ENV["COMMS_CONNECTOR_URL"]
-    ENV["COMMS_CONNECTOR_URL"] = "http://souls-house-comms:8080"
-    yield
-  ensure
-    previous ? ENV["COMMS_CONNECTOR_URL"] = previous : ENV.delete("COMMS_CONNECTOR_URL")
+  def with_connector_url(&block)
+    with_whatsapp_connector(stub_http: false) { block.call }
   end
 
 end

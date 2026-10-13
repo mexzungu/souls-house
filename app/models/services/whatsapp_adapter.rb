@@ -3,7 +3,9 @@ require "openssl"
 module Services
   # WhatsApp through the comms connector. The WhatsApp session lives in the
   # connector, never in Rails: credential_payload holds only the per-connection
-  # callback secret the connector signs its events with. A connection starts
+  # callback secret (and its version) the connector signs its events with. The
+  # secret reaches the connector once, inside the signed start_pairing command
+  # over mutual TLS (CommsConnector). A connection starts
   # in "pairing" and becomes "connected" when the connector reports it.
   class WhatsappAdapter
 
@@ -24,7 +26,7 @@ module Services
         status: "pairing",
         credential_kind: "connector",
         credential_fingerprint: credential_fingerprint(secret),
-        credential_payload: { "callback_secret" => secret },
+        credential_payload: { "callback_secret" => secret, "callback_secret_version" => 1 },
         credential_metadata: {
           "credential_strategy" => definition.credential_strategy,
           "authority_summary" => "Residents you enable can read the chats and messages this linked device receives. Nothing can be sent."
@@ -34,7 +36,7 @@ module Services
 
     def start_pairing(connection)
       CommsConnector.start_pairing(connection)
-    rescue CommsConnector::Error, SystemCallError, Timeout::Error, IOError => e
+    rescue CommsConnector::Error, SystemCallError, Timeout::Error, IOError, OpenSSL::SSL::SSLError => e
       Rails.logger.warn("Comms start_pairing failed for service connection #{connection.id}: #{e.class}")
       raise Error, "Could not reach the WhatsApp connector. Disconnect this connection and try again."
     end
