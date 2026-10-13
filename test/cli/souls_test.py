@@ -439,10 +439,10 @@ class FieldTest(CliTestCase):
             self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
             self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={
                 "revision": "rev2", "lines": [], "line": {"line": 1, "speaker": "Speaker 3", "text": "Cinquante kilos."}})
-            code, _, _ = self.run_cli("field", "speaker", "KJkAjl", "1", who, "--revision", "rev0")
+            code, _, _ = self.run_cli("field", "speaker", "KJkAjl", "1", who, "--revision", "rev1")
             self.assertEqual(code, 0, who)
             self.assertEqual(json.loads(self.last()["body"]),
-                             {"speaker": sent, "was": "Cinquante kilos.", "revision": "rev0"}, who)
+                             {"speaker": sent, "was": "Cinquante kilos.", "revision": "rev1"}, who)
 
     def test_speaker_nobody_by_that_name_is_a_usage_error_naming_who_speaks(self):
         self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
@@ -451,14 +451,40 @@ class FieldTest(CliTestCase):
         self.assertIn("Ioan, Sanda, or 'new'", err)
         self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
 
-    def test_speaker_stale_revision_is_a_conflict(self):
+    def test_speaker_stale_revision_is_a_conflict_without_a_write(self):
+        # Even when the line it names has since merged away.
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+        for line in ("1", "9"):
+            code, _, err = self.run_cli("field", "speaker", "KJkAjl", line, "Ioan", "--revision", "rev0")
+            self.assertEqual(code, souls.EXIT_CONFLICT, line)
+            self.assertIn("has changed since revision rev0", err)
+        self.assertEqual({r["method"] for r in self.house.requests}, {"GET"})
+
+    def test_speaker_server_conflict_is_a_conflict(self):
         self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
         self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", status=409,
                          body={"error": "The transcript has changed", "revision": "rev2"})
-        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "1", "Ioan", "--revision", "rev0")
+        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "1", "Ioan")
         self.assertEqual(code, souls.EXIT_CONFLICT)
         self.assertIn("The transcript has changed", err)
 
+    def test_speaker_a_name_two_speakers_share_is_refused_listing_their_ids(self):
+        # A voice someone named "Speaker 2" and an unnamed second speaker read the
+        # same; /lines can't say whether they are one person.
+        lines = {"id": "KJkAjl", "revision": "rev1",
+                 "lines": [{"line": 1, "speaker": "Speaker 2", "speaker_id": "named", "text": "One."},
+                           {"line": 2, "speaker": "Speaker 2", "speaker_id": "unnamed", "text": "Two."},
+                           {"line": 3, "speaker": "Other", "speaker_id": "other", "text": "Three."}]}
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=lines)
+        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "3", "Speaker 2")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("named (lines 1); unnamed (lines 2)", err)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/3", body={
+            "revision": "rev2", "lines": [], "line": {"line": 3, "speaker": "Speaker 2", "text": "Three."}})
+        code, _, _ = self.run_cli("field", "speaker", "KJkAjl", "3", "unnamed")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(self.last()["body"])["speaker"], "unnamed")
 
 class OriginTest(CliTestCase):
     def test_a_foreign_absolute_url_is_refused_before_any_request(self):

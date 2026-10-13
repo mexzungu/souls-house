@@ -654,18 +654,25 @@ def resolve_speaker(lines, who):
     reading the recording sees names, not ids."""
     if who.strip().lower() == "new":
         return "new"
-    seen = {}
+    seen, said = {}, {}
     for entry in lines:
         if entry.get("speaker_id") and entry.get("speaker"):
             seen.setdefault(entry["speaker_id"], entry["speaker"])
+            said.setdefault(entry["speaker_id"], []).append(entry["line"])
     if who in seen:
         return who
     wanted = who.strip().casefold()
-    # Two diarized labels a person linked to one name are one person, so the
-    # first id with that name is as good as any.
-    for speaker_id, name in seen.items():
-        if name.casefold() == wanted:
-            return speaker_id
+    # A shared name doesn't prove a shared person: a voice named "Speaker 2"
+    # and an unnamed second speaker both read "Speaker 2", and /lines carries
+    # no identity to tell them apart. So a name that fits two ids is refused.
+    matches = [speaker_id for speaker_id, name in seen.items() if name.casefold() == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        options = "; ".join(f"{speaker_id} (lines {', '.join(map(str, said[speaker_id][:5]))})"
+                            for speaker_id in matches)
+        raise CliError(f"more than one speaker reads {who!r}: {options}. "
+                       f"Give the id of the one you mean", EXIT_USAGE)
     names = sorted(set(seen.values()), key=str.casefold)
     raise CliError(f"no one called {who!r} speaks in this recording; "
                    f"choose one of: {', '.join(names) or '(nobody named)'}, or 'new'", EXIT_USAGE)
@@ -673,6 +680,9 @@ def resolve_speaker(lines, who):
 
 def cmd_field_speaker(client, args):
     data = client.get(f"field/recordings/{args.recording}/lines")
+    if args.revision is not None and args.revision != data["revision"]:
+        raise CliError(f"the transcript has changed since revision {args.revision} (it is now "
+                       f"{data['revision']}); read the lines again", EXIT_CONFLICT)
     line = next((entry for entry in data["lines"] if entry["line"] == args.line), None)
     if line is None:
         raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
