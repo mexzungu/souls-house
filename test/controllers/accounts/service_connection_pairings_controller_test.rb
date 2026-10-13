@@ -336,6 +336,38 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
     assert_equal 1, @connection.comms_chats.count
   end
 
+  # Mira's second review. A missing connector configuration is not a
+  # confirmation: the accessory outlives Rails deploys, so Rails losing its
+  # settings proves nothing about the linked device. Both the first
+  # disconnect and the retries keep the unpair pending.
+  test "a disconnect while no connector is configured stays pending" do
+    sign_in @owner
+    CommsConnector.stub(:unpair, :not_configured) do
+      delete account_service_connection_path(@account, @connection.public_id)
+    end
+
+    connection = ServiceConnection.find_by(id: @connection.id)
+    assert connection, "the connection was destroyed although no connector was asked to unpair it"
+    assert_equal "revoked", connection.status
+    assert connection.unpair_pending?
+    assert_equal "CommsConnector::NotConfigured", connection.connector_state.dig("unpair", "last_error")
+  end
+
+  test "a pending unpair retried while no connector is configured stays pending" do
+    sign_in @owner
+    CommsConnector.stub(:unpair, ->(_) { raise CommsConnector::Error, "unreachable" }) do
+      delete account_service_connection_path(@account, @connection.public_id)
+    end
+    assert @connection.reload.unpair_pending?
+
+    CommsConnector.stub(:unpair, :not_configured) { CommsUnpairJob.perform_now }
+
+    connection = ServiceConnection.find_by(id: @connection.id)
+    assert connection, "the retry deleted the connection without reaching a connector"
+    assert connection.unpair_pending?
+    assert_equal 2, connection.connector_state.dig("unpair", "attempts")
+  end
+
   private
 
   def with_connector_url(&block)

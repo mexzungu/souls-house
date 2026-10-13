@@ -284,7 +284,7 @@ class ServiceConnection < ApplicationRecord
     return true unless unpair_pending?
 
     begin
-      CommsConnector.unpair(self)
+      CommsConnector.unpair!(self)
     rescue StandardError => e
       Rails.logger.warn("Comms unpair retry failed for service connection #{id}: #{e.class}")
       record_unpair_failure!(e)

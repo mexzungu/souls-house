@@ -49,7 +49,7 @@ module Services
     # to the owner, and keeping the revoked connection), and CommsUnpairJob
     # retries until the connector confirms.
     def revoke(connection)
-      CommsConnector.unpair(connection)
+      CommsConnector.unpair!(connection)
     rescue StandardError => e
       Rails.logger.warn("Comms unpair failed for service connection #{connection.id}: #{e.class}")
       connection.record_unpair_failure!(e)

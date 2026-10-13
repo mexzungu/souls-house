@@ -1,7 +1,8 @@
 # Retries every WhatsApp disconnect the connector has not confirmed
 # (ServiceConnection#unpair_pending?), until it does. Recurring; see
-# config/recurring.yml. A connector that is not configured at all counts
-# as confirmed: there is no connector holding a device.
+# config/recurring.yml. A connector that is not configured does not count
+# as confirmed: the accessory outlives Rails deploys and configuration, so
+# missing settings cannot prove its device is gone (Mira, #340 review 2).
 class CommsUnpairJob < ApplicationJob
 
   queue_as :default

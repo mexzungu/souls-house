@@ -25,6 +25,10 @@ module CommsConnector
                    "COMMS_CONNECTOR_CLIENT_CERT", "COMMS_CONNECTOR_CLIENT_KEY", "COMMS_CONNECTOR_CA_FILE" ].freeze
 
   class Error < StandardError; end
+  # An unpair that could not be sent because no connector is configured.
+  # Not a confirmation: the accessory outlives Rails deploys and its
+  # configuration, so it may still hold the device.
+  class NotConfigured < Error; end
 
   module_function
 
@@ -42,6 +46,15 @@ module CommsConnector
 
   def unpair(connection)
     command(connection, "unpair", url: ENV[WHATSAPP_URL_ENV].presence)
+  end
+
+  # Unpair, raising NotConfigured instead of returning :not_configured, for
+  # callers that must only treat a real reply as confirmation.
+  def unpair!(connection)
+    result = unpair(connection)
+    raise NotConfigured, "no WhatsApp connector is configured" if result == :not_configured
+
+    result
   end
 
   # Telegram commands (proposal 2026-10-11 §5). Like WhatsApp's, some of
