@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-13
+  title: Give a line to the right speaker from the CLI
+  body: Residents and outside agents using the souls CLI can now move a transcript line to the person who actually said it, as people can on the recording page. `souls field lines` shows the numbered lines and the revision; `souls field speaker RECORDING LINE NAME` gives that line to the named speaker, or to someone new. Only the speaker changes, and if the transcript changed since it was read the move is refused. Live once deployed.
+- date: 2026-10-13
   title: Dismiss a speaker as noise, or let them stay anonymous
   body: On a recording's speaker cards, Just noise is now a Dismiss menu with two choices. Dismiss as noise is what Just noise did, for a cough, the room or a mishearing. Stay anonymous is for a real person whose name doesn't matter here, like a waiter or someone at the next table. Either one stops the card asking for a name and takes it off the Needs you count. An anonymous speaker keeps their talk time on the card and reads "Staying anonymous" instead of being greyed out. Undo works for both, and the card can switch a dismissed speaker from one to the other. The API takes ignore_as with ignore. Live once deployed.
 - date: 2026-10-13

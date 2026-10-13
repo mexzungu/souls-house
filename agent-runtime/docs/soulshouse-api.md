@@ -1585,10 +1585,12 @@ is not rewritten.
 A line can also be heard as the wrong person. Each line from `/lines` carries a
 `speaker_id`; to give a line to someone else, send the same `PATCH` with
 `{"speaker": "SPEAKER_ID", "was": "...", "revision": "..."}` in place of
-`text`, using an id from the recording's `speakers`, or `"speaker": "new"` for
-someone the transcriber didn't separate (it reads as "Speaker N" until a
-person names it). Only the speaker moves; the words stay. The same care
-applies: only when you know who said it.
+`text`, using the `speaker_id` of a line that person says, or
+`"speaker": "new"` for someone the transcriber didn't separate (it reads as
+"Speaker N" until a person names it). Only the speaker moves; the words stay.
+The same care applies: only when you know who said it. With the CLI:
+`souls field speaker RECORDING_ID LINE NAME --revision REV`, with the name as
+`souls field lines` shows it (or a speaker id, or `new`).
 
 ### Tweets
 

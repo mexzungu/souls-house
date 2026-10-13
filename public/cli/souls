@@ -648,6 +648,58 @@ def cmd_field_correct(client, args):
     print(f"{line.get('line', args.line):>4}  {speaker}{line.get('text', '')}")
 
 
+def resolve_speaker(lines, who):
+    """WHO as `souls field lines` shows it (a name, case-insensitive), a
+    speaker id, or "new". The ids come from the lines themselves: a resident
+    reading the recording sees names, not ids."""
+    if who.strip().lower() == "new":
+        return "new"
+    seen, said = {}, {}
+    for entry in lines:
+        if entry.get("speaker_id") and entry.get("speaker"):
+            seen.setdefault(entry["speaker_id"], entry["speaker"])
+            said.setdefault(entry["speaker_id"], []).append(entry["line"])
+    if who in seen:
+        return who
+    wanted = who.strip().casefold()
+    # A shared name doesn't prove a shared person: a voice named "Speaker 2"
+    # and an unnamed second speaker both read "Speaker 2", and /lines carries
+    # no identity to tell them apart. So a name that fits two ids is refused.
+    matches = [speaker_id for speaker_id, name in seen.items() if name.casefold() == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        options = "; ".join(f"{speaker_id} (lines {', '.join(map(str, said[speaker_id][:5]))})"
+                            for speaker_id in matches)
+        raise CliError(f"more than one speaker reads {who!r}: {options}. "
+                       f"Give the id of the one you mean", EXIT_USAGE)
+    names = sorted(set(seen.values()), key=str.casefold)
+    raise CliError(f"no one called {who!r} speaks in this recording; "
+                   f"choose one of: {', '.join(names) or '(nobody named)'}, or 'new'", EXIT_USAGE)
+
+
+def cmd_field_speaker(client, args):
+    data = client.get(f"field/recordings/{args.recording}/lines")
+    if args.revision is not None and args.revision != data["revision"]:
+        raise CliError(f"the transcript has changed since revision {args.revision} (it is now "
+                       f"{data['revision']}); read the lines again", EXIT_CONFLICT)
+    line = next((entry for entry in data["lines"] if entry["line"] == args.line), None)
+    if line is None:
+        raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
+    speaker = resolve_speaker(data["lines"], args.who)
+    was = line["text"] if args.was is None else args.was
+    revision = data["revision"] if args.revision is None else args.revision
+    data = client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
+                        json_body={"speaker": speaker, "was": was, "revision": revision})
+    if args.json:
+        emit(data)
+        return
+    moved = data.get("line") or {}
+    name = f"{moved['speaker']}: " if moved.get("speaker") else ""
+    print(f"revision {data.get('revision')}")
+    print(f"{moved.get('line', args.line):>4}  {name}{moved.get('text', '')}")
+
+
 FIELD_DATE_TARGETS = {
     "recording": ("field/recordings", "recorded_at"),
     "file": ("field/files", "dated_at"),
@@ -1132,7 +1184,7 @@ def build_parser():
                    "  souls field date recording REC_ID 2019-03-14\n"
                    "Recordings take recorded_at instead: see docs/api.md.",
             formatter_class=argparse.RawDescriptionHelpFormatter)
-    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|date|lines|correct")
+    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|date|lines|correct|speaker")
 
     fp = fsub.add_parser("upload", parents=[common], help="Upload a file (a document, an old transcript)")
     fp.add_argument("file", metavar="FILE")
@@ -1180,6 +1232,23 @@ def build_parser():
     fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
     fp.add_argument("--json", action="store_true", help="print the house's JSON (the whole transcript)")
     fp.set_defaults(func=cmd_field_correct)
+
+    fp = fsub.add_parser("speaker", parents=[common],
+                         help="Give one line of a recording's transcript to another speaker (the words stay)",
+                         epilog="WHO is a name as `souls field lines` shows it, a speaker id, or 'new' for a\n"
+                                "voice the transcriber didn't separate (it reads as \"Speaker N\" until someone\n"
+                                "names it). Only when you know who said it. Pass the revision `souls field\n"
+                                "lines` printed to be refused (exit 6) if the transcript changed since.\n"
+                                "  souls field lines KJkAjl\n"
+                                "  souls field speaker KJkAjl 14 Sanda --revision 3f2a9c1d0b7e4a65",
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("line", type=int, metavar="LINE", help="the line's number")
+    fp.add_argument("who", metavar="WHO", help="a speaker's name, a speaker id, or new")
+    fp.add_argument("--was", help="the line as you read it (default: as it reads now)")
+    fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON (the whole transcript)")
+    fp.set_defaults(func=cmd_field_speaker)
 
     p = add("glossary", cmd_glossary, "The account's transcription glossary: list, add, remove, pin, unpin")
     p.add_argument("glossary_command", nargs="?", choices=["list", "add", "remove", "pin", "unpin"],

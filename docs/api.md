@@ -567,6 +567,8 @@ URL. This read never includes voice-recognition or name-suggestion data.
   cleared. The response's `line` is the line the moved words are in now, which
   can have a different number once it joins a neighbour. Same 409s; an unknown
   speaker or a recording at its speaker limit is 422.
+  The CLI: `souls field speaker ID LINE WHO --revision REV`, where WHO is a name as
+  `souls field lines` shows it, a speaker id, or `new`.
 - `PATCH /api/v1/field/recordings/:recording_id/speakers/:id` takes one of
   `me: true`, `voice_id`, `member_user_id`, `name`, `unname: true`,
   `ignore: true` (noise, not a person: it stops counting as waiting for a
