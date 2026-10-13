@@ -67,9 +67,12 @@ If CI passed, it calls the same transport with `operation: rails` and
 `expected_revision` set to the commit CI tested. The forced command accepts
 `rails expect <40-hex sha>`; the worker clones `master` exactly as for a manual
 press and deploys only if that clone is the expected commit. Otherwise the job
-ends in the terminal state `superseded` with nothing deployed, and the newer
-commit's own CI run deploys it. Queue time behind another deployment can't let
-an untested commit through.
+ends in the terminal host state `superseded` with nothing deployed, and the
+GitHub job is red. The newer commit's own CI run deploys it if that run is
+green; if the successor skipped (CI not green), production stays put until a
+later green master deploys. Queue time behind another deployment can't let an
+untested commit through. Treating superseded as GitHub success is the hole in
+issue #313: two close merges can both look green while nothing ships.
 
 Chaos, resident rebuilds and **Deploy both** stay manual. Set the repository
 variable `AUTO_DEPLOY_RAILS` to `false` to stop automatic deploys. Until the
