@@ -56,6 +56,7 @@ class AgentRuntimeInteractionCost
     [ /(?:openai\/)?gpt-4o-mini(?:-\d{4}-\d{2}-\d{2})?\z/, "openai/gpt-4o-mini", 0.15, 0.6 ],
     [ /(?:openai\/)?gpt-4o(?:-\d{4}-\d{2}-\d{2})?\z/, "openai/gpt-4o", 2.5, 10 ],
 
+    [ /\A(?:google\/)?gemini-4-argon\z/, "google/gemini-4-argon", 2, 10 ],
     [ /\A(?:google\/)?gemini-3\.8-flash\z/, "google/gemini-3.8-flash", 0.75, 3.75 ],
     [ /(?:google\/)?gemini-3\.7-flash\z/, "google/gemini-3.7-flash", 0.75, 3.75 ],
     [ /(?:google\/)?gemini-3\.5-flash\z/, "google/gemini-3.5-flash", 1.5, 9 ],
@@ -90,6 +91,7 @@ class AgentRuntimeInteractionCost
   end.freeze
 
   CACHE_READ_RATES = {
+    "google/gemini-4-argon" => 0.1,
     "anthropic/claude-opus-5.5" => 0.2,
     "google/gemini-3.8-flash" => 0.075,
     "openai/gpt-4.1" => 0.5,
@@ -169,6 +171,11 @@ class AgentRuntimeInteractionCost
     price = PRICE_RULES.find { |rule| model.to_s.match?(rule[:pattern]) }
     # Use the interaction date, not today's date, so historical promotional
     # usage retains its rate. Storage time is not present in token telemetry.
+    if price && price[:model] == "google/gemini-4-argon" &&
+        interaction.started_at.to_date >= Date.new(2026, 12, 1)
+      price = price.merge(input: price[:input] * 2, output: price[:output] * 2,
+        cache_read: BigDecimal("0.2"))
+    end
     if price && price[:model] == "google/gemini-3.8-flash" &&
         interaction.started_at.to_date >= Date.new(2027, 1, 1)
       price = price.merge(input: price[:input] * 2, output: price[:output] * 2,
@@ -186,6 +193,12 @@ class AgentRuntimeInteractionCost
       # The routed catalogue quotes a token write rate; the direct API instead
       # documents storage by token-hour. Do not apply one route's rate to both.
       return BigDecimal("0.0416666666666667") * (price[:input] / BigDecimal("0.75"))
+    end
+
+    if interaction.provider == "openrouter" && price[:model] == "google/gemini-4-argon"
+      # Routed catalogue write rate at launch ($0.1875 at $2 input), scaled
+      # with the scheduled December price change like Gemini 3.8 Flash.
+      return BigDecimal("0.1875") * (price[:input] / BigDecimal("2"))
     end
 
     if anthropic?

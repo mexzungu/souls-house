@@ -185,6 +185,26 @@ class AgentRuntimeInteractionCostTest < ActiveSupport::TestCase
     assert_equal "0.016", cost.dig(:components_usd, :cache_read_input)
   end
 
+  test "Gemini 4 Argon uses launch pricing until December and doubles after" do
+    launch = build_interaction(
+      provider: "openrouter", model: "google/gemini-4-argon",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000,
+      started_at: Time.zone.parse("2026-10-13 12:00")
+    ).estimated_cost
+    assert_equal "estimated", launch[:status]
+    assert_equal "12.1", launch[:amount_usd]
+    assert_equal "0.1", launch.dig(:components_usd, :cache_read_input)
+
+    later = build_interaction(
+      provider: "gemini", model: "gemini-4-argon",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000,
+      started_at: Time.zone.parse("2026-12-01 12:00")
+    ).estimated_cost
+    assert_equal "24.2", later[:amount_usd]
+  end
+
   test "Muse Wonder is priced from the routed Meta endpoint" do
     cost = build_interaction(
       provider: "openrouter", model: "meta/muse-wonder",

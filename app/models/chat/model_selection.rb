@@ -323,6 +323,13 @@ module Chat::ModelSelection
 
     # Google
     {
+      model_id: "google/gemini-4-argon",
+      label: "Gemini 4 Argon",
+      group: "Google",
+      provider_model_id: "gemini-4-argon",
+      thinking: { supported: true }
+    },
+    {
       model_id: "google/gemini-3.8-flash",
       label: "Gemini 3.8 Flash",
       group: "Google",
@@ -784,7 +791,7 @@ module Chat::ModelSelection
         REASONING_PROFILES[:anthropic]
       when %r{\Agoogle/gemini-(?:3\.[5-8]-flash|3\.1-flash|3-flash)}
         REASONING_PROFILES[:gemini_full]
-      when %r{\Agoogle/gemini-(?:3\.1-pro|3-pro)}
+      when %r{\Agoogle/gemini-(?:4-argon|3\.1-pro|3-pro)}
         REASONING_PROFILES[:gemini_pro]
       when %r{\Ax-ai/grok-.*multi-agent}
         REASONING_PROFILES[:grok_multi_agent]

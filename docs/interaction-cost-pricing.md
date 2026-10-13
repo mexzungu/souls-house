@@ -38,6 +38,16 @@ output 0.47, from the OpenRouter endpoint for `qwen/qwen3.8-omni-flash`
 creation tokens use the input rate. Text pricing only; audio/video input is not
 modelled.
 
+Gemini 4 Argon (added October 13, 2026, its release day): input 2, cache read
+0.1, output 10 through November 30, 2026, then input 4, cache read 0.2, output
+20 from December 1, 2026, selected by the interaction's date. Source: the Gemini
+API pricing page (ai.google.dev/gemini-api/docs/pricing, Standard paid tier,
+read 2026-10-13), which matches the OpenRouter endpoint for
+`google/gemini-4-argon`. Implicit caching only. Routed interactions use
+OpenRouter's cache-write rate ($0.1875 at the launch input price, scaled with
+the December change); direct interactions use the input rate. Direct id
+`gemini-4-argon`, listed on ai.google.dev/gemini-api/docs/models.
+
 Muse Wonder (added October 13, 2026, the day after Meta announced it): input 4,
 cache read 0.2, output 20, from the OpenRouter endpoint for `meta/muse-wonder`
 (Meta provider, `meta/muse-wonder-20261012`, the only endpoint). OpenRouter
