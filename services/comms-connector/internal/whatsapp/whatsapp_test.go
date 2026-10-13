@@ -128,7 +128,10 @@ type recSink struct {
 func (r *recSink) QR(context.Context, string, time.Time, time.Time) error { return nil }
 func (r *recSink) Connected(context.Context, provider.Identity) error     { return nil }
 func (r *recSink) LoggedOut(context.Context) error                        { return nil }
-func (r *recSink) Chats(_ context.Context, c []provider.Chat) error       { r.chats = append(r.chats, c...); return nil }
+func (r *recSink) Chats(_ context.Context, c []provider.Chat) error {
+	r.chats = append(r.chats, c...)
+	return nil
+}
 func (r *recSink) Messages(_ context.Context, m []provider.Message) error {
 	r.msgs = append(r.msgs, m...)
 	return nil
