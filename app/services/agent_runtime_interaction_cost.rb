@@ -73,6 +73,7 @@ class AgentRuntimeInteractionCost
 
     [ /deepseek\/deepseek-v4-pro\z/, "deepseek/deepseek-v4-pro", 0.435, 0.87 ],
     [ /mistralai\/mistral-large-2512\z/, "mistralai/mistral-large-2512", 0.5, 1.5 ],
+    [ /\A(?:meta\/)?muse-wonder\z/, "meta/muse-wonder", 4, 20 ],
     [ /meta-llama\/llama-4-maverick\z/, "meta-llama/llama-4-maverick", 0.2, 0.8 ],
     [ /minimax\/minimax-m3\z/, "minimax/minimax-m3", 0.3, 1.2 ],
     [ /moonshotai\/kimi-k2\.7-code\z/, "moonshotai/kimi-k2.7-code", 0.82, 3.75 ],
@@ -106,6 +107,7 @@ class AgentRuntimeInteractionCost
     "google/gemini-2.5-flash-lite" => 0.01,
     "deepseek/deepseek-v4-pro" => 0.003625,
     "mistralai/mistral-large-2512" => 0.05,
+    "meta/muse-wonder" => 0.2,
     "minimax/minimax-m3" => 0.06,
     "moonshotai/kimi-k2.7-code" => 0.16,
     "qwen/qwen3.7-max" => 0.295,
