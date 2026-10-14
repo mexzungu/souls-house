@@ -82,10 +82,12 @@ class FakeStripe
 
     STARTER_PRICE = "price_test_starter".freeze
     STUDIO_PRICE = "price_test_studio".freeze
+    HEARTH_PRICE = "price_test_hearth".freeze
 
     STRIPE_ENV = {
       "STRIPE_SECRET_KEY" => "sk_test_fake", "STRIPE_WEBHOOK_SECRET" => "whsec_test_fake",
-      "STRIPE_PRICE_STARTER" => STARTER_PRICE, "STRIPE_PRICE_STUDIO" => STUDIO_PRICE
+      "STRIPE_PRICE_STARTER" => STARTER_PRICE, "STRIPE_PRICE_STUDIO" => STUDIO_PRICE,
+      "STRIPE_PRICE_HEARTH" => HEARTH_PRICE
     }.freeze
 
     def self.included(base)

@@ -251,6 +251,34 @@ class FieldSwarmTest < ActiveSupport::TestCase
     assert_equal 2, FieldSwarmSearch.count
   end
 
+  test "a Hearth plan in force allows swarm search without the admin switch, metered by the month" do
+    @account.update!(field_swarm_enabled: false)
+    entitlement = ResidentEntitlement.create!(agent: @agent, account: @account, source: "stripe", state: "pending",
+      tier: "hearth")
+    with_reader(@reader) { assert_raises(FieldSwarm::Disabled) { swarm.call } }
+
+    entitlement.update!(state: "active")
+    assert @account.field_swarm_allowed?
+    assert_equal 100, @account.field_swarm_monthly_limit
+    with_reader(@reader) { swarm.call }
+
+    @account.stub(:field_swarm_monthly_limit, 1) do
+      assert_raises(FieldSwarm::LimitReached) { with_reader(@reader) { swarm.call } }
+    end
+    assert_equal 1, FieldSwarmSearch.where(account: @account).count
+  end
+
+  test "Starter and Studio don't include swarm search" do
+    @account.update!(field_swarm_enabled: false)
+    ResidentEntitlement.create!(agent: @agent, account: @account, source: "stripe", state: "active", tier: "studio")
+    assert_not @account.field_swarm_allowed?
+    with_reader(->(**) { flunk "no reader should run" }) { assert_raises(FieldSwarm::Disabled) { swarm.call } }
+  end
+
+  test "the admin switch has no monthly limit, only the daily cap" do
+    assert_nil @account.field_swarm_monthly_limit
+  end
+
   test "a search refused before any reader is sent doesn't use up one of the day's searches" do
     search = swarm
     search.define_singleton_method(:candidates) { raise FieldSwarm::Invalid, "grep took too long" }

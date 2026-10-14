@@ -1,24 +1,52 @@
 # The server-owned plan catalogue. A Stripe price that isn't here is refused.
-# Allowance and container numbers are placeholders until calibrated against
-# per-resident cost (design doc, "What a tier controls").
+#
+# Each plan's numbers were costed against what the house pays at full use
+# (Lume's table in WjNvXj/YwkgkY, 2026-10-14; Daniel agreed): the Hetzner
+# machine, the house-model allowance, Scribe transcription at $0.22/h, Restic
+# backups at S3 list price, swarm reads and Stripe's fee. Every plan keeps a
+# positive margin even when someone uses all of it. Change a number here and
+# re-cost it.
+#
+# memory_gb and cpu_shares are the container limits while residents still live
+# on the shared house server; the machine is what a plan gets once hosting moves
+# to one VM per resident.
 module Billing
   class Tier
 
-    attr_reader :id, :name, :monthly_usd, :allowance_usd, :memory_gb, :cpu_shares
+    MACHINES = {
+      "cx23" => { vcpus: 2, ram_gb: 4, disk_gb: 40 },
+      "cx33" => { vcpus: 4, ram_gb: 8, disk_gb: 80 },
+      "cx43" => { vcpus: 8, ram_gb: 16, disk_gb: 160 }
+    }.freeze
 
-    def initialize(id:, name:, monthly_usd:, allowance_usd:, memory_gb:, cpu_shares:)
+    attr_reader :id, :name, :monthly_usd, :allowance_usd, :memory_gb, :cpu_shares, :server_type,
+      :transcription_hours, :backup_gb, :swarm_searches
+
+    def initialize(id:, name:, monthly_usd:, allowance_usd:, memory_gb:, cpu_shares:, server_type:,
+      transcription_hours:, backup_gb:, swarm_searches: 0)
       @id = id
       @name = name
       @monthly_usd = monthly_usd
       @allowance_usd = allowance_usd
       @memory_gb = memory_gb
       @cpu_shares = cpu_shares
+      @server_type = server_type
+      @transcription_hours = transcription_hours
+      @backup_gb = backup_gb
+      @swarm_searches = swarm_searches
     end
 
     CATALOGUE = [
-      new(id: "starter", name: "Starter", monthly_usd: 20, allowance_usd: 8, memory_gb: 4, cpu_shares: 1024),
-      new(id: "studio", name: "Studio", monthly_usd: 50, allowance_usd: 25, memory_gb: 8, cpu_shares: 2048)
+      new(id: "starter", name: "Starter", monthly_usd: 20, allowance_usd: 8, memory_gb: 4, cpu_shares: 1024,
+        server_type: "cx23", transcription_hours: 5, backup_gb: 10),
+      new(id: "studio", name: "Studio", monthly_usd: 50, allowance_usd: 25, memory_gb: 8, cpu_shares: 2048,
+        server_type: "cx33", transcription_hours: 20, backup_gb: 50),
+      new(id: "hearth", name: "Hearth", monthly_usd: 100, allowance_usd: 45, memory_gb: 16, cpu_shares: 4096,
+        server_type: "cx43", transcription_hours: 40, backup_gb: 200, swarm_searches: 100)
     ].freeze
+
+    # Entitlement states in which a resident's plan is in force.
+    IN_FORCE_STATES = %w[active grace complimentary].freeze
 
     def self.all = CATALOGUE
 
@@ -36,6 +64,8 @@ module Billing
       CATALOGUE.find { |tier| tier.price_id == price_id }
     end
 
+    def self.with_swarm_search = CATALOGUE.select(&:swarm_search?)
+
     # Stripe price IDs differ between test and live mode, so they are configuration.
     def price_id
       Rails.application.credentials.dig(:stripe, :prices, id.to_sym).presence ||
@@ -44,10 +74,23 @@ module Billing
 
     def purchasable? = price_id.present?
 
+    def machine = MACHINES.fetch(server_type)
+
+    def swarm_search? = swarm_searches.positive?
+
+    # What the plan includes, for the public page and the Billing tab.
+    def features
+      {
+        server_type: server_type, vcpus: machine[:vcpus], ram_gb: machine[:ram_gb], disk_gb: machine[:disk_gb],
+        allowance_usd: allowance_usd, transcription_hours: transcription_hours, backup_gb: backup_gb,
+        swarm_searches: swarm_searches
+      }
+    end
+
     def as_json(*)
       {
         id: id, name: name, monthly_usd: monthly_usd, allowance_usd: allowance_usd,
-        memory_gb: memory_gb, purchasable: purchasable?
+        memory_gb: memory_gb, purchasable: purchasable?, features: features
       }
     end
 

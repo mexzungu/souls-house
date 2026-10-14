@@ -30,7 +30,8 @@ class PagesController < ApplicationController
 
   # Public, unlinked for now. Plans come from the catalogue, never from copy, and the
   # page must stay true with no Stripe keys: an unpriced plan offers no checkout.
-  # Container sizes stay server-side until they are calibrated and delivered.
+  # What each plan includes is shown as what it gets when plans open; today's
+  # hosting is a free container with your own key, and the page says so.
   def pricing
     render inertia: "pricing", props: {
       tiers: Billing::Tier.all.map { |tier| pricing_tier_json(tier) },
@@ -55,7 +56,8 @@ class PagesController < ApplicationController
       name: tier.name,
       monthly_usd: tier.monthly_usd,
       allowance_usd: tier.allowance_usd,
-      purchasable: tier.purchasable?
+      purchasable: tier.purchasable?,
+      features: tier.features
     }
   end
 

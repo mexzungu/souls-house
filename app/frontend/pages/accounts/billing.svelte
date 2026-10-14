@@ -4,6 +4,7 @@
   import { Badge } from '$lib/components/shadcn/badge/index.js';
   import AccountSettingsLayout from '$lib/components/accounts/AccountSettingsLayout.svelte';
   import RefundGuarantee from '$lib/components/billing/RefundGuarantee.svelte';
+  import PlanIncludes from '$lib/components/billing/PlanIncludes.svelte';
 
   let { account, billing = {}, tiers = [], residents = [] } = $props();
 
@@ -102,11 +103,8 @@
             </div>
           </div>
           <p class="mt-2 text-sm">Hosting for one resident, in a container on the shared house server.</p>
-          <p class="mt-2 text-xs font-medium text-muted-foreground">Proposed, not available yet:</p>
-          <ul class="mt-1 space-y-1 text-xs text-muted-foreground">
-            <li>A larger container (about {tier.memory_gb} GB memory)</li>
-            <li>About ${tier.allowance_usd} of house inference a month</li>
-          </ul>
+          <p class="mt-2 text-xs font-medium text-muted-foreground">When plans open, not available yet:</p>
+          <PlanIncludes features={tier.features} class="mt-1 text-xs text-muted-foreground" />
         </div>
       {/each}
     </div>

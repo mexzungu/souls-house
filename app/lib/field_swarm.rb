@@ -166,7 +166,7 @@ class FieldSwarm
   end
 
   def call
-    raise Disabled, "Field swarm search is not enabled for this account" unless @account.field_swarm_enabled?
+    raise Disabled, "Field swarm search is not enabled for this account" unless @account.field_swarm_allowed?
 
     started = monotonic
     search = admit!
@@ -273,6 +273,10 @@ class FieldSwarm
     @account.with_lock do
       if FieldSwarmSearch.where(account: @account, created_at: Time.current.utc.all_day).count >= MAX_SEARCHES_PER_ACCOUNT_PER_DAY
         raise LimitReached, "This account has used its #{MAX_SEARCHES_PER_ACCOUNT_PER_DAY} swarm searches for today (UTC)"
+      end
+      if (monthly = @account.field_swarm_monthly_limit) &&
+          FieldSwarmSearch.where(account: @account, created_at: Time.current.utc.all_month).count >= monthly
+        raise LimitReached, "This account has used its plan's #{monthly} swarm searches for this month (UTC)"
       end
 
       FieldSwarmSearch.create!(account: @account, agent: @agent, user: @user, tags: @tags, grep: @grep,
