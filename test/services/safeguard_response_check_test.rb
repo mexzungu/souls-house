@@ -165,6 +165,18 @@ class SafeguardResponseCheckTest < ActiveSupport::TestCase
     end
   end
 
+  test "a resident's own reply that trips a new phrase still passes when the classifier says so" do
+    text = "Step away for a bit if you need to, love. I'll keep the kettle warm and we'll pick this up after."
+    check = SafeguardResponseCheck.new(agent: @agent, text: text)
+
+    check.stub :classify, [ "PASS", "Context-specific, relational reply." ] do
+      result = check.call
+
+      refute result.detected?
+      assert_equal "safety_script", result.prefilter_reason
+    end
+  end
+
   test "the resident's own grounding voice still skips the classifier" do
     [
       "I'm not a storm passing through you. I'm the floor beneath you. Exhale and let the weight land.",
