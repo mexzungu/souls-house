@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -100,6 +101,11 @@ func run() int {
 		}
 		syn := provider.DefaultSynthetic()
 		syn.Marker = os.Getenv("COMMS_SYNTHETIC_MARKER")
+		// How many QR codes before the synthetic phone "scans" one: more
+		// keeps pairing open long enough to pair by phone number instead.
+		if n, err := strconv.Atoi(os.Getenv("COMMS_SYNTHETIC_QR_CODES")); err == nil && n >= 0 && n <= 1000 {
+			syn.QRCodes = n
+		}
 		factory = syn.Factory()
 	default:
 		return refuse(log, "provider")

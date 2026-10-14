@@ -26,6 +26,7 @@ const MaxCommandBytes = 16 << 10
 type Commands interface {
 	StartPairing(ctx context.Context, ref, secret string, version int64) error
 	Unpair(ctx context.Context, ref string) error
+	PairPhone(ctx context.Context, ref, phone string, attempt int64) error
 }
 
 type Handler struct {
@@ -34,8 +35,9 @@ type Handler struct {
 	Log      *slog.Logger
 }
 
-// ServeHTTP: POST /connections/{ref}/{start_pairing|unpair}, GET /healthz.
-// Bodies are never logged; refusals log a fixed code.
+// ServeHTTP: POST /connections/{ref}/{start_pairing|unpair|pair_phone},
+// GET /healthz. Bodies (which can carry a secret or a phone number) are
+// never logged; refusals log a fixed code.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -47,7 +49,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref, op := parts[1], parts[2]
-	if op != "start_pairing" && op != "unpair" {
+	if op != "start_pairing" && op != "unpair" && op != "pair_phone" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_operation"})
 		return
 	}
@@ -93,6 +95,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "unpaired"})
+	case "pair_phone":
+		// Accepted, not answered: the code (or why there is none) follows
+		// as a signed event, as QR codes do.
+		if !ids.ValidE164(cmd.PhoneNumber) {
+			h.refuse(w, op, "bad_phone_number", http.StatusUnprocessableEntity)
+			return
+		}
+		if cmd.Attempt < 1 {
+			h.refuse(w, op, "bad_attempt", http.StatusUnprocessableEntity)
+			return
+		}
+		err := h.Commands.PairPhone(ctx, ref, strings.TrimPrefix(cmd.PhoneNumber, "+"), cmd.Attempt)
+		switch {
+		case errors.Is(err, worker.ErrStaleAttempt):
+			h.refuse(w, op, "stale_attempt", http.StatusConflict)
+		case errors.Is(err, worker.ErrNotPairing):
+			h.refuse(w, op, "not_pairing", http.StatusConflict)
+		case err != nil:
+			h.refuse(w, op, "pair_phone_failed", http.StatusInternalServerError)
+		default:
+			writeJSON(w, http.StatusAccepted, map[string]string{"status": "requested"})
+		}
 	}
 }
 

@@ -159,7 +159,48 @@ class CommsWhatsappConnectorE2eTest < ActionDispatch::IntegrationTest
     assert_not Dir.exist?(File.join(@data, connection.public_id))
   end
 
+  # WhatsApp's "Link with phone number instead", through the real binary:
+  # the owner's number goes to the connector in the signed pair_phone
+  # command, the synthetic session answers (after its first QR, as
+  # whatsmeow requires) with a code, the connector posts it signed, and the
+  # owner's pairing endpoint serves it as XXXX-XXXX. The number reaches
+  # neither log.
+  test "the owner pairs by phone number: the code comes back through the connector" do
+    restart_connector("COMMS_SYNTHETIC_QR_CODES" => "150") # stays pairing for ~30 s
+    rails_log_start = File.size?(Rails.root.join("log/test.log")).to_i
+    sign_in @owner
+    post account_service_connections_path(@account), params: { provider: "whatsapp", management_scope: "personal" }
+    connection = @account.service_connections.where(provider: "whatsapp").order(:id).last
+    wait_until("the first QR") { connection.reload.pairing_qr.present? }
+
+    post phone_account_service_connection_pairing_path(@account, connection.public_id),
+         params: { phone: "+44 7700 900987", attempt: 1 }, as: :json
+    assert_response :accepted
+    wait_until("the phone code") { connection.reload.pairing_phone_code.present? }
+
+    get account_service_connection_pairing_path(@account, connection.public_id)
+    assert_equal "SYNT-HABC", response.parsed_body.dig("phone_code", "code")
+    assert_equal "code", response.parsed_body.dig("phone", "step")
+
+    delete account_service_connection_path(@account, connection.public_id)
+    connector_log = File.read(@connector_log)
+    assert_includes connector_log, "pair_phone", "connector log captured"
+    rails_log = File.binread(Rails.root.join("log/test.log"), nil, rails_log_start).to_s
+    assert_includes rails_log, "pairing/phone", "rails log captured"
+    [ "7700900987", "7700 900987" ].each do |number|
+      assert_not_includes connector_log, number
+      assert_not_includes rails_log, number
+    end
+  end
+
   private
+
+  def restart_connector(extra_env)
+    Process.kill("TERM", @connector)
+    Process.wait(@connector)
+    @connector = spawn_connector(extra_env)
+    wait_for_connector
+  end
 
   def whatsapp_connection
     attributes = Services::Definition.fetch("whatsapp").adapter.connection_attributes(credentials: {}, user: @owner)
@@ -170,7 +211,7 @@ class CommsWhatsappConnectorE2eTest < ActionDispatch::IntegrationTest
     )
   end
 
-  def spawn_connector
+  def spawn_connector(extra_env = {})
     env = {
       "COMMS_STORE_KEY" => (@store_key ||= Base64.strict_encode64(SecureRandom.bytes(32))),
       "COMMS_COMMAND_KEY" => @command_key,
@@ -180,7 +221,7 @@ class CommsWhatsappConnectorE2eTest < ActionDispatch::IntegrationTest
       "COMMS_LISTEN" => "127.0.0.1:#{@connector_port}", "COMMS_DATA_DIR" => @data,
       "COMMS_PROVIDER" => "synthetic", "COMMS_ALLOW_SYNTHETIC" => "1", "COMMS_SYNTHETIC_MARKER" => CANARY,
       "GOTRACEBACK" => "none"
-    }
+    }.merge(extra_env)
     Process.spawn(env, @bin, unsetenv_others: true, out: @connector_log, err: @connector_log)
   end
 

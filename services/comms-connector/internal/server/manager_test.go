@@ -237,7 +237,7 @@ func TestRestartKeepsMessagesTheOldPairingAcknowledged(t *testing.T) {
 
 	// The new pairing's device has seen only one message; the other
 	// fourteen exist only in the old outbox.
-	r.syn.Chats, r.syn.MessagesPerChat = 1, 1
+	r.syn.SetEvents(1, 1) // the old session may still be reading them (-race)
 	r.rails.expectAttempt(ref, secret, 2)
 	if err := m.StartPairing(context.Background(), ref, secret, 2); err != nil {
 		t.Fatal(err)

@@ -17,7 +17,7 @@ require "net/http"
 # intent is logged and :not_configured returned.
 module CommsConnector
 
-  COMMANDS = %w[start_pairing unpair].freeze
+  COMMANDS = %w[start_pairing unpair pair_phone].freeze
   WHATSAPP_URL_ENV = "COMMS_WHATSAPP_CONNECTOR_URL".freeze
   # Everything a WhatsApp command needs; the catalog hides WhatsApp until all
   # of it is set.
@@ -49,6 +49,15 @@ module CommsConnector
 
   def unpair(connection)
     command(connection, "unpair", url: ENV[WHATSAPP_URL_ENV].presence)
+  end
+
+  # WhatsApp's "Link with phone number instead": ask the connection's
+  # pairing session for a code for this number (E.164, already validated)
+  # in this attempt. The connector accepts at once; the code follows as a
+  # pairing.phone_code event. The number travels only in this signed body,
+  # over mutual TLS; command logs only name the operation.
+  def pair_phone(connection, phone_number, attempt:)
+    command(connection, "pair_phone", url: ENV[WHATSAPP_URL_ENV].presence, phone_number:, attempt:)
   end
 
   # Unpair, raising NotConfigured instead of returning :not_configured, for

@@ -37,11 +37,29 @@ type qrEvent struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type phoneCodeFailedEvent struct {
+	Type   string `json:"type"`
+	Reason string `json:"reason"`
+}
+
 func encodeQR(code string, issuedAt, expiresAt time.Time) ([]byte, error) {
+	return encodeCode("pairing.qr", code, issuedAt, expiresAt)
+}
+
+// encodePhoneCode: the phone pairing code, shaped as a QR event.
+func encodePhoneCode(code string, issuedAt, expiresAt time.Time) ([]byte, error) {
+	return encodeCode("pairing.phone_code", code, issuedAt, expiresAt)
+}
+
+func encodePhoneCodeFailed(reason string) ([]byte, error) {
+	return json.Marshal(phoneCodeFailedEvent{Type: "pairing.phone_code_failed", Reason: reason})
+}
+
+func encodeCode(typ, code string, issuedAt, expiresAt time.Time) ([]byte, error) {
 	// Rails orders codes by issued_at ("an older code never replaces a
 	// newer one") in a microsecond column, so whole seconds would make two
 	// codes issued in the same second look like a replay.
-	return json.Marshal(qrEvent{Type: "pairing.qr", Code: code,
+	return json.Marshal(qrEvent{Type: typ, Code: code,
 		IssuedAt:  issuedAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano),
 		ExpiresAt: expiresAt.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)})
 }

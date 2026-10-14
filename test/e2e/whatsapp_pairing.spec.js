@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { expect, test } from '@playwright/test';
 import QRCode from 'qrcode';
 
@@ -105,6 +106,9 @@ test('the owner scans rotating WhatsApp codes, restarts after expiry and sees th
     const countdown = card.getByTestId('whatsapp-qr-countdown');
     await expect(pairing).toContainText('Waiting for a pairing code from WhatsApp.');
     await expect(card.getByRole('button', { name: 'Restart pairing' })).toBeVisible();
+    // A desktop leads with the QR and offers the phone number instead.
+    await expect(card.getByRole('button', { name: 'Use a phone number instead' })).toBeVisible();
+    await expect(card.getByLabel('Phone number')).toHaveCount(0);
 
     // First code.
     const start = Date.now();
@@ -228,6 +232,186 @@ test('another member of the account can neither see nor fetch the WhatsApp code'
     expect(await fetched.text()).not.toContain(code);
   } finally {
     await context.close();
+    expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
+  }
+});
+
+// WhatsApp's "Link with phone number instead". The connector is not running
+// here, so the test plays it: once the owner has asked for a code, it signs
+// and posts the pairing.phone_code event the connector would.
+function phoneCodeEvent(code, issuedAt, lifetimeMs) {
+  return { type: 'pairing.phone_code', code, issued_at: iso(issuedAt), expires_at: iso(issuedAt + lifetimeMs) };
+}
+
+// Both Rails logs of the e2e server, from where they are now.
+function logReader() {
+  const files = ['log/test.log', 'log/playwright-e2e.log'].filter((file) => existsSync(file));
+  const starts = new Map(files.map((file) => [file, statSync(file).size]));
+  return () => files.map((file) => readFileSync(file).subarray(starts.get(file)).toString('utf8')).join('\n');
+}
+
+const PHONE_DIGITS = '7700900123';
+
+test('on a phone, the owner links WhatsApp with a code instead of a QR', async ({ browser, request }, testInfo) => {
+  test.setTimeout(90_000);
+  const runId = `whatsapp-phone-${Date.now()}`;
+  const response = await request.post('/test/e2e/setup', { data: { run_id: runId, whatsapp: true } });
+  expect(response.ok()).toBe(true);
+  const setup = await response.json();
+  const connection = setup.whatsapp;
+  const pairingUrl = `/accounts/${setup.account_param}/service_connections/${connection.id}/pairing`;
+  const logs = logReader();
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  try {
+    await logIn(page, setup.primary_user.email, setup.password);
+    await page.goto(`/accounts/${setup.account_param}/integrations`);
+    const card = page.getByRole('article').filter({ hasText: 'WhatsApp' });
+    const phoneInput = card.getByLabel('Phone number');
+
+    // A phone leads with the phone number; the QR is one tap away.
+    await expect(phoneInput).toBeVisible();
+    await expect(card.getByRole('img', { name: 'WhatsApp pairing QR code' })).toHaveCount(0);
+    await expect(card.getByRole('button', { name: 'Scan a QR code instead' })).toBeVisible();
+
+    // A code before the owner asked for one is refused.
+    const early = await sendEvent(request, connection, phoneCodeEvent('EARL-YCD2', Date.now(), 150_000));
+    expect(early.status()).toBe(409);
+    expect((await early.json()).error).toBe('stale_phone_code');
+
+    // A number that is not international is refused, nothing asked.
+    await phoneInput.fill('07700 900123');
+    await card.getByRole('button', { name: 'Get a code' }).click();
+    await expect(card.getByRole('status')).toContainText('+ and the country code');
+
+    await phoneInput.fill('+44 7700 900123');
+    const requested = page.waitForResponse((reply) => reply.url().endsWith('/pairing/phone'));
+    await card.getByRole('button', { name: 'Get a code' }).click();
+    expect((await requested).status()).toBe(202);
+    await expect(card.getByTestId('whatsapp-phone-requesting')).toHaveText('Asking WhatsApp for a code.');
+
+    // The connector's code arrives: XXXX-XXXX, with WhatsApp's own steps.
+    expect((await sendEvent(request, connection, phoneCodeEvent('ABCD2345', Date.now(), 150_000))).status()).toBe(204);
+    await expect(card.getByTestId('whatsapp-phone-code')).toHaveText('ABCD-2345');
+    const steps = card.getByTestId('whatsapp-phone-steps');
+    await expect(steps).toContainText('Open WhatsApp and go to Settings.');
+    await expect(steps).toContainText('Tap Linked devices, then Link a device.');
+    await expect(steps).toContainText('Tap “Link with phone number instead”.');
+    await expect(steps).toContainText('Enter the code ABCD-2345.');
+    await expect(card.getByTestId('whatsapp-phone-countdown')).toHaveText(/This code expires in 2:[23]\d\./);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await card.screenshot({ path: testInfo.outputPath('whatsapp-phone-code.png') });
+
+    // The number is in no page, prop or history entry; the code is only in
+    // the owner's pairing endpoint.
+    const exposed = await page.evaluate((digits) => {
+      const text = document.documentElement.outerHTML + JSON.stringify(window.history.state ?? null);
+      return text.replace(/\s/g, '').includes(digits);
+    }, PHONE_DIGITS);
+    expect(exposed).toBe(false);
+
+    // A newer code replaces it; it runs out; the owner restarts.
+    expect((await sendEvent(request, connection, phoneCodeEvent('WXYZ2345', Date.now(), 6_000))).status()).toBe(204);
+    await expect(card.getByTestId('whatsapp-phone-code')).toHaveText('WXYZ-2345');
+    await expect(card.getByTestId('whatsapp-phone-countdown')).toHaveText(
+      'This code expired. Restart pairing for a new one.',
+      { timeout: 12_000 }
+    );
+    await card.screenshot({ path: testInfo.outputPath('whatsapp-phone-expired.png') });
+    const restarted = page.waitForResponse((reply) => reply.url().endsWith('/pairing/restart'));
+    await card.getByRole('button', { name: 'Restart pairing' }).click();
+    expect((await restarted).status()).toBe(200);
+    await expect(phoneInput).toBeVisible();
+    await expect(card.getByTestId('whatsapp-phone-code')).toHaveCount(0);
+
+    // The old attempt's code, still in flight, is refused.
+    const late = await sendEvent(request, connection, phoneCodeEvent('LATE-CD23', Date.now(), 150_000));
+    expect(late.status()).toBe(409);
+    expect((await late.json()).error).toBe('stale_attempt');
+    connection.attempt = 2;
+
+    // The new attempt: number, code, and WhatsApp reports the link.
+    await phoneInput.fill('+44 7700 900123');
+    const again = page.waitForResponse((reply) => reply.url().endsWith('/pairing/phone'));
+    await card.getByRole('button', { name: 'Get a code' }).click();
+    expect((await again).status()).toBe(202);
+    expect((await sendEvent(request, connection, phoneCodeEvent('NEWC-ODE2', Date.now(), 150_000))).status()).toBe(204);
+    await expect(card.getByTestId('whatsapp-phone-code')).toHaveText('NEWC-ODE2');
+    const linked = await sendEvent(request, connection, {
+      type: 'status.changed',
+      seq: 1,
+      status: 'connected',
+      identity: { user_id: '447700900555', display_name: 'Ada Example' },
+    });
+    expect(linked.status()).toBe(200);
+    const status = card.getByTestId('whatsapp-status');
+    await expect(status).toContainText('Linked as');
+    await expect(status).toContainText('Ada Example');
+    await expect(card.getByTestId('whatsapp-pairing')).toHaveCount(0);
+    const after = await (await page.request.get(pairingUrl)).json();
+    expect(after.phone_code).toBeNull();
+    await card.screenshot({ path: testInfo.outputPath('whatsapp-phone-linked.png') });
+
+    // Neither the number nor a code reached the Rails logs.
+    const written = logs();
+    expect(written).toContain('pairing/phone');
+    for (const secret of [PHONE_DIGITS, '7700 900123', 'ABCD2345', 'ABCD-2345', 'NEWCODE2']) {
+      expect(written).not.toContain(secret);
+    }
+  } finally {
+    await context.close();
+    expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
+  }
+});
+
+test('another member of the account can neither see nor fetch the phone code', async ({ browser, request }) => {
+  const runId = `whatsapp-phone-other-${Date.now()}`;
+  const response = await request.post('/test/e2e/setup', { data: { run_id: runId, whatsapp: true } });
+  expect(response.ok()).toBe(true);
+  const setup = await response.json();
+  const connection = setup.whatsapp;
+  const pairingUrl = `/accounts/${setup.account_param}/service_connections/${connection.id}/pairing`;
+  const code = `${randomBytes(4).toString('hex').toUpperCase().slice(0, 4)}PRIV`;
+  const ownerContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const memberContext = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  try {
+    const owner = await ownerContext.newPage();
+    await logIn(owner, setup.primary_user.email, setup.password);
+    await owner.goto(`/accounts/${setup.account_param}/integrations`);
+    const ownerCard = owner.getByRole('article').filter({ hasText: 'WhatsApp' });
+    await ownerCard.getByLabel('Phone number').fill('+44 7700 900123');
+    await ownerCard.getByRole('button', { name: 'Get a code' }).click();
+    await expect(ownerCard.getByTestId('whatsapp-phone-requesting')).toBeVisible();
+    expect((await sendEvent(request, connection, phoneCodeEvent(code, Date.now(), 150_000))).status()).toBe(204);
+    await expect(ownerCard.getByTestId('whatsapp-phone-code')).toHaveText(`${code.slice(0, 4)}-${code.slice(4)}`);
+
+    const member = await memberContext.newPage();
+    await logIn(member, setup.secondary_user.email, setup.password);
+    await member.goto(`/accounts/${setup.account_param}/integrations`);
+    await member.waitForLoadState('networkidle');
+    await expect(member.getByRole('heading', { name: 'Integrations', level: 1 })).toBeVisible();
+    await expect(member.getByTestId('whatsapp-phone-code')).toHaveCount(0);
+    await expect(member.getByLabel('Phone number')).toHaveCount(0);
+    expect(await member.content()).not.toContain(code.slice(0, 4) + '-' + code.slice(4));
+
+    const fetched = await member.request.get(pairingUrl, { headers: { Accept: 'application/json' } });
+    expect(fetched.status()).toBe(404);
+    expect(await fetched.text()).not.toContain(code);
+    // Nor can they ask for one, posting as the page itself would.
+    const asked = await member.evaluate(async (url) => {
+      const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+      const reply = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-CSRF-Token': token },
+        body: JSON.stringify({ phone: '+44 7700 900999', attempt: 1 }),
+      });
+      return reply.status;
+    }, `${pairingUrl}/phone`);
+    expect(asked).toBe(404);
+  } finally {
+    await ownerContext.close();
+    await memberContext.close();
     expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
   }
 });

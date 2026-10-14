@@ -12,5 +12,10 @@ var connRef = regexp.MustCompile(`^svc_[1-9][0-9]{0,18}$`)
 // Command ids are SecureRandom.hex(16) on the Rails side.
 var commandID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
+// E.164 phone numbers, as Rails normalises them for pair_phone: "+", a
+// country code that does not start with 0, at most 15 digits in all.
+var e164 = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
+
 func ValidConnectionRef(s string) bool { return connRef.MatchString(s) }
 func ValidCommandID(s string) bool     { return commandID.MatchString(s) }
+func ValidE164(s string) bool          { return e164.MatchString(s) }

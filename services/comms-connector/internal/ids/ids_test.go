@@ -25,3 +25,17 @@ func TestCommandIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestE164(t *testing.T) {
+	for _, ok := range []string{"+447700900123", "+12025550123", "+3361234567", "+999999999999999"} {
+		if !ValidE164(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", "447700900123", "+0447700900123", "+44 7700 900123", "+44-7700900123",
+		"+12345", "+1234567890123456", "+44770090012a", "+447700900123\n", "++447700900123"} {
+		if ValidE164(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

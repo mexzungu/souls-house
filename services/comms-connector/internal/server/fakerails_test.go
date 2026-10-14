@@ -167,6 +167,11 @@ func (f *fakeRails) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.qrs[ref] = append(f.qrs[ref], ev["code"].(string))
+	case "pairing.phone_code", "pairing.phone_code_failed":
+		if f.status[ref] != "pairing" {
+			reply(w, 409, map[string]string{"error": "connection_not_accepting"})
+			return
+		}
 	case "status.changed":
 		switch ev["status"] {
 		case "connected":

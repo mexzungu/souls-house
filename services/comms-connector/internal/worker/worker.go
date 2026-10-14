@@ -59,6 +59,10 @@ const (
 var (
 	ErrStaleSecret = errors.New("callback secret version is older than the one held")
 	ErrNoSecret    = errors.New("connection has no callback secret")
+	// ErrStaleAttempt: a pair_phone command for another pairing attempt.
+	ErrStaleAttempt = errors.New("command is for another pairing attempt")
+	// ErrNotPairing: a pair_phone command for a connection that is not pairing.
+	ErrNotPairing = errors.New("connection is not pairing")
 )
 
 // Rails is what the worker needs from rails.Client.
@@ -91,7 +95,9 @@ type Worker struct {
 	attempt int64 // the secret version: which pairing attempt this is
 	session provider.Session
 	cancel  context.CancelFunc
+	ctx     context.Context // the running session's; nil when stopped
 	done    chan struct{}
+	bg      sync.WaitGroup // phone code requests; Stop waits for them
 	wake    chan struct{}
 	state   string // idle | pairing | connected | logged_out | not_paired
 	revoked sync.Once
@@ -239,7 +245,7 @@ func (w *Worker) Start(pair bool) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w.session, w.cancel, w.done = session, cancel, make(chan struct{})
+	w.session, w.cancel, w.ctx, w.done = session, cancel, ctx, make(chan struct{})
 	if pair {
 		w.state = "pairing"
 	} else {
@@ -274,13 +280,48 @@ func (w *Worker) runSession(ctx context.Context, s provider.Session, pair bool) 
 func (w *Worker) Stop() {
 	w.mu.Lock()
 	cancel, done := w.cancel, w.done
-	w.cancel, w.done = nil, nil
+	w.cancel, w.done, w.ctx = nil, nil, nil
 	w.mu.Unlock()
 	if cancel == nil {
 		return
 	}
 	cancel()
 	<-done
+	w.bg.Wait()
+}
+
+// PairPhone asks the pairing session for a phone pairing code, for the
+// pairing attempt the command names. It returns at once; the code (or the
+// failure) goes to Rails as an event, like a QR. The number is passed on
+// and kept nowhere: not in the store, not in a log.
+func (w *Worker) PairPhone(phone string, attempt int64) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if attempt != w.attempt {
+		return ErrStaleAttempt
+	}
+	if w.cancel == nil || w.state != "pairing" {
+		return ErrNotPairing
+	}
+	pp, ok := w.session.(provider.PhonePairer)
+	if !ok {
+		return ErrNotPairing
+	}
+	ctx := w.ctx
+	// Added under w.mu while running, so before any Stop can Wait.
+	w.bg.Add(1)
+	go func() {
+		defer w.bg.Done()
+		err := pp.RequestPhoneCode(ctx, (*sink)(w), phone)
+		switch {
+		case err == nil, errors.Is(err, context.Canceled):
+		case errors.Is(err, provider.ErrNotPairing):
+			w.cfg.Log.Info("phone_code", slog.String("refused", "not_pairing"))
+		default:
+			w.cfg.Log.Warn("phone_code", slog.String("reason", "request_failed"))
+		}
+	}()
+	return nil
 }
 
 // Close stops the worker, closes the store and releases the lease.
@@ -514,14 +555,41 @@ func (s *sink) QR(ctx context.Context, code string, issuedAt, expiresAt time.Tim
 	if err != nil {
 		return err
 	}
+	return s.postLive(ctx, raw, expiresAt, "qr")
+}
+
+// PhoneCode posts a phone pairing code like a QR: at once, retried until it
+// expires, never stored or logged.
+func (s *sink) PhoneCode(ctx context.Context, code string, issuedAt, expiresAt time.Time) error {
+	raw, err := encodePhoneCode(code, issuedAt, expiresAt)
+	if err != nil {
+		return err
+	}
+	return s.postLive(ctx, raw, expiresAt, "phone_code")
+}
+
+// PhoneCodeFailed tells Rails why no phone code came (a fixed word), retried
+// for a minute.
+func (s *sink) PhoneCodeFailed(ctx context.Context, reason string) error {
+	raw, err := encodePhoneCodeFailed(reason)
+	if err != nil {
+		return err
+	}
+	return s.postLive(ctx, raw, time.Now().Add(time.Minute), "phone_code_failed")
+}
+
+// postLive posts an unqueued pairing event, retrying until the deadline.
+// raw is cleared once stamped.
+func (s *sink) postLive(ctx context.Context, raw []byte, until time.Time, what string) error {
 	w := s.w()
 	w.mu.Lock()
 	secret, attempt := w.secret, w.attempt
 	w.mu.Unlock()
 	body := stamp(raw, 0, attempt)
 	clear(raw)
+	defer clear(body)
 	backoff := w.cfg.MinBackoff
-	for time.Now().Before(expiresAt) {
+	for time.Now().Before(until) {
 		reply, err := w.cfg.Rails.Post(ctx, w.cfg.Ref, secret, body)
 		if err == nil && isRevoked(reply) {
 			w.revoke()
@@ -531,7 +599,7 @@ func (s *sink) QR(ctx context.Context, code string, issuedAt, expiresAt time.Tim
 			// Accepted, or refused as stale/expired/not pairing: either way
 			// resending this code cannot help.
 			if reply.Status >= 300 {
-				w.cfg.Log.Info("qr", slog.String("refused", reply.Error))
+				w.cfg.Log.Info(what, slog.String("refused", reply.Error))
 			}
 			return nil
 		}
