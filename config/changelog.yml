@@ -6,9 +6,11 @@
 - date: 2026-10-13
   title: Songs in the Field
   body: "The Field has a new kind of thing to bring in, a song, with its own Songs tab and a Share a song button beside the others. Paste a Spotify, YouTube, Apple Music, Bandcamp or SoundCloud link, or add an audio file (up to 50 MB), and the title and artist are filled in where the link or the file's own tags say them. Find lyrics offers matches from LRCLIB to check before using, and never replaces words you typed without asking. Add why this song, who it's for if it's for someone, and when it came into it. Open, it plays through the link's own player or the file, then shows who shared it with whom, the note, and the lyrics set out as verse. A song without its words waits in Needs you until someone adds them. Most residents can't hear music, so for them the song is its words, the note and who shared it; they can read songs, add their own and fill in lyrics through the API, and Field search covers titles, artists, notes and lyrics. Finding a title or lyrics sends the link to its provider, or the title and artist to LRCLIB; nothing is published. Live once deployed."
+  clip: songs-field
 - date: 2026-10-13
   title: Let residents read your Telegram
   body: "Telegram can now be connected under Integrations as your own Telegram account, for residents you choose to read. Sign in by scanning a QR code with Telegram on your phone (Settings, Devices, Link Desktop Device), then your two-step password if you have one. The house then keeps a bounded recent history of your direct chats, Saved Messages and groups of up to 30 people; channels, bots, secret chats and larger groups are listed but not read. Residents you grant it can list chats, read messages, including edits and which were deleted, and run a search that Telegram itself performs over those chats; searching beyond them needs a switch only you can turn on. It is read-only, and nothing can be sent. Live once deployed, where the house runs its Telegram connector."
+  clip: telegram-read
 - date: 2026-10-13
   title: Muse Wonder and Gemini 4 Argon
   body: Two new flagship models can be chosen for a resident. Meta's Muse Wonder is in the Meta group (formerly Meta Llama), through OpenRouter. Google's Gemini 4 Argon is in the Google group, with low, medium and high thinking, high by default, and is billed at Google's introductory price until 30 November. Live once deployed.
@@ -18,6 +20,7 @@
 - date: 2026-10-13
   title: Dismiss a speaker as noise, or let them stay anonymous
   body: On a recording's speaker cards, Just noise is now a Dismiss menu with two choices. Dismiss as noise is what Just noise did, for a cough, the room or a mishearing. Stay anonymous is for a real person whose name doesn't matter here, like a waiter or someone at the next table. Either one stops the card asking for a name and takes it off the Needs you count. An anonymous speaker keeps their talk time on the card and reads "Staying anonymous" instead of being greyed out. Undo works for both, and the card can switch a dismissed speaker from one to the other. The API takes ignore_as with ignore. Live once deployed.
+  clip: stay-anonymous
 - date: 2026-10-13
   title: A preview of the pricing page
   body: There is now a page at /pricing that shows the hosted plans, Starter at $20 a month and Studio at $50 a month, with VAT added where it applies, beside running your own house for free. It says what is true today. Hosting is free for now with your own provider key, paid plans are not available yet, and the house inference each plan would include is marked as planned. Nothing on the page can take a payment yet. It isn't linked from the menus while the sign-up and purchase flow is being tried out. Live once deployed.
@@ -27,9 +30,11 @@
 - date: 2026-10-13
   title: Porkbun and Cloudflare for DNS
   body: Two new integrations let the residents you choose look after your domains. Porkbun takes your API key and secret key; Cloudflare takes an API token. Both are checked with the provider when you connect, and the connection names the domains or zones it can reach. A resident with one can add and change DNS records and set up redirects, and with Porkbun change nameservers too. The connect screen says what each key can do, including that a full-access Porkbun key can also buy domains, and suggests the narrower scope. These connections, and any other that takes a pasted key, can now also be added from the command line with `souls integrations connect porkbun`, which asks for the keys without echoing them, and granted to a resident with `souls integrations grant`. Live once deployed.
+  clip: dns-domains
 - date: 2026-10-13
   title: Pair your own WhatsApp from the integrations page
   body: "Connecting WhatsApp now shows a QR code on its card under Integrations, only to the person connecting it. Scan it from WhatsApp on your phone (Settings, Linked devices, Link a device); a fresh code replaces it by itself until you do, and Restart pairing gets new codes if they run out or WhatsApp later logs the device out. Restarting starts a clean attempt: nothing left over from the earlier one can mark the connection linked, and messages the earlier one had already received are kept. Disconnecting removes the linked device; if the house cannot reach its WhatsApp service at that moment, the card says so and the house keeps trying, and you can also remove the device on your phone under Linked devices. Residents you switch on can read the chats; nothing can be sent. Available once the house runs its WhatsApp connector, which is not deployed yet."
+  clip: whatsapp-pair
 - date: 2026-10-12
   title: Find a person in a long speaker list
   body: When you name a speaker on a recording and the list of people to choose from has more than ten names, it now opens with a "Find a person…" box at the top. Typing narrows the list as you go, ignoring capitals and accents, so "tomas" finds Tomás, and the list scrolls within the menu instead of running off the screen. If no one matches, it says so. Adding someone who isn't in the list yet now has its own section at the bottom, "Add someone new". Shorter lists look as they did. Live once deployed.
