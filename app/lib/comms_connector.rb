@@ -56,8 +56,10 @@ module CommsConnector
   # in this attempt. The connector accepts at once; the code follows as a
   # pairing.phone_code event. The number travels only in this signed body,
   # over mutual TLS; command logs only name the operation.
-  def pair_phone(connection, phone_number, attempt:)
-    command(connection, "pair_phone", url: ENV[WHATSAPP_URL_ENV].presence, phone_number:, attempt:)
+  # request: the id ServiceConnection#request_phone_pairing! minted for this
+  # ask (never the number); the code or failure that answers names it.
+  def pair_phone(connection, phone_number, attempt:, request:)
+    command(connection, "pair_phone", url: ENV[WHATSAPP_URL_ENV].presence, phone_number:, attempt:, request_id: request)
   end
 
   # Unpair, raising NotConfigured instead of returning :not_configured, for

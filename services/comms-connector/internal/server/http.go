@@ -26,7 +26,7 @@ const MaxCommandBytes = 16 << 10
 type Commands interface {
 	StartPairing(ctx context.Context, ref, secret string, version int64) error
 	Unpair(ctx context.Context, ref string) error
-	PairPhone(ctx context.Context, ref, phone string, attempt int64) error
+	PairPhone(ctx context.Context, ref, phone string, attempt int64, request string) error
 }
 
 type Handler struct {
@@ -106,7 +106,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.refuse(w, op, "bad_attempt", http.StatusUnprocessableEntity)
 			return
 		}
-		err := h.Commands.PairPhone(ctx, ref, strings.TrimPrefix(cmd.PhoneNumber, "+"), cmd.Attempt)
+		if !ids.ValidPhoneRequest(cmd.PhoneRequest) {
+			h.refuse(w, op, "bad_request_id", http.StatusUnprocessableEntity)
+			return
+		}
+		err := h.Commands.PairPhone(ctx, ref, strings.TrimPrefix(cmd.PhoneNumber, "+"), cmd.Attempt, cmd.PhoneRequest)
 		switch {
 		case errors.Is(err, worker.ErrStaleAttempt):
 			h.refuse(w, op, "stale_attempt", http.StatusConflict)

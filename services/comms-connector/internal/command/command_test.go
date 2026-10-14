@@ -156,18 +156,19 @@ func TestRefusalDoesNotConsumeID(t *testing.T) {
 	}
 }
 
-// pair_phone carries the number and the attempt; String shows neither, and
-// the attempt must be a positive JSON integer.
+// pair_phone carries the number, the attempt and the phone request id;
+// String shows none of them, and the attempt must be a positive JSON
+// integer.
 func TestPairPhoneFields(t *testing.T) {
 	sign := func(body string) (string, []byte) {
 		return sig.SignCommand(key, "k1", "svc_42", "pair_phone", cmdID, strconv.FormatInt(issued, 10), []byte(body)), []byte(body)
 	}
 	body := func(attempt string) string {
-		return `{"phone_number":"+447700900123","attempt":` + attempt + `,"connection":"svc_42","operation":"pair_phone","command_id":"` + cmdID + `","issued_at":1791000000}`
+		return `{"phone_number":"+447700900123","request_id":"0123456789abcdef","attempt":` + attempt + `,"connection":"svc_42","operation":"pair_phone","command_id":"` + cmdID + `","issued_at":1791000000}`
 	}
 	s, raw := sign(body("4"))
 	cmd, err := verifier(issued-100, issued+5).Verify("svc_42", "pair_phone", headers(s, cmdID, issued), raw)
-	if err != nil || cmd.PhoneNumber != "+447700900123" || cmd.Attempt != 4 {
+	if err != nil || cmd.PhoneNumber != "+447700900123" || cmd.Attempt != 4 || cmd.PhoneRequest != "0123456789abcdef" {
 		t.Fatalf("%+v %v", cmd.Attempt, err)
 	}
 	if strings.Contains(cmd.String(), "7700") {

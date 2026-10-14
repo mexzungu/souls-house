@@ -59,15 +59,37 @@
     return () => query.removeEventListener?.('change', change);
   });
 
-  function take(json) {
+  // Responses can arrive out of order: a poll sent before the owner
+  // restarted, or sent a number, may answer after the change's own response
+  // and must not undo it (bring back the old attempt, an old code, the old
+  // step). `changes` counts the owner's changes; a poll is taken only if no
+  // change began after it was sent, and a change's response only if no later
+  // change began. `run` names the polling run, so nothing that answers after
+  // polling has stopped is taken. Neither is reactive state. And attempts
+  // only go up: a response for a lower attempt than the one shown is never
+  // taken.
+  let changes = 0;
+  let run = 0;
+
+  function take(json, since = changes) {
+    if (since !== changes) return false;
+    if (json.attempt != null && attempt != null && json.attempt < attempt) return false;
     status = json.status;
     qr = newerQr(qr, json.qr, Date.now());
     phone = json.phone ?? {};
     phoneCode = json.phone_code ?? null;
     attempt = json.attempt ?? attempt;
+    return true;
   }
 
-  async function poll() {
+  // Called as a change starts; its result takes the change's response.
+  function beginChange() {
+    const mine = ++changes;
+    return (json) => take(json, mine);
+  }
+
+  async function poll(token = run) {
+    const since = changes;
     let response;
     try {
       response = await fetch(`${base}/pairing`, {
@@ -78,6 +100,7 @@
     } catch {
       return true;
     }
+    if (token !== run) return false;
     if (response.status === 404) {
       notOwner = true;
       loaded = true;
@@ -85,8 +108,10 @@
     }
     if (!response.ok) return true;
     const json = await response.json();
+    if (token !== run) return false;
     loaded = true;
-    take(json);
+    // Older than a change since: drop it and poll again.
+    if (!take(json, since)) return true;
     if (json.status === 'pairing') return true;
     // Linked, logged out or failed: the card's header and the rest of the
     // page follow the connection's new status.
@@ -100,15 +125,15 @@
       loaded = true;
       return;
     }
-    let stopped = false;
+    const token = ++run;
     let timer;
     const tick = async () => {
-      const again = await poll();
-      if (!stopped && again) timer = setTimeout(tick, pollInterval);
+      const again = await poll(token);
+      if (token === run && again) timer = setTimeout(tick, pollInterval);
     };
     untrack(tick);
     return () => {
-      stopped = true;
+      run += 1;
       clearTimeout(timer);
     };
   });
@@ -123,11 +148,12 @@
   async function restart() {
     busy = true;
     notice = null;
+    const commit = beginChange();
     const result = await postLoginJson(`${base}/pairing/restart`);
     busy = false;
     if (result.ok) {
       qr = null;
-      take({ phone: {}, phone_code: null, ...result.body, status: result.body.status || 'pairing' });
+      commit({ phone: {}, phone_code: null, ...result.body, status: result.body.status || 'pairing' });
       router.reload();
     } else {
       notice = result.body.error || 'Something went wrong. Try again.';
@@ -158,7 +184,7 @@
         failure={phone.error}
         secondsLeft={phoneSecondsLeft}
         bind:busy
-        onrequested={take}
+        begin={beginChange}
         onstale={poll}
         onnotice={(text) => (notice = text)} />
     {:else if pairing}

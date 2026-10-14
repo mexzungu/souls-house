@@ -96,10 +96,10 @@ func (r *recorder) Unpair(_ context.Context, ref string) error {
 	return nil
 }
 
-func (r *recorder) PairPhone(_ context.Context, ref, phone string, attempt int64) error {
+func (r *recorder) PairPhone(_ context.Context, ref, phone string, attempt int64, request string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, "pair_phone "+ref+" "+phone+" "+strconv.FormatInt(attempt, 10))
+	r.calls = append(r.calls, "pair_phone "+ref+" "+phone+" "+strconv.FormatInt(attempt, 10)+" "+request)
 	return r.phoneErr
 }
 
@@ -257,29 +257,45 @@ func TestPairPhoneCommand(t *testing.T) {
 	c := r.client(r.rails)
 	const phone = "+447700900123"
 	status, body, err := do(t, c, r.command(t, "svc_7", "pair_phone",
-		map[string]any{"phone_number": phone, "attempt": 2}, "test-command-key"))
+		map[string]any{"phone_number": phone, "attempt": 2, "request_id": "0123456789abcdef"}, "test-command-key"))
 	if err != nil || status != 202 || !strings.Contains(body, `"requested"`) {
 		t.Fatalf("pair_phone: %d %s %v", status, body, err)
 	}
 	for name, fields := range map[string]map[string]any{
-		"spaces":         {"phone_number": "+44 7700 900123", "attempt": 2},
-		"no plus":        {"phone_number": "447700900123", "attempt": 2},
-		"trunk zero":     {"phone_number": "+07700900123", "attempt": 2},
-		"no number":      {"attempt": 2},
-		"no attempt":     {"phone_number": phone},
-		"attempt zero":   {"phone_number": phone, "attempt": 0},
-		"attempt string": {"phone_number": phone, "attempt": "2"},
+		"spaces":         {"phone_number": "+44 7700 900123", "attempt": 2, "request_id": "0123456789abcdef"},
+		"no plus":        {"phone_number": "447700900123", "attempt": 2, "request_id": "0123456789abcdef"},
+		"trunk zero":     {"phone_number": "+07700900123", "attempt": 2, "request_id": "0123456789abcdef"},
+		"no number":      {"attempt": 2, "request_id": "0123456789abcdef"},
+		"no attempt":     {"phone_number": phone, "request_id": "0123456789abcdef"},
+		"attempt zero":   {"phone_number": phone, "attempt": 0, "request_id": "0123456789abcdef"},
+		"attempt string": {"phone_number": phone, "attempt": "2", "request_id": "0123456789abcdef"},
 	} {
 		status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone", fields, "test-command-key"))
 		if status != 422 && status != 401 {
 			t.Errorf("%s: %d %s", name, status, body)
 		}
 	}
+	// The request id is Rails' SecureRandom.hex(8): required, exactly that.
+	for name, request := range map[string]any{
+		"no request": nil, "empty": "", "upper case": "0123456789ABCDEF", "short": "0123456789abcde",
+		"long": "0123456789abcdef0", "the number": "447700900123", "a number": 1234567890123456,
+	} {
+		fields := map[string]any{"phone_number": phone, "attempt": 2}
+		if request != nil {
+			fields["request_id"] = request
+		}
+		status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone", fields, "test-command-key"))
+		// A non-string fails to decode (the verifier's 401 bad_json).
+		refused := status == 422 && strings.Contains(body, "bad_request_id") || status == 401 && strings.Contains(body, "bad_json")
+		if !refused {
+			t.Errorf("%s: %d %s", name, status, body)
+		}
+	}
 	if status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone",
-		map[string]any{"phone_number": phone, "attempt": 2}, "wrong-key")); status != 401 || !strings.Contains(body, "bad_signature") {
+		map[string]any{"phone_number": phone, "attempt": 2, "request_id": "0123456789abcdef"}, "wrong-key")); status != 401 || !strings.Contains(body, "bad_signature") {
 		t.Fatalf("wrong key: %d %s", status, body)
 	}
-	if got := strings.Join(r.rec.calls, "|"); got != "pair_phone svc_7 447700900123 2" {
+	if got := strings.Join(r.rec.calls, "|"); got != "pair_phone svc_7 447700900123 2 0123456789abcdef" {
 		t.Fatalf("calls %q", got)
 	}
 	for _, needle := range []string{"447700900123", "7700"} {
@@ -302,7 +318,7 @@ func TestPairPhoneRefusalsMapToCodes(t *testing.T) {
 		r := newTLSRig(t)
 		r.rec.phoneErr = tc.err
 		status, body, _ := do(t, r.client(r.rails), r.command(t, "svc_7", "pair_phone",
-			map[string]any{"phone_number": "+447700900123", "attempt": 1}, "test-command-key"))
+			map[string]any{"phone_number": "+447700900123", "attempt": 1, "request_id": "0123456789abcdef"}, "test-command-key"))
 		if status != tc.status || !strings.Contains(body, tc.code) {
 			t.Errorf("%v: %d %s", tc.err, status, body)
 		}

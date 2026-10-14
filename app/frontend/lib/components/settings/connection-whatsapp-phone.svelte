@@ -7,8 +7,10 @@
   // WhatsApp is on (it cannot scan a QR on its own screen): the number,
   // then the 8-character code to type into WhatsApp. The number is sent
   // once and kept nowhere, not even here; the code comes from the pairing
-  // endpoint the parent polls. onrequested(json): the pairing state after
-  // the number was accepted.
+  // endpoint the parent polls. begin(): called as the number is sent; it
+  // returns the function that takes the pairing state the server answers
+  // with, unless the owner has changed something since (the parent drops
+  // anything older than its latest change).
   let {
     base,
     attempt,
@@ -17,7 +19,7 @@
     failure = null,
     secondsLeft = 0,
     busy = $bindable(false),
-    onrequested = () => {},
+    begin = () => () => {},
     onstale = () => {},
     onnotice = () => {},
   } = $props();
@@ -33,13 +35,14 @@
     const input = event.currentTarget.elements.namedItem('phone');
     busy = true;
     onnotice(null);
+    const commit = begin();
     // The attempt this page is showing: a number never joins a newer one.
     const result = await postLoginJson(`${base}/pairing/phone`, { phone: input.value.trim(), attempt });
     busy = false;
     if (result.ok) {
       input.value = '';
       changingNumber = false;
-      onrequested(result.body);
+      commit(result.body);
     } else {
       // Refused as another attempt's (restarted meanwhile): refresh the
       // attempt so that sending again joins the current one.

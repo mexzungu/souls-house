@@ -73,13 +73,22 @@ cannot scan a QR on that screen. `pair_phone` carries `phone_number`
 it, the connector checks it again) and `attempt`, a JSON integer that must
 be the pairing attempt the connection is on (409 `stale_attempt`
 otherwise; 409 `not_pairing` for a connection that is linked, unknown or
-no longer pairing). It is accepted at once (202): the code follows as an
-event. whatsmeow can only ask for a code on a pairing connection that is
+no longer pairing), and `request_id`, Rails' id for this one ask (16
+lowercase hex characters, random, never derived from the number; 422
+`bad_request_id` otherwise). It is accepted at once (202): the code follows
+as an event naming the same `request_id`. Within one attempt the owner can
+ask again (another number, a retry, another tab): a newer `pair_phone`
+cancels the older request, and nothing the older one still reports is sent,
+in whatever order WhatsApp answers them. Rails, in turn, accepts a code or
+failure only for its latest request, so a delayed or reordered answer for a
+superseded one is refused (409 `stale_phone_code`) rather than shown or
+allowed to clear the current code. whatsmeow can only ask for a code on a pairing connection that is
 up, i.e. after its first QR, so the request waits for that (at most 30 s,
 then `not_ready`); a number sent before WhatsApp has answered is fine. The
 session keeps pushing QR codes meanwhile; either links. The code lives as
 long as the pairing connection (160 s from its first QR); if the QR codes
-run out with a code issued and unused, the connector says so (`expired`).
+run out with a code issued and unused, the connector says so (`expired`,
+naming the request that got the code).
 The number is passed to WhatsApp and kept nowhere: not in the store, not in
 a log line (the handler logs the operation and fixed refusal words only),
 and WhatsApp's own error text, which can echo it, is reduced to a fixed
@@ -102,9 +111,9 @@ signed with the connection's callback secret (`CommsSignature`):
 
 Events: `pairing.qr` (code, `issued_at`, `expires_at`; sent at once, never
 stored, retried only until it expires); `pairing.phone_code` (the same
-shape, the code as `XXXX-XXXX`) and `pairing.phone_code_failed` (`reason`:
-`phone_invalid`, `rate_limited`, `not_ready`, `expired` or `failed`), sent
-like a QR; and, through the store's outbox,
+shape, the code as `XXXX-XXXX`, plus `request_id`) and
+`pairing.phone_code_failed` (`reason`: `phone_invalid`, `rate_limited`,
+`not_ready`, `expired` or `failed`, plus `request_id`), sent like a QR; and, through the store's outbox,
 `status.changed` (`connected` with identity, `logged_out`), `chat.upsert` and
 `message.upsert` (batches of ≤ 200 and ≤ 512 KiB; a body or caption past
 64 KiB is cut). Outbox events carry a sequence number; Rails applies them

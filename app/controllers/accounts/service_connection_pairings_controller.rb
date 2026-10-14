@@ -65,14 +65,17 @@ class Accounts::ServiceConnectionPairingsController < ApplicationController
     end
     attempt = Integer(params[:attempt].to_s, exception: false)
     return render json: { error: "Reload the page and try again." }, status: :unprocessable_entity if attempt.nil?
-    unless @connection.request_phone_pairing!(attempt)
+    request = @connection.request_phone_pairing!(attempt)
+    unless request
       return render json: { error: "This pairing has moved on. Reload the page and try again." }, status: :conflict
     end
 
     begin
-      @connection.definition.adapter.pair_phone(@connection, phone, attempt:)
+      @connection.definition.adapter.pair_phone(@connection, phone, attempt:, request:)
     rescue Services::AdapterError => e
-      @connection.withdraw_phone_pairing_request!
+      # Only this request: another tab may have restarted or asked again
+      # while this one was being sent.
+      @connection.withdraw_phone_pairing_request!(attempt:, request:)
       return render json: { error: e.message }, status: :bad_gateway
     end
     audit(:request_service_phone_pairing, @connection, provider: @connection.provider)

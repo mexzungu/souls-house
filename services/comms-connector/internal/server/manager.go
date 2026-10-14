@@ -147,15 +147,16 @@ func (m *Manager) Unpair(ctx context.Context, ref string) error {
 }
 
 // PairPhone asks the connection's pairing session for a phone pairing code
-// (worker.PairPhone): only for the attempt that is pairing now.
-func (m *Manager) PairPhone(ctx context.Context, ref, phone string, attempt int64) error {
+// (worker.PairPhone): only for the attempt that is pairing now. request is
+// Rails' id for this ask; the result names it.
+func (m *Manager) PairPhone(ctx context.Context, ref, phone string, attempt int64, request string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w := m.workers[ref]
 	if w == nil {
 		return worker.ErrNotPairing
 	}
-	if err := w.PairPhone(phone, attempt); err != nil {
+	if err := w.PairPhone(phone, attempt, request); err != nil {
 		return err
 	}
 	m.configFor(ref).Log.Info("command", slog.String("op", "pair_phone"))

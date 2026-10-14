@@ -69,10 +69,12 @@ type Session struct {
 	readyOnce, endOnce sync.Once
 	requests           sync.Mutex // one phone code request at a time
 
-	mu         sync.Mutex
-	pairPhone  func(ctx context.Context, phone string) (string, error)
-	firstQR    time.Time
-	codeIssued bool
+	mu        sync.Mutex
+	pairPhone func(ctx context.Context, phone string) (string, error)
+	firstQR   time.Time
+	// codeSink is the sink of the request whose code was issued last: when
+	// pairing ends unused, that request is told its code expired.
+	codeSink provider.Sink
 }
 
 func newSession(c *sqlstore.Container) *Session {
@@ -147,7 +149,8 @@ func (s *Session) Run(ctx context.Context, sink provider.Sink, pair bool) error 
 
 // pairLoop pushes each code with its expiry until the phone scans one or a
 // phone code is entered (both end in QRChannelSuccess). If the codes run
-// out after a phone code was issued, Rails is told that code has expired.
+// out after a phone code was issued, Rails is told that code has expired,
+// through the sink of the request that got it.
 func (s *Session) pairLoop(ctx context.Context, qr <-chan whatsmeow.QRChannelItem, sink provider.Sink) error {
 	for {
 		select {
@@ -187,11 +190,12 @@ func (s *Session) markReady(at time.Time) {
 func (s *Session) pairingEnded(ctx context.Context, sink provider.Sink) error {
 	s.endPairing()
 	s.mu.Lock()
-	issued := s.codeIssued
+	issued := s.codeSink
 	s.mu.Unlock()
-	if issued {
-		// Best effort: the code also carries its own expiry.
-		_ = sink.PhoneCodeFailed(ctx, provider.PhoneCodeExpired)
+	if issued != nil {
+		// Best effort: the code also carries its own expiry. Through the
+		// request's own sink, so the expiry names that request.
+		_ = issued.PhoneCodeFailed(ctx, provider.PhoneCodeExpired)
 	}
 	return ErrPairingEnded
 }
@@ -248,7 +252,7 @@ func (s *Session) RequestPhoneCode(ctx context.Context, sink provider.Sink, phon
 		expires = now.Add(10 * time.Second)
 	}
 	s.mu.Lock()
-	s.codeIssued = true
+	s.codeSink = sink
 	s.mu.Unlock()
 	return sink.PhoneCode(ctx, code, now, expires)
 }

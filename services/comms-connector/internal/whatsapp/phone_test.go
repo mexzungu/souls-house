@@ -170,3 +170,31 @@ func TestPhoneCodeNotReady(t *testing.T) {
 	}
 	close(r.qr)
 }
+
+// The expiry belongs to the request whose code expired: it goes through
+// that request's sink (which names the request to Rails, and drops it if a
+// newer request has superseded it), not the session's own sink, whose
+// phone results name no request.
+func TestPhoneCodeExpiryGoesToTheRequestThatGotTheCode(t *testing.T) {
+	r := newPairingRig(t, func(context.Context, string) (string, error) { return "ABCD-EFGH", nil })
+	requestSink := &recSink{}
+	done := make(chan error, 1)
+	go func() { done <- r.s.RequestPhoneCode(context.Background(), requestSink, testPhone) }()
+	r.qr <- r.code(60 * time.Second)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r.qr <- whatsmeow.QRChannelTimeout
+	if err := <-r.loop; !errors.Is(err, ErrPairingEnded) {
+		t.Fatalf("pairLoop: %v", err)
+	}
+	requestSink.mu.Lock()
+	reqFailed := append([]string(nil), requestSink.phoneFailed...)
+	requestSink.mu.Unlock()
+	r.sink.mu.Lock()
+	runFailed := append([]string(nil), r.sink.phoneFailed...)
+	r.sink.mu.Unlock()
+	if len(reqFailed) != 1 || reqFailed[0] != provider.PhoneCodeExpired || len(runFailed) != 0 {
+		t.Fatalf("request sink got %v, session sink got %v", reqFailed, runFailed)
+	}
+}

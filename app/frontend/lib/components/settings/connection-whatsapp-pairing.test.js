@@ -178,4 +178,103 @@ describe('WhatsApp pairing card', () => {
     const polls = () => globalThis.fetch.mock.calls.filter(([url]) => url === `${base}/pairing`).length;
     await waitFor(() => expect(polls()).toBe(2));
   });
+
+  // Mira's review of #357: a poll that started before a mutation (restart,
+  // number sent) and answers after it must not undo it, whatever it says,
+  // and nothing that answers after polling stops changes the card.
+  describe('responses older than the latest change', () => {
+    // Serves the first poll at once and holds every later one until the
+    // test releases it with a body.
+    function holdPolls(first, mutations) {
+      const held = [];
+      let polls = 0;
+      globalThis.fetch = vi.fn((url) => {
+        for (const [suffix, answer] of Object.entries(mutations)) {
+          if (url.endsWith(suffix)) return answer();
+        }
+        polls += 1;
+        if (polls === 1) return reply(200, first);
+        return new Promise((resolve) =>
+          held.push((body) => resolve({ ok: true, status: 200, json: () => Promise.resolve(body) }))
+        );
+      });
+      return { held, polls: () => polls };
+    }
+
+    it('a poll held across a restart does not bring back the old attempt (the next number joins the new one)', async () => {
+      const server = holdPolls(pairingState({ attempt: 2 }), {
+        '/pairing/restart': () => reply(200, { status: 'pairing', qr: null, attempt: 3, phone: {}, phone_code: null }),
+        '/pairing/phone': () => reply(202, { ...pairingState({ attempt: 3 }), phone: { step: 'requested' } }),
+      });
+      mount({ phoneFirst: true, pollInterval: 10 });
+      await screen.findByLabelText('Phone number');
+      await waitFor(() => expect(server.held.length).toBe(1)); // the next poll is out, for attempt 2
+      await fireEvent.click(screen.getByRole('button', { name: 'Restart pairing' }));
+      await waitFor(() => expect(reload).toHaveBeenCalled());
+      server.held[0](pairingState({ attempt: 2 })); // the old poll answers now
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await fireEvent.input(screen.getByLabelText('Phone number'), { target: { value: '+44 7700 900123' } });
+      await fireEvent.click(screen.getByRole('button', { name: 'Get a code' }));
+      await waitFor(() => expect(posts('/pairing/phone')).toEqual([{ phone: '+44 7700 900123', attempt: 3 }]));
+    });
+
+    it('a poll held across a restart does not bring back the old code', async () => {
+      const old = pairingState({
+        attempt: 2,
+        phone: { step: 'code' },
+        phone_code: {
+          code: 'OLDC-ODE2',
+          issued_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 120_000).toISOString(),
+        },
+      });
+      const server = holdPolls(old, {
+        '/pairing/restart': () => reply(200, { status: 'pairing', qr: null, attempt: 3, phone: {}, phone_code: null }),
+      });
+      mount({ phoneFirst: true, pollInterval: 10 });
+      expect(await screen.findByText('OLDC-ODE2')).toBeInTheDocument();
+      await waitFor(() => expect(server.held.length).toBe(1));
+      await fireEvent.click(screen.getByRole('button', { name: 'Restart pairing' }));
+      await waitFor(() => expect(screen.queryByText('OLDC-ODE2')).not.toBeInTheDocument());
+      server.held[0](old);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(screen.queryByText('OLDC-ODE2')).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Phone number')).toBeInTheDocument();
+    });
+
+    it('a poll held across sending a number (same attempt) does not undo the request', async () => {
+      const failed = pairingState({ attempt: 2, phone: { error: 'not_ready' } });
+      const server = holdPolls(failed, {
+        '/pairing/phone': () => reply(202, { ...pairingState({ attempt: 2 }), phone: { step: 'requested' } }),
+      });
+      mount({ phoneFirst: true, pollInterval: 10 });
+      await screen.findByLabelText('Phone number');
+      await waitFor(() => expect(server.held.length).toBe(1));
+      await fireEvent.input(screen.getByLabelText('Phone number'), { target: { value: '+44 7700 900123' } });
+      await fireEvent.click(screen.getByRole('button', { name: 'Get a code' }));
+      expect(await screen.findByTestId('whatsapp-phone-requesting')).toBeInTheDocument();
+      server.held[0](failed); // from before the number was sent
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(screen.getByTestId('whatsapp-phone-requesting')).toBeInTheDocument();
+      expect(screen.queryByTestId('whatsapp-phone-failure')).not.toBeInTheDocument();
+    });
+
+    it('a poll that answers after polling has stopped changes nothing', async () => {
+      const server = holdPolls(pairingState({ attempt: 2 }), {});
+      const view = mount({ phoneFirst: true, pollInterval: 10 });
+      await screen.findByLabelText('Phone number');
+      await waitFor(() => expect(server.held.length).toBe(1));
+      await view.rerender({
+        account: { id: 'house' },
+        connection: { id: 'svc_wa', provider: 'whatsapp', status: 'connected' },
+        pollInterval: 10,
+        phoneFirst: true,
+      });
+      expect(await screen.findByText(/Linked\./)).toBeInTheDocument();
+      server.held[0](pairingState({ attempt: 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(screen.getByText(/Linked\./)).toBeInTheDocument();
+      expect(screen.queryByLabelText('Phone number')).not.toBeInTheDocument();
+    });
+  });
 });

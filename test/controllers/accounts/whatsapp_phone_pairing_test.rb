@@ -38,16 +38,16 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     sent = []
     log_start = File.size?(Rails.root.join("log/test.log")).to_i
     sign_in @owner
-    CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:) { sent << [ connection.id, phone, attempt ]; {} }) do
+    CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:, request:) { sent << [ connection.id, phone, attempt, request ]; {} }) do
       post phone_account_service_connection_pairing_path(@account, @connection.public_id),
            params: { phone: PHONE, attempt: 1 }, as: :json
     end
 
     assert_response :accepted
     assert_equal "no-store", response.headers["Cache-Control"]
-    assert_equal [ [ @connection.id, E164, 1 ] ], sent
-    assert_equal "requested", response.parsed_body.dig("phone", "step")
     @connection.reload
+    assert_equal [ [ @connection.id, E164, 1, @connection.phone_pairing_state["request"] ] ], sent
+    assert_equal "requested", response.parsed_body.dig("phone", "step")
     assert_equal "requested", @connection.phone_pairing_state["step"]
     row = ServiceConnection.connection.select_all("SELECT * FROM service_connections WHERE id = #{@connection.id}").to_a.to_json
     assert_not_includes row, "7700900123"
@@ -141,12 +141,13 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
 
   test "pair_phone is a signed command carrying the E.164 number and the attempt" do
     with_whatsapp_connector do |requests, options|
-      CommsConnector.pair_phone(@connection, E164, attempt: 3)
+      CommsConnector.pair_phone(@connection, E164, attempt: 3, request: "0123456789abcdef")
       request = requests.sole
       assert_equal "/connections/#{@connection.public_id}/pair_phone", request.path
       body = JSON.parse(request.body)
-      assert_equal({ "phone_number" => E164, "attempt" => 3, "connection" => @connection.public_id, "operation" => "pair_phone" },
-                   body.slice("phone_number", "attempt", "connection", "operation"))
+      assert_equal({ "phone_number" => E164, "attempt" => 3, "request_id" => "0123456789abcdef",
+                     "connection" => @connection.public_id, "operation" => "pair_phone" },
+                   body.slice("phone_number", "attempt", "request_id", "connection", "operation"))
       expected = CommsCommandSignature.sign(
         secret: "test-command-key", key_id: "k1", connection_id: @connection.public_id, operation: "pair_phone",
         command_id: request["X-Comms-Command-Id"], issued_at: request["X-Comms-Issued-At"], body: request.body
@@ -235,11 +236,11 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
   test "a failure is shown as its fixed reason and clears the code; an unknown reason is refused" do
     request_phone!
     receive!(phone_code_event("ABCD2345", Time.current, 150.seconds))
-    receive!({ "type" => "pairing.phone_code_failed", "reason" => "rate_limited" })
+    receive!(failure_event("rate_limited"))
     @connection.reload
     assert_nil @connection.pairing_phone_code
     assert_equal "rate_limited", @connection.phone_pairing_state["error"]
-    assert_refused(:unknown_phone_code_failure) { receive!({ "type" => "pairing.phone_code_failed", "reason" => "447700900123 not found" }) }
+    assert_refused(:unknown_phone_code_failure) { receive!(failure_event("447700900123 not found")) }
   end
 
   test "linking clears the code and the phone step, like the QR" do
@@ -285,9 +286,18 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     CommsEvents.receive!(ServiceConnection.find(@connection.id), { "attempt" => attempt }.merge(event), nonce: SecureRandom.hex(16))
   end
 
+  # Naming the connection's current phone request, as the connector does.
   def phone_code_event(code, issued_at, lifetime)
     { "type" => "pairing.phone_code", "code" => code, "issued_at" => issued_at.utc.iso8601(6),
-      "expires_at" => (issued_at + lifetime).utc.iso8601(6) }
+      "expires_at" => (issued_at + lifetime).utc.iso8601(6), "request_id" => current_request }.compact
+  end
+
+  def failure_event(reason)
+    { "type" => "pairing.phone_code_failed", "reason" => reason, "request_id" => current_request }.compact
+  end
+
+  def current_request
+    ServiceConnection.find(@connection.id).phone_pairing_state["request"]
   end
 
   def assert_refused(code)

@@ -344,23 +344,31 @@ class ServiceConnection < ApplicationRecord
   # of the phone WhatsApp is on (it is forwarded to the connector and kept
   # nowhere); the connector answers with an 8-character code
   # (pairing.phone_code) the owner types into WhatsApp. The step is in
-  # connector_state["phone_pairing"]: "requested", then "code", or an error.
+  # connector_state["phone_pairing"]: "requested", then "code", or an error,
+  # with "request": the id of the request it belongs to.
   def phone_pairing_state
     connector_state.to_h["phone_pairing"].to_h
   end
 
   # Records the owner's request, under the row lock, for the attempt the
   # owner's page showed: only while that attempt is pairing. Clears any
-  # earlier phone code. The caller then sends pair_phone. false otherwise.
+  # earlier phone code. Returns the request's id (random, never derived from
+  # the number), which the caller sends with pair_phone; false otherwise.
+  # Within one attempt the owner can ask again (another number, a retry,
+  # another tab): each ask gets a new id, and CommsEvents accepts a code or
+  # failure only for the latest, whatever order the connector answers in.
   def request_phone_pairing!(attempt, now: Time.current)
     with_lock do
       return false unless status == "pairing" && attempt == pairing_attempt
 
+      request = SecureRandom.hex(8)
       update!(
-        connector_state: connector_state.to_h.merge("phone_pairing" => { "step" => "requested", "at" => now.utc.iso8601 }),
+        connector_state: connector_state.to_h.merge(
+          "phone_pairing" => { "step" => "requested", "request" => request, "at" => now.utc.iso8601 }
+        ),
         pairing_phone_code: nil, pairing_phone_code_issued_at: nil, pairing_phone_code_expires_at: nil
       )
-      true
+      request
     end
   end
 
@@ -374,19 +382,25 @@ class ServiceConnection < ApplicationRecord
       expires_at: pairing_phone_code_expires_at.utc.iso8601 }
   end
 
-  # pair_phone could not be sent: the request is withdrawn, unless a code or
-  # a failure has come back meanwhile.
-  def withdraw_phone_pairing_request!
+  # pair_phone could not be sent: that request, and only that one, is
+  # withdrawn. Compare-and-withdraw under the row lock: nothing changes if
+  # the pairing has restarted since (another attempt), the owner has asked
+  # again (another request), or a code or failure has come back meanwhile.
+  def withdraw_phone_pairing_request!(attempt:, request:)
     with_lock do
-      return unless phone_pairing_state["step"] == "requested"
+      return false unless pairing_attempt == attempt && request.present?
+      return false unless phone_pairing_state["request"] == request && phone_pairing_state["step"] == "requested"
 
       update!(connector_state: connector_state.to_h.except("phone_pairing"))
+      true
     end
   end
 
   # Clears the expired code this instance loaded, and only that one, as
   # clear_expired_pairing_qr! does for the QR. The phone step becomes
-  # "expired", so the owner is offered a restart. Then reloads.
+  # "expired", so the owner is offered a restart. The request stays named
+  # (the one this instance loaded: a newer request clears the code, so the
+  # conditional write would not match). Then reloads.
   def clear_expired_pairing_phone_code!(now: Time.current)
     cleared = ServiceConnection.where(id:, pairing_phone_code_issued_at:, pairing_phone_code_expires_at:)
                                .where(pairing_phone_code_expires_at: ..now)
@@ -394,7 +408,8 @@ class ServiceConnection < ApplicationRecord
                                  "pairing_phone_code = NULL, pairing_phone_code_issued_at = NULL, " \
                                  "pairing_phone_code_expires_at = NULL, updated_at = ?, " \
                                  "connector_state = jsonb_set(connector_state, '{phone_pairing}', ?::jsonb)",
-                                 now, { "error" => "expired", "at" => now.utc.iso8601 }.to_json
+                                 now, { "error" => "expired", "request" => phone_pairing_state["request"],
+                                        "at" => now.utc.iso8601 }.compact.to_json
                                ])
     reload
     cleared.positive?

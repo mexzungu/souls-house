@@ -13,7 +13,10 @@ import (
 	"services/comms-connector/internal/worker"
 )
 
-const phoneDigits = "447700900456"
+const (
+	phoneDigits  = "447700900456"
+	phoneRequest = "0123456789abcdef"
+)
 
 func phoneEvents(r *rig) []map[string]any {
 	_, _, events, _ := r.rails.snapshot(ref)
@@ -39,15 +42,16 @@ func TestPairPhoneDeliversTheCodeForTheAttempt(t *testing.T) {
 	if err := m.StartPairing(context.Background(), ref, secret, 3); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 2); !errors.Is(err, worker.ErrStaleAttempt) {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 2, phoneRequest); !errors.Is(err, worker.ErrStaleAttempt) {
 		t.Fatalf("an older attempt's pair_phone: %v", err)
 	}
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 3); err != nil {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 3, phoneRequest); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "phone code at Rails", func() bool { return len(phoneEvents(r)) == 1 })
 	ev := phoneEvents(r)[0]
-	if ev["type"] != "pairing.phone_code" || ev["code"] != "WXYZ-2345" || ev["attempt"].(interface{ String() string }).String() != "3" {
+	if ev["type"] != "pairing.phone_code" || ev["code"] != "WXYZ-2345" || ev["attempt"].(interface{ String() string }).String() != "3" ||
+		ev["request_id"] != phoneRequest {
 		t.Fatalf("event %v", ev)
 	}
 	if _, sequenced := ev["seq"]; sequenced {
@@ -85,11 +89,11 @@ func TestPairPhoneFailureReachesRails(t *testing.T) {
 	if err := m.StartPairing(context.Background(), ref, secret, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1); err != nil {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1, phoneRequest); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, "failure at Rails", func() bool { return len(phoneEvents(r)) == 1 })
-	if ev := phoneEvents(r)[0]; ev["type"] != "pairing.phone_code_failed" || ev["reason"] != "rate_limited" {
+	if ev := phoneEvents(r)[0]; ev["type"] != "pairing.phone_code_failed" || ev["reason"] != "rate_limited" || ev["request_id"] != phoneRequest {
 		t.Fatalf("event %v", ev)
 	}
 }
@@ -99,7 +103,7 @@ func TestPairPhoneRefusedWhenNotPairing(t *testing.T) {
 	r := newRig(t)
 	r.rails.expect(ref, secret)
 	m := r.manager()
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1); !errors.Is(err, worker.ErrNotPairing) {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1, phoneRequest); !errors.Is(err, worker.ErrNotPairing) {
 		t.Fatalf("unknown connection: %v", err)
 	}
 	if err := m.StartPairing(context.Background(), ref, secret, 1); err != nil {
@@ -107,7 +111,7 @@ func TestPairPhoneRefusedWhenNotPairing(t *testing.T) {
 	}
 	r.wantAllDelivered(15)
 	eventually(t, "connected", func() bool { return m.State(ref) == "connected" })
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1); !errors.Is(err, worker.ErrNotPairing) {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1, phoneRequest); !errors.Is(err, worker.ErrNotPairing) {
 		t.Fatalf("linked connection: %v", err)
 	}
 	if r.syn.PhoneCodes() != 0 {
@@ -127,7 +131,7 @@ func TestPairPhoneRequestEndsWithTheSession(t *testing.T) {
 	if err := m.StartPairing(context.Background(), ref, secret, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1); err != nil {
+	if err := m.PairPhone(context.Background(), ref, phoneDigits, 1, phoneRequest); err != nil {
 		t.Fatal(err)
 	}
 	r.rails.expectAttempt(ref, secret, 2)
