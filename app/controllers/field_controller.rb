@@ -4,7 +4,7 @@ class FieldController < ApplicationController
 
   require_feature_enabled :agents
 
-  TABS = %w[all files notes recordings].freeze
+  TABS = %w[all files notes recordings tweets songs waiting].freeze
 
   def index
     tab = TABS.include?(params[:tab]) ? params[:tab] : "all"
@@ -29,12 +29,17 @@ class FieldController < ApplicationController
       recording_allowance: FieldItems.allowance_json(current_account),
       suggestions_enabled: FieldSuggestions.enabled?,
       summaries_enabled: FieldSummaries.enabled?,
+      ocr_enabled: FieldOcr.enabled?,
+      tweet_stream: FieldItems.tweet_stream_json(current_account),
       max_recording_bytes: FieldRecording::MAX_BYTES,
       max_recording_label: FieldRecording::MAX_BYTES_LABEL,
       tab: tab,
       selected: current_json&.dig(:key),
       max_file_bytes: FieldFile::MAX_FILE_SIZE,
       max_file_label: FieldFile::MAX_FILE_SIZE_LABEL,
+      song_recipients: FieldSong.recipients(current_account),
+      max_song_audio_bytes: FieldSong::MAX_AUDIO_BYTES,
+      max_song_audio_label: FieldSong::MAX_AUDIO_LABEL,
       account_name: current_account.name,
       account: current_account.as_json
     }
@@ -48,8 +53,10 @@ class FieldController < ApplicationController
 
   def item_json(record, tags, content: true)
     case record
-    when FieldFile then FieldItems.file_json(record, tags)
-    when FieldRecording then FieldItems.recording_json(record, tags)
+    when FieldFile then FieldItems.file_json(record, tags, content: content)
+    when FieldRecording then FieldItems.recording_json(record, tags, content: content)
+    when FieldTweet then FieldItems.tweet_json(record, tags)
+    when FieldSong then FieldItems.song_json(record, tags, content: content)
     else FieldItems.note_json(record, tags, content: content)
     end
   end

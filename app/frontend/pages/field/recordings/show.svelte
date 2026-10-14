@@ -4,19 +4,22 @@
   import * as Card from '$lib/components/shadcn/card/index.js';
   import { Button } from '$lib/components/shadcn/button/index.js';
   import SpeakerCard from '$lib/components/field/SpeakerCard.svelte';
+  import RecordingNotes from '$lib/components/field/RecordingNotes.svelte';
   import TranscriptTurns from '$lib/components/field/TranscriptTurns.svelte';
   import { formatWhen } from '$lib/field';
   import {
     activeWordIndex,
     buildTurns,
     formatDuration,
+    groupSpeakers,
     recordingStatusLine,
     recordingsTabPath,
+    speakerKeys,
     speakerNames,
     suppliedTurns,
     timedWords,
   } from '$lib/field-recordings';
-  import { ArrowClockwise, ArrowLeft, X } from 'phosphor-svelte';
+  import { ArrowClockwise, ArrowLeft, Trash, X } from 'phosphor-svelte';
 
   let {
     recording,
@@ -40,7 +43,12 @@
   // Supplied transcripts (brought in with the audio) have turns, not timed
   // words: no word highlighting, talk time, clips or voice samples.
   const supplied = $derived(recording.transcript_source === 'supplied');
-  const turns = $derived(supplied ? suppliedTurns(recording.turns) : buildTurns(recording.words));
+  const turns = $derived(
+    supplied ? suppliedTurns(recording.turns) : buildTurns(recording.words, speakerKeys(speakers))
+  );
+  // One card per person: diarized speakers linked to one voice share a card.
+  const groups = $derived(groupSpeakers(speakers));
+  const speakerUrl = (speaker) => `/accounts/${account.id}/field/recordings/${recording.id}/speakers/${speaker.id}`;
   const wordList = $derived(supplied ? [] : timedWords(turns));
   const names = $derived(speakerNames(speakers));
   const totalTalkMs = $derived(speakers.reduce((sum, speaker) => sum + (speaker.talk_ms || 0), 0));
@@ -97,8 +105,77 @@
     audio.play().catch(() => {});
   }
 
+  // One line corrected by hand. Resolves {ok} only when the server took it;
+  // a refusal (the transcript changed meanwhile, an empty line) or a failed
+  // request resolves {ok: false} with why, and the editor keeps the text.
+  function saveLine(edit, text) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      router.patch(
+        `${recording.show_url}/line`,
+        { line: { ...edit.address, text, was: edit.was, revision: edit.revision } },
+        {
+          preserveScroll: true,
+          preserveState: true,
+          onSuccess: () => settle({ ok: true }),
+          onError: (errors) => settle({ ok: false, error: errors?.line }),
+          onFinish: () => settle({ ok: false }),
+        }
+      );
+    });
+  }
+
+  // One line given to another speaker (or "new"). Resolves like saveLine.
+  function reassignLine(edit, speakerId) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      router.patch(
+        `${recording.show_url}/line_speaker`,
+        { line: { ...edit.address, was: edit.was, revision: edit.revision, speaker: speakerId } },
+        {
+          preserveScroll: true,
+          preserveState: true,
+          onSuccess: () => settle({ ok: true }),
+          onError: (errors) => settle({ ok: false, error: errors?.line_speaker }),
+          onFinish: () => settle({ ok: false }),
+        }
+      );
+    });
+  }
+
+  // Who a line can be given to: one entry per person, as the cards show them.
+  const speakerChoices = $derived(
+    groups.map((group) => ({
+      id: group.speaker.id,
+      name: group.speaker.name || group.speaker.default_name || group.speaker.label,
+      labels: group.parts.map((part) => part.label),
+    }))
+  );
+
   function retry() {
     router.post(`${recording.show_url}/retry`);
+  }
+
+  // The same discard as the Field list's Delete: the recording leaves the
+  // index, search and residents' reads; the server sends us back to the list.
+  function remove() {
+    const message =
+      `Delete "${recording.title}" from the Field? It disappears for everyone, people and residents. ` +
+      'Deleting does not reach anything a resident has already read: quotes in chats and things kept in ' +
+      'memory stay where they are.' +
+      (recording.dispatched ? " It has started transcribing, so deleting it doesn't give its minutes back." : '');
+    if (!confirm(message)) return;
+    router.delete(recording.show_url);
   }
 
   // The server answers 204, not an Inertia page, so this is a plain request.
@@ -122,7 +199,19 @@
     <Link href={backPath} class="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1">
       <ArrowLeft class="size-4" /> Recordings
     </Link>
-    <h1 class="text-3xl font-bold mt-2 break-words">{recording.title}</h1>
+    <div class="flex items-start justify-between gap-3 mt-2">
+      <h1 class="text-3xl font-bold break-words min-w-0">{recording.title}</h1>
+      <Button
+        variant="ghost"
+        size="sm"
+        class="shrink-0 text-muted-foreground hover:text-destructive"
+        onclick={remove}
+        title="Delete recording"
+        aria-label="Delete recording"
+        data-testid="delete-recording">
+        <Trash class="size-4" /> Delete
+      </Button>
+    </div>
     <p class="text-muted-foreground mt-1">{meta}</p>
     {#if recording.note}
       <p class="mt-3 whitespace-pre-wrap">{recording.note}</p>
@@ -145,6 +234,8 @@
       onseeking={seeking}
       data-testid="recording-audio"></audio>
   {/if}
+
+  <RecordingNotes {recording} />
 
   {#if !ready}
     <Card.Root>
@@ -186,16 +277,19 @@
           >Voices this Field knows</Link>
       </div>
       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {#each speakers as speaker (speaker.id)}
+        {#each groups as group (group.key)}
           <SpeakerCard
-            {speaker}
+            speaker={group.speaker}
+            parts={group.parts}
+            {speakerUrl}
             {totalTalkMs}
             onPlayClip={playClip}
             onSeek={seek}
             recognitionEnabled={recognition_enabled && !supplied}
             accountId={account.id}
             recordingId={recording.id}
-            url={`/accounts/${account.id}/field/recordings/${recording.id}/speakers/${speaker.id}`}
+            url={speakerUrl(group.speaker)}
+            with={group.parts.filter((part) => part.id !== group.speaker.id).map((part) => part.id)}
             {voices}
             members={members_without_voice}
             myVoiceId={my_voice_id}
@@ -208,7 +302,15 @@
     {#if turns.length}
       <Card.Root>
         <Card.Content class="p-6">
-          <TranscriptTurns {turns} {names} {activeIndex} onSeek={seek} />
+          <TranscriptTurns
+            {turns}
+            {names}
+            {activeIndex}
+            onSeek={seek}
+            onSave={saveLine}
+            onReassign={reassignLine}
+            choices={speakerChoices}
+            revision={recording.transcript_revision} />
         </Card.Content>
       </Card.Root>
     {:else}

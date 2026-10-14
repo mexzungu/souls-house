@@ -29,9 +29,33 @@ Rails.application.config.filter_parameters += [ /\A(?:print|voiceprints?)\z/ ]
 # sending it would otherwise have its keys logged before the refusal.
 Rails.application.config.filter_parameters += [ /\Aset\z/ ]
 
+# Pasted service credentials (POST service_connections, web and API) travel as
+# credentials[<field>]. Field names like api_key and secret_key are already
+# masked; this masks every field, whatever a provider calls it.
+Rails.application.config.filter_parameters += [ /\Acredentials\z/ ]
+
 # Comms connector events carry Daniel's WhatsApp messages, contacts and the
 # pairing QR. `messages` and `code` are already filtered above; `chats`
 # covers chat names, and the exact field names cover any other nesting.
 Rails.application.config.filter_parameters += [
   /\A(?:chats|body|caption|sender_name|sender_id|qr|pairing_qr)\z/, /\Achats\.name\z/
 ]
+
+# A connector's status.changed event names the paired account: its phone
+# number and display name (`identity`), which land in the connection's
+# external_subject_id and external_identity. The connector end-to-end test's
+# log check found both in the request parameters and the SQL binds.
+Rails.application.config.filter_parameters += [ /\A(?:identity|external_identity|external_subject_id)\z/ ]
+
+# A Telegram phone sign-in posts the account's phone number (`phone`) and
+# the code Telegram sent (`code`, already masked above) to
+# Accounts::ServiceConnectionLoginsController, which forwards both to the
+# connector and keeps neither.
+Rails.application.config.filter_parameters += [ /\Aphone\z/ ]
+
+# WhatsApp's phone number pairing: the owner posts `phone` (above) to
+# Accounts::ServiceConnectionPairingsController#phone, which forwards it to
+# the connector as `phone_number` (never logged either way); the code the
+# connector sends back is `code` (masked above) and is stored encrypted in
+# `pairing_phone_code`, masked here in SQL binds too.
+Rails.application.config.filter_parameters += [ /\A(?:phone_number|pairing_phone_code)\z/ ]

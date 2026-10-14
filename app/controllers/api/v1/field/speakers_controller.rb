@@ -10,6 +10,9 @@ module Api
       #   name: "Priya"          a new voice; if a voice of that name exists,
       #                          409 asks "same Priya?" unless link_existing
       #   unname: true           back to "Speaker N"
+      #   ignore: true           noise, not a person: stops asking for a name
+      #     ignore_as: "anonymous"   with ignore: a person who stays unnamed, not noise
+      #   unignore: true         asks again
       #
       # Confirming or dismissing a suggestion or a voice recognition isn't
       # here: those answer biometric and inferred data the API doesn't show.
@@ -22,9 +25,17 @@ module Api
 
         def update
           speaker = find_speaker
-          attributes = params.permit(:me, :voice_id, :member_user_id, :name, :link_existing, :unname)
+          attributes = params.permit(:me, :voice_id, :member_user_id, :name, :link_existing, :unname, :ignore, :ignore_as, :unignore)
 
-          if truthy?(attributes[:unname])
+          if truthy?(attributes[:ignore])
+            reason = ignore_reason(attributes)
+            return render json: { error: "ignore_as is noise or anonymous." }, status: :unprocessable_entity unless reason
+            unless speaker.ignore!(by: current_api_user, as: reason)
+              return render json: { error: "This speaker is named. Unname it first." }, status: :conflict
+            end
+          elsif truthy?(attributes[:unignore])
+            speaker.unignore!
+          elsif truthy?(attributes[:unname])
             speaker.unname!
           else
             choice = FieldVoice::Choice.resolve(
@@ -57,6 +68,12 @@ module Api
             error: "A voice named #{voice.name} already exists. Send link_existing: true to use it, or another name.",
             match: { voice_id: voice.to_param, name: voice.name, last_named_in: voice.last_named_in&.title }
           }, status: :conflict
+        end
+
+        # "noise" unless the request says otherwise; nil for a reason we don't know.
+        def ignore_reason(attributes)
+          reason = attributes[:ignore_as].presence || "noise"
+          reason if FieldRecordingSpeaker::IGNORED_AS.include?(reason)
         end
 
         def truthy?(value) = ActiveModel::Type::Boolean.new.cast(value) == true

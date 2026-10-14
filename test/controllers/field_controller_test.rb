@@ -42,6 +42,32 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_field_path(@account, tab: "files", item: "file-#{file.to_param}")
   end
 
+  test "the Field keeps older summaries visible but marks their source untracked" do
+    file = @account.field_files.create!(file: upload, title: "Earlier file", uploaded_by: @user)
+    file.update_columns(summary_short: "Old file", summary_long: "Old file summary.", summarized_at: 1.hour.ago)
+    recording = ready_recording(account: @account, user: @user)
+    recording.update_columns(summary_short: "Old recording", summary_long: "Old recording summary.", summarized_at: 1.hour.ago)
+
+    get account_field_path(@account)
+    items = inertia_props["items"]
+    [ file, recording ].each do |record|
+      item = items.find { |i| i["id"] == record.to_param && i["kind"] == (record.is_a?(FieldFile) ? "file" : "recording") }
+      assert_equal "unknown", item["summary_freshness"]
+      assert_equal record.summary_long, item["summary_long"]
+      assert_equal false, item["summary_pending"]
+    end
+  end
+
+  test "a human dates a file as it comes in; an impossible date makes nothing" do
+    post account_field_files_path(@account), params: { field_file: { file: upload, dated_at: "2019-03-14" } }
+    assert_equal Time.zone.local(2019, 3, 14), @account.field_files.last.dated_at
+
+    assert_no_difference -> { FieldFile.count } do
+      post account_field_files_path(@account), params: { field_file: { file: upload, dated_at: "2019-02-30" } }
+    end
+    assert_redirected_to account_field_path(@account, tab: "files")
+  end
+
   test "an upload without a file is refused" do
     assert_no_difference -> { FieldFile.count } do
       post account_field_files_path(@account), params: { field_file: { title: "Empty" } }
@@ -133,7 +159,7 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_equal 50, props["items"].size
     assert_equal "File 0", props["items"].first["title"]
     assert_equal({ "page" => 1, "pages" => 2, "per_page" => 50, "total" => 54 }, props["pagination"])
-    assert_equal({ "all" => 54, "files" => 53, "notes" => 1, "recordings" => 0 }, props["counts"])
+    assert_equal({ "all" => 54, "files" => 53, "notes" => 1, "recordings" => 0, "tweets" => 0, "songs" => 0, "waiting" => 0 }, props["counts"])
     assert_nil props["items"].find { |i| i["kind"] == "note" }
 
     get account_field_path(@account, page: "2")
@@ -164,6 +190,18 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_equal [ imported ], @account.field_recordings.newest_first.to_a
   end
 
+  test "an imported file or note sorts and shows by the date it is from" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    @account.field_files.create!(file: upload, title: "Yesterday's file", uploaded_by: @user, created_at: 1.day.ago)
+    old_file = @account.field_files.create!(file: upload, title: "2019 transcript", uploaded_by: @user, dated_at: Time.zone.parse("2019-03-14"))
+    old_note = @account.whiteboards.create!(name: "2018 diary", content: "It rained.", dated_at: Time.zone.parse("2018-05-01"))
+
+    get account_field_path(@account)
+    items = inertia_props["items"]
+    assert_equal [ "Yesterday's file", "2019 transcript", "2018 diary" ], items.map { |i| i["title"] }
+    assert_equal [ old_file.dated_at.iso8601, old_note.dated_at.iso8601 ], items.last(2).map { |i| i["dated_at"] }
+  end
+
   test "the tag filter narrows the list and its counts on the server" do
     tagged = @account.field_files.create!(file: upload, title: "Tagged", uploaded_by: @user)
     @account.field_files.create!(file: upload, title: "Plain", uploaded_by: @user)
@@ -174,6 +212,76 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_equal [ "Tagged" ], props["items"].map { |i| i["title"] }
     assert_equal 1, props["counts"]["all"]
     assert_not props["field_empty"]
+  end
+
+  test "the waiting tab lists recordings with a speaker still to name, and drops them once named" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    @account.field_files.create!(file: upload, title: "A file", uploaded_by: @user)
+    named = ready_recording(account: @account, user: @user, title: "All named")
+    waiting = ready_recording(account: @account, user: @user, title: "Two to name")
+    queued_recording(account: @account, user: @user, title: "Still transcribing")
+    voice = @account.field_voices.create!(name: "Ana")
+    named.speakers.each { |speaker| speaker.name_as!(voice, by: @user) }
+
+    get account_field_path(@account, tab: "waiting")
+    props = inertia_props
+    assert_equal "waiting", props["tab"]
+    assert_equal [ "Two to name" ], props["items"].map { |i| i["title"] }
+    assert_equal 1, props["counts"]["waiting"]
+    assert_equal 3, props["counts"]["recordings"], "the other tabs count as before"
+
+    waiting.speakers.first.name_as!(voice, by: @user)
+    get account_field_path(@account, tab: "waiting")
+    assert_equal [ "Two to name" ], inertia_props["items"].map { |i| i["title"] }, "one speaker left still waits"
+
+    waiting.speakers.last.name_as!(voice, by: @user)
+    get account_field_path(@account, tab: "waiting")
+    assert_empty inertia_props["items"]
+    assert_equal 0, inertia_props["counts"]["waiting"]
+
+    voice.update_columns(discarded_at: Time.current)
+    get account_field_path(@account, tab: "waiting")
+    assert_equal [ "All named", "Two to name" ].sort, inertia_props["items"].map { |i| i["title"] }.sort,
+      "a deleted voice leaves its speakers waiting again"
+  end
+
+  test "a speaker set aside as noise doesn't keep a recording waiting" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    recording = ready_recording(account: @account, user: @user, title: "One real, one noise")
+    real, noise = recording.speakers.to_a
+    real.name_as!(@account.field_voices.create!(name: "Ana"), by: @user)
+
+    get account_field_path(@account, tab: "waiting")
+    assert_equal [ "One real, one noise" ], inertia_props["items"].map { |i| i["title"] }
+
+    noise.ignore!(by: @user)
+    get account_field_path(@account, tab: "waiting")
+    assert_empty inertia_props["items"]
+    assert_equal 0, inertia_props["counts"]["waiting"]
+
+    noise.unignore!
+    get account_field_path(@account, tab: "waiting")
+    assert_equal 1, inertia_props["counts"]["waiting"], "undo puts it back"
+  end
+
+  test "a supplied transcript waits only for its generic speaker labels, as its badge says" do
+    @account.whiteboards.update_all(deleted_at: Time.current)
+    supplied = ->(title, text) {
+      FieldRecording::Upload.claim!(
+        account: @account, user: @user, signed_id: pinned_blob(account: @account, user: @user).signed_id,
+        attributes: { title: }, supplied_turns: FieldRecording::SuppliedTranscript.parse(text)
+      )
+    }
+    supplied.("Named", "Anna: Hi.\nDaniel: Hello.\nAnna: Bye.")
+    supplied.("Generic", "Speaker A: Hi.\nDaniel: Hello.\nSpeaker A: Bye.")
+    supplied.("Long s", "\u017Fpeaker A: Hi.\nDaniel: Hello.\n\u017Fpeaker A: Bye.")
+
+    get account_field_path(@account, tab: "all")
+    badges = inertia_props["items"].to_h { |i| [ i["title"], i["unnamed_speakers"] ] }
+    get account_field_path(@account, tab: "waiting")
+    waiting = inertia_props["items"].map { |i| i["title"] }
+    assert_equal [ "Generic" ], waiting
+    assert_equal waiting.sort, badges.select { |_, n| n.to_i.positive? }.keys.sort, "the tab and the badges agree"
   end
 
   test "an open note carries its content" do
@@ -188,6 +296,44 @@ class FieldControllerTest < ActionDispatch::IntegrationTest
     assert_nil inertia_props["current_item"]
     get account_field_path(@account, item: "nonsense")
     assert_nil inertia_props["current_item"]
+  end
+
+  test "an open PDF carries its pages' text; the list carries only the reading state" do
+    pdf = @account.field_files.create!(uploaded_by: @user,
+      file: Rack::Test::UploadedFile.new(Rails.root.join("test/fixtures/files/field_pdfs/mixed.pdf"), "application/pdf"))
+    pdf.extract_pdf!
+
+    get account_field_path(@account, item: "file-#{pdf.to_param}")
+    props = inertia_props
+    listed = props["items"].find { it["id"] == pdf.to_param }
+    assert_equal "extracted", listed.dig("text_extraction", "status")
+    assert_nil listed["pages"]
+
+    pages = props["current_item"]["pages"]
+    assert_equal %w[text text empty empty], pages.map { it["status"] }
+    assert_equal "Orchard ledger, page one: apricots and quinces.", pages.first["text"]
+    assert_nil pages.third["text"]
+  end
+
+  test "a file's summary can be written again, and the list says one is coming" do
+    file = @account.field_files.create!(file: upload, title: "Orchard", uploaded_by: @user)
+    file.update_columns(extracted_text: "We replant the orchard.", text_extracted_at: Time.current,
+                        summary_long: "Old.", summarized_at: 1.hour.ago)
+    previous = ENV["HOUSE_INFERENCE_OPENROUTER_API_KEY"]
+    ENV["HOUSE_INFERENCE_OPENROUTER_API_KEY"] = "test-key"
+    FieldSummaries.live = true
+
+    assert_enqueued_with(job: FieldItems::SummarizeJob) do
+      post resummarize_account_field_file_path(@account, file)
+    end
+    assert_response :redirect
+    get account_field_path(@account, tab: "files", item: "file-#{file.to_param}")
+    item = inertia_props["items"].find { |i| i["id"] == file.to_param }
+    assert_equal [ true, "Old." ], item.values_at("summary_pending", "summary_long")
+    assert_equal resummarize_account_field_file_path(@account, file), item["resummarize_url"]
+  ensure
+    ENV["HOUSE_INFERENCE_OPENROUTER_API_KEY"] = previous
+    FieldSummaries.live = false
   end
 
   private

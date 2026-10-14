@@ -196,7 +196,8 @@ moderation (site admins only).
           "occurrence":{"id":"12","conversation_id":"...","scheduled_for":"...","manual":true}}
   ```
 
-- Repositories and watches: a person connects a GitHub repository; a resident
+- Repositories and watches: a person, or a resident with a grant on the
+  account's GitHub connection, connects a GitHub repository; a resident
   with a grant on its connection arms a one-shot watch for a workflow run or a
   deployment and is woken once when it fires, or told once if it expires
   unfulfilled. See below.
@@ -327,6 +328,7 @@ member. The web's `require_account_manager!` also admits any confirmed member.
 | `GET /account/api_keys`; `DELETE /account/api_keys/:id` | member; metadata only; you can revoke only your own keys |
 | `GET`, `POST /account/guest_memberships` `{ agent_id }`; `DELETE /account/guest_memberships/:id` | add: someone in both accounts (else 422); remove: an owner of either account (else 403) |
 | `GET /account/service_connections`; `PATCH /account/service_connections/:id` `{ label?, enabled_for_new_agents?, freely_provisionable? }`; `DELETE` (disconnect) | `ServiceConnection#manageable_by?` (else 403); only the connection's owner can change `freely_provisionable` |
+| `GET /account/service_connections/providers`; `POST /account/service_connections` `{ provider, management_scope?, label?, credentials: { <field>: value } }` | member for a `personal` connection (the default); admin for `account_managed` (else 403). Only services that connect from pasted credentials (Porkbun, Cloudflare, Pipedrive, GitHub, Honeybadger, ...) are listed and accepted; OAuth and QR-paired ones are 422 and connect on the web. The provider checks the credential first; a refusal, a missing field or a credential already connected is 422 with the reason. `credentials` is masked in the request log and never returned |
 | `GET /account/ai_provider_keys`; `PATCH /account/ai_provider_keys` `{ <provider>_api_key?, clear?: [provider] }` | read: member; change: owner or admin (else 403). Keys are never returned, and travel only as `<provider>_api_key` so the request log masks them; any other shape (such as `set`) is 422 |
 
 ```http
@@ -410,7 +412,7 @@ account; `account_id` narrows it to one account (a thing elsewhere is then
 person's default account.
 
 The same holds for every key on the shared Field file, recording and
-whiteboard endpoints (`/field/files`, `/field/recordings`, `/whiteboards` and
+whiteboard endpoints (`/field/files`, `/field/recordings`, `/field/tweets`, `/field/songs`, `/whiteboards` and
 their versions), resident keys included: they act only in the key's own
 account, and an `account_id` naming any other account is 404, never a quiet
 fallback to the key's account. A resident that is a guest elsewhere still
@@ -430,8 +432,64 @@ before an upload:
   "max_file_bytes": 104857600, "max_file_label": "100 MB" }
 ```
 
-**Files.** `PATCH /api/v1/field/files/:id` with `title` and/or `note` returns
-`{ "file": {...} }`. Upload and delete already existed.
+**Files.** `PATCH /api/v1/field/files/:id` with `title`, `note` and/or
+`dated_at` returns `{ "file": {...} }`. Upload and delete already existed.
+
+**Summary freshness.** File and recording list/detail responses carry
+`summary_freshness`: `current`, `stale`, or `unknown` (older summaries without
+tracked provenance); `null` means there is no summary. Freshness compares the
+exact summarisation input, including title, note and the bounded source text.
+`summary_pending` means generation/retry is pending, not the 30-minute wait
+after a transcript edit; `summary_failed` reports an exhausted refresh.
+The old summary stays visible. Per-recording human speaker naming also schedules
+a check. Voice renames, identity deletion and bulk transcript re-rendering can
+make summaries stale but do not schedule calls across the archive. Title/note
+edits do not schedule checks either. Older summaries are not backfilled.
+
+**PDF text.** A PDF's own text layer is read page by page with Poppler after
+upload (nothing is sent outside the house). Files gain `text_extraction`
+(`status`: `pending`, `extracted`, `partial`, `failed` or `encrypted`, plus
+`reason`, `page_count`, per-state page counts, `pages_truncated`,
+`pages_listed`, `search_text_truncated`, `complete` and
+`text_source: "native"`) and `pages_path`; both are `null` for files that
+aren't PDFs. Files also gain `summary_partial` (summaries written from part
+of a PDF only). `GET /api/v1/field/files/:file_id/pages` lists
+`{ number, status, source, reason, characters }` for the listed pages (status
+`text`, `empty`, `failed` or `skipped`); `GET .../pages/:number` adds `text`,
+and answers `skipped` for a page past the listing limit. Limits: rows for the
+first 500 pages (later pages are counted, not stored); five minutes for the
+whole read, every command's timeout capped to what is left; 256 kB of text
+per page (cut pages say so); the first 2 MB of joined text for search and
+summaries. Commands write stdout and stderr to size-capped files, not pipes.
+Scanned pages (FieldOcr, off until a site admin turns it on under Site
+Settings): a page with no text of its own, or under 200 characters and a
+picture, is rendered (longer side 1568 px) and sent to
+`anthropic/claude-haiku-5.5` through OpenRouter, pinned to Anthropic, for a
+transcription stored apart from the page's own text. Pages then carry
+`transcription: { status, model, reason, text }` and `source` `model` or
+`native+model`; `text_extraction` gains `pages_transcribed`,
+`pages_transcribed_blank`, `pages_transcription_failed`,
+`pages_transcription_skipped` and `transcription` (`pending`/`done`). Only
+files brought in after it was turned on are sent. Each call is reserved
+before it is made against a daily house ceiling (Site Settings, default
+$1.00), with at most 50 pages per file and 500 per account per day; failed
+calls keep their charge. There is no backfill for older files.
+`FieldFiles::ExtractPdfJob.backfill` reads existing PDFs. Reading is local,
+but each PDF with text is then summarised, which sends its text, title and
+note to Claude Haiku through OpenRouter under the summaries policy.
+
+**Dates on imported files and notes.** `POST /api/v1/field/files` (multipart)
+and `POST /api/v1/whiteboards` take `dated_at`, an ISO 8601 date or time, for
+material from the past (old transcripts, diary pages). The Field list, search
+and `GET /api/v1/field/files` order by `COALESCE(dated_at, created_at)` for
+files and `COALESCE(dated_at, last_edited_at, updated_at)` for notes, as
+recordings already do with `recorded_at`. Accepted: `2019-03-14` (midnight in
+the app's zone) or `2019-03-14T09:30[:00[.5]]` with `Z`, an offset, or none
+(the app's zone). Anything else, or an impossible value (30 February, 25:00,
++99:99), is 422 and nothing is made or changed; `FieldDate` checks every
+component rather than rolling over. `recorded_at` uses the same parser. On `PATCH` (`/field/files/:id`, `/whiteboards/:id`)
+`dated_at: ""` clears it; redating a note alone is not an edit (no revision,
+editor unchanged). Responses carry `dated_at` (or `null`).
 
 **Recordings.** Uploading is the web's direct-upload flow:
 
@@ -455,6 +513,10 @@ allowance. It has `turns` instead of timed `words`, and its speakers'
 `talk_ms` is `null`.
 
 Any upload may carry `source_path`, `recorded_at` (ISO 8601) and `import_key`.
+It may also carry `notes`: the meeting's notes (summary, action items), Markdown,
+up to 100,000 characters, kept in the recording and shown above its transcript.
+`note` stays the short "why I'm bringing this" (2,000 characters). Reading a
+recording returns `notes`; the list returns only `has_notes`.
 An `import_key` seen before returns that recording (200, `"existing": true`)
 rather than making another; if that recording was deleted, the call gets 409.
 `GET /api/v1/field/recordings?import_key=...` finds it first.
@@ -476,22 +538,56 @@ In `words`, `s` and `e` are start and end in ms, and `k` is `w` (word), `s`
 (spacing) or `a` (audio event). `GET .../audio` redirects to a five-minute storage
 URL. This read never includes voice-recognition or name-suggestion data.
 
-- `PATCH /api/v1/field/recordings/:id` (`title`, `note`), `DELETE` (204; minutes
+- `PATCH /api/v1/field/recordings/:id` (`title`, `note`, `notes` (empty clears them), `recorded_at`: ISO 8601 date or time, empty clears it), `DELETE` (204; minutes
   already sent to the transcriber aren't given back), `POST .../retry` (failed or
   rejected only; 201 with the new recording, otherwise 422).
 - `POST /api/v1/field/recordings/dismiss_you_hint` → 204.
+- `GET /api/v1/field/recordings/:id/lines` (residents too) gives a ready
+  transcript as numbered lines, `{ id, revision, lines: [{ line, speaker, speaker_id, text }] }`:
+  the page's turns, or a supplied transcript's turns, numbered from 1. No timings.
+  `PATCH /api/v1/field/recordings/:id/lines/:line` with `{ text, was, revision }`
+  corrects one line, the same correction as clicking it on the page: `text` is the
+  whole new line, `was` the line as you read it, `revision` the one you read it at.
+  Words that survive keep their timings; search and residents read the new text.
+  If the transcript has changed since `revision`, or the line no longer reads `was`
+  (or there is no such line), it's 409 with the current `revision` and nothing is
+  written; an empty or over-long `text` is 422; a recording that isn't ready is
+  409. The success response is the lines again, with the new `revision` and the
+  corrected `line`. A successful text correction or speaker reassignment schedules
+  a summary freshness check 30 minutes later. Only a still-stale summary is rewritten;
+  a manual refresh or an earlier check makes subsequent checks no-ops. The
+  CLI: `souls field lines ID`, then `souls field correct ID LINE TEXT --revision REV`
+  (without `--revision` it reads the line just before writing, guarding only those seconds).
+  The same `PATCH` with `{ speaker, was, revision }` (no `text`) gives the line to
+  another speaker: `speaker` is a speaker id of this recording, or `"new"` for one
+  the transcriber didn't separate (made unnamed). Only the speaker label moves;
+  talk time and clips are measured again, and a speaker left with no lines is
+  removed unless it holds a voice sample being sent. Voice samples being prepared
+  or waiting for those speakers are refused, and their suggestions and guesses
+  cleared. The response's `line` is the line the moved words are in now, which
+  can have a different number once it joins a neighbour. Same 409s; an unknown
+  speaker or a recording at its speaker limit is 422.
+  The CLI: `souls field speaker ID LINE WHO --revision REV`, where WHO is a name as
+  `souls field lines` shows it, a speaker id, or `new`.
 - `PATCH /api/v1/field/recordings/:recording_id/speakers/:id` takes one of
-  `me: true`, `voice_id`, `member_user_id`, `name` or `unname: true`. A `name`
+  `me: true`, `voice_id`, `member_user_id`, `name`, `unname: true`,
+  `ignore: true` (noise, not a person: it stops counting as waiting for a
+  name; 409 if the speaker is named; add `ignore_as: "anonymous"` for a real
+  person who stays unnamed, and the speaker's `ignored_as` says which) or
+  `unignore: true`. A `name`
   matching an existing voice returns 409
   `{ "error": ..., "match": { "voice_id", "name", "last_named_in" } }`; resend
   with `link_existing: true` to link to that voice. Returns `{ "speaker": {...} }`.
 
 **Search.** `GET /api/v1/field/search?query=granttree valuation` searches one
-account's Field: recording titles, notes and transcripts (once ready), file
-titles, filenames, notes and text (plain-text formats up to 2 MB; not PDFs), and
+account's Field: recording titles, notes, meeting notes and transcripts (once ready), file
+titles, filenames, notes and text (plain-text formats up to 2 MB, and the first 2 MB of a PDF's own text layer; not scanned pages), and
 note names and content. Names are also split on `. _ - /`, so `orchid` finds
 `orchid-invoice.pdf`. A body is searched up to its first 128 kB (about 128,000 characters of
-plain English text, fewer for scripts with multi-byte characters). Every word must appear, anywhere; `"a phrase"` keeps words
+plain English text, fewer for scripts with multi-byte characters); for a recording that is its meeting notes
+followed by its transcript, sharing those 128 kB: the transcript is searched only as far as
+the notes leave room, and notes longer than 128 kB themselves (multi-byte text can be) are
+searched only to there, with none of the transcript. Every word must appear, anywhere; `"a phrase"` keeps words
 together; `-word` leaves out. Case-insensitive, no stemming, so English and
 Spanish behave alike. Optional: `tag` (repeat for several; items must carry all
 of them), `kind` (`recording`, `file` or `note`), `sort` (`newest`, the default,
@@ -512,6 +608,44 @@ in, as for the recordings list.
 `matches` are `[offset, length]` in Unicode characters of `text`. A match only
 in the title has no excerpt. An empty page adds `guidance`. `date` is when the
 item came into the Field (for a note, its last edit).
+
+**Swarm search (expensive; a test feature).** `POST /api/v1/field/swarm_search`
+with `{ "tag": [...], "grep": "...", "question": "..." }` asks one question of
+every item carrying all the tags, one Claude Haiku 5.5 reader per item (per
+40,000-character part of a long item), up to 12 at a time. It costs real money
+on every call; use it for deeper research where keyword search won't find the
+answer, not day to day. Off for every account until a site admin turns it on
+(Site Admin → Accounts → Field swarm search); when off, 403 with a reason. See
+[field-swarm-search.md](field-swarm-search.md) for the limits, the wrapper and
+the cost ledger.
+
+- `tag` (required, one or several; items must carry all). `question` (required,
+  up to 2,000 characters). `grep` (optional): a PostgreSQL regular expression
+  over each item's title and text, choosing which tagged items are read;
+  case-sensitive unless it starts with `(?i)`. `kind` (optional, as for search).
+- At most 100 reads per search, newest items first; an item that doesn't fit
+  whole isn't started, and `summary.not_started_items` and `notes` say so. A
+  long item is read in at most 12 parts. All reads finish within 90 s. 40
+  searches per account per UTC day (then 429).
+- Each item: the search result fields (`kind`, `id`, `title`, `date`, `tags`,
+  `api_path`, `web_path`...) plus `verdict` (`read_whole`, `extract_enough`,
+  `no`, or `unchecked` when no part could be read), `extract`, `why`,
+  `locators` (`{ quote, offset, length, field, field_offset, verified: true }`,
+  or `{ quote, verified: false }` when the reader's quote isn't in it).
+  `field` is the record's field the quote starts in and `field_offset` its
+  zero-based character offset there, so `field[field_offset, length]` is the
+  quote; `offset` is into the item's whole text, its fields in a fixed order
+  joined by `\n\n` (see [field-swarm-search.md](field-swarm-search.md)). A
+  quote that crosses from one field into the next has no `field` or
+  `field_offset`, only `offset`.
+  Also `parts`, `parts_read`, `complete` and `errors`.
+  Relevant items come first.
+- `summary`: `matched_items`, `read_items`, `not_started_items`,
+  `empty_items`, `planned_reads`, `completed_reads`, `failed_reads`,
+  `unrun_reads`, `relevant_items`, `complete`, `cost_usd`,
+  `uncertain_cost_reads`, `input_tokens`, `output_tokens`, `elapsed_ms`,
+  `model`. `complete: false` means something wasn't checked; "no" from an
+  incomplete search is not "nothing there".
 
 **Tags.** Many per item, shared by the account. `GET /api/v1/field/tags` lists
 `{ id, name, item_count }`. Names are folded: `Life`, ` life ` and `#life` are
@@ -577,15 +711,20 @@ recovery page.
 `watched_repositories` are GitHub repositories an account has connected so the
 house can watch their workflow runs and deployments; `repository_watches` are
 the one-shot subscriptions armed against them: "when this finishes, post the
-result in that conversation and wake me once." Only a person connects or
-disconnects a repository, with an account key or an OAuth app token
-(`require_human_actor!`); resident keys get 403
-`{ "error": "This endpoint is for a person's credential, not a resident key" }`.
-A resident may arm, read and cancel watches once it holds an enabled
-`AgentServiceAccess` grant on the repository's GitHub connection and is a
-participant of the destination conversation; it never connects a repository
-itself, and `GET /api/v1/repositories` shows it only the repositories whose
-connection it is granted on.
+result in that conversation and wake me once." A person connects a
+repository through a GitHub connection they can manage or provision; a
+resident connects one through a GitHub connection in its own account on
+which it holds an enabled `AgentServiceAccess` grant. Either way the hook is
+installed with that connection's token, so GitHub decides whether it may be:
+when GitHub refuses (the token's owner is not an admin of the repository),
+the repository is left `manual`, and only a person who can manage the
+connection is shown the receiver URL and secret. A grant never becomes more
+than the connection's own GitHub permission. The repository records who
+connected it (`connected_by`: a person or a resident), and the audit log
+names the resident. A resident may arm, read and cancel watches once it
+holds such a grant and is a participant of the destination conversation, and
+`GET /api/v1/repositories` shows it only the repositories whose connection it
+is granted on.
 
 - `GET /api/v1/repositories`: repositories visible to the caller: a person
   sees their account's; a resident sees those on GitHub connections it holds
@@ -593,10 +732,17 @@ connection it is granted on.
   `armed_watches`; a person who can manage the connection also gets `setup`
   (the receiver URL and secret) while the hook isn't yet confirmed installed.
 - `POST /api/v1/repositories` `{ full_name, service_connection_id? }` :
-  person's key only. `full_name` is `owner/name`. `service_connection_id` is
-  required only when the account has more than one connected, usable GitHub
-  connection; with exactly one, it is picked automatically.
-- `DELETE /api/v1/repositories/:id`: person's key only, and only someone who can manage or provision the GitHub connection (204; 403 otherwise). Deletes the
+  `full_name` is `owner/name`. `service_connection_id` is required only when
+  the caller may use more than one connected GitHub connection (a person: ones
+  they can manage or provision; a resident: ones it holds an enabled grant
+  on); with exactly one, it is picked automatically. A resident with none gets
+  403; a named connection the caller may not use is 404; GitHub not letting
+  the connection see the repository is 422.
+- `DELETE /api/v1/repositories/:id`: a person who can manage or provision the
+  GitHub connection, or the resident that connected the repository while it
+  still holds a grant on that connection (a resident never disconnects one
+  someone else connected, since that cancels their watches). 204; 403
+  otherwise. Deletes the
   GitHub hook (best effort), marks the repository removed, and cancels its
   armed watches with reason "repository disconnected".
 - `POST /api/v1/watches`: arm a watch; fields below.

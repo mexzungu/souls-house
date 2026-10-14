@@ -55,10 +55,20 @@ def migration_blobs(tree):
             and entry["path"].endswith(".sql")}
 
 
-def verify_migrations(before, after):
+class MigrationsChanged(RuntimeError):
+    def __init__(self, changes):
+        super().__init__("Existing runtime migrations changed; operator review required")
+        self.changes = changes
+
+
+def verify_migrations(before, after, accepted=()):
+    """Refuse any applied migration that is edited, renamed or deleted upstream,
+    unless the owner accepted that exact path at the exact blob residents have."""
     old, new = migration_blobs(before), migration_blobs(after)
-    if any(new.get(path) != sha for path, sha in old.items()):
-        raise RuntimeError("Existing runtime migrations changed; operator review required")
+    changes = sorted(f"{path}@{sha}" for path, sha in old.items() if new.get(path) != sha)
+    refused = [change for change in changes if change not in set(accepted)]
+    if refused:
+        raise MigrationsChanged(refused)
 
 
 class Worker:
@@ -246,7 +256,14 @@ class Worker:
             comparison = github(f"compare/{old}...{revision}")
             if comparison["status"] not in ("ahead", "identical"):
                 raise RuntimeError("Refusing runtime downgrade or divergent release")
-            verify_migrations(github(f"git/trees/{old}?recursive=1"), target_tree)
+            try:
+                verify_migrations(github(f"git/trees/{old}?recursive=1"), target_tree,
+                                  self.data.get("accepted_migrations", []))
+            except MigrationsChanged as error:
+                # Public on purpose: these upstream paths are what the owner reviews
+                # and pastes into accept_migrations to let this release through.
+                self.report("migrations changed upstream", migration_changes=error.changes)
+                raise
 
         tag = f"deploy-{self.data['id']}"
         stock = self.settings["stock_repository"] + ":" + tag

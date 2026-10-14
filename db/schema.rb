@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_14_160000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -38,8 +38,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.bigint "recording_ms_weekly_limit", default: 72000000, null: false
     t.boolean "recognise_voices", default: false, null: false
     t.boolean "founding", default: false, null: false
+    t.bigint "resident_room_id"
+    t.boolean "field_swarm_enabled", default: false, null: false
+    t.boolean "field_tweets_house_key", default: false, null: false
     t.index ["account_type"], name: "index_accounts_on_account_type"
     t.index ["disabled_at"], name: "index_accounts_on_disabled_at"
+    t.index ["resident_room_id"], name: "index_accounts_on_resident_room_id"
     t.index ["slug"], name: "index_accounts_on_slug", unique: true
   end
 
@@ -248,6 +252,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.string "chaos_telemetry_status"
     t.string "chaos_version"
     t.bigint "chat_id"
+    t.integer "container_oom_kills"
     t.string "conversation_obfuscated_id"
     t.datetime "created_at", null: false
     t.bigint "delta_prompt_bytes"
@@ -306,6 +311,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.string "usage_scope"
     t.bigint "follow_through_of_id"
     t.datetime "follow_through_checked_at"
+    t.bigint "failure_notice_message_id"
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -314,6 +320,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["agent_id"], name: "index_agent_runtime_interactions_on_agent_id"
     t.index ["chat_id", "created_at"], name: "index_agent_runtime_interactions_on_chat_id_and_created_at"
     t.index ["chat_id"], name: "index_agent_runtime_interactions_on_chat_id"
+    t.index ["failure_notice_message_id"], name: "index_agent_runtime_interactions_on_failure_notice_message_id", unique: true
     t.index ["follow_through_of_id"], name: "index_agent_runtime_interactions_on_follow_through_of_id", unique: true, where: "(follow_through_of_id IS NOT NULL)"
     t.index ["message_dispatch_id"], name: "index_agent_runtime_interactions_on_message_dispatch_id"
     t.index ["run_id"], name: "index_agent_runtime_interactions_on_run_id", unique: true
@@ -351,6 +358,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.string "container_image"
     t.integer "container_memory_mb", default: 8192, null: false
     t.string "container_name"
+    t.integer "container_pids_limit", default: 4096, null: false
     t.datetime "created_at", null: false
     t.datetime "deprecated_at"
     t.string "deprecation_reason"
@@ -534,6 +542,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["user_id"], name: "index_audit_logs_on_user_id"
   end
 
+  create_table "billing_customers", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "stripe_customer_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_billing_customers_on_account_id", unique: true
+    t.index ["stripe_customer_id"], name: "index_billing_customers_on_stripe_customer_id", unique: true
+  end
+
   create_table "chat_agents", force: :cascade do |t|
     t.bigint "agent_id", null: false
     t.text "agent_summary"
@@ -579,6 +596,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "updated_at", null: false
     t.boolean "web_access", default: false, null: false
     t.bigint "visual_tag_id"
+    t.bigint "room_id"
     t.index ["account_id", "client_conversation_id"], name: "index_chats_on_client_conversation_identity", unique: true, where: "(client_conversation_id IS NOT NULL)"
     t.index ["account_id", "created_at"], name: "index_chats_on_account_id_and_created_at"
     t.index ["account_id"], name: "index_chats_on_account_id"
@@ -589,6 +607,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["initiated_by_agent_id"], name: "index_chats_on_initiated_by_agent_id"
     t.index ["last_consolidated_at"], name: "index_chats_on_last_consolidated_at"
     t.index ["manual_responses"], name: "index_chats_on_manual_responses"
+    t.index ["room_id"], name: "index_chats_on_room_id"
     t.index ["visual_tag_id"], name: "index_chats_on_visual_tag_id"
     t.index ["web_access"], name: "index_chats_on_web_access"
   end
@@ -637,6 +656,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "last_activity_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.jsonb "sync_state", default: {}, null: false
     t.index ["service_connection_id", "last_activity_at"], name: "idx_on_service_connection_id_last_activity_at_96e688631f"
     t.index ["service_connection_id", "provider_chat_id"], name: "idx_on_service_connection_id_provider_chat_id_15d91caed6", unique: true
     t.index ["service_connection_id"], name: "index_comms_chats_on_service_connection_id"
@@ -654,8 +674,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.text "caption"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.datetime "edited_at"
+    t.bigint "edit_version"
+    t.datetime "deleted_at"
+    t.boolean "placeholder", default: false, null: false
+    t.index ["comms_chat_id", "provider_message_id"], name: "index_comms_messages_on_comms_chat_id_and_provider_message_id", unique: true
     t.index ["comms_chat_id", "sent_at", "id"], name: "index_comms_messages_on_comms_chat_id_and_sent_at_and_id"
-    t.index ["service_connection_id", "provider_message_id"], name: "idx_on_service_connection_id_provider_message_id_12b2c5454b", unique: true
+    t.index ["service_connection_id"], name: "index_comms_messages_on_service_connection_id"
   end
 
   create_table "comms_request_nonces", force: :cascade do |t|
@@ -767,6 +792,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["subject_user_id"], name: "index_device_streams_on_subject_user_id"
   end
 
+  create_table "field_file_pages", force: :cascade do |t|
+    t.bigint "field_file_id", null: false
+    t.integer "page_number", null: false
+    t.string "native_status", null: false
+    t.text "native_text"
+    t.string "native_reason", limit: 500
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string "model_status"
+    t.text "model_text"
+    t.string "model_reason", limit: 500
+    t.string "model_id"
+    t.boolean "has_images"
+    t.index ["field_file_id", "page_number"], name: "index_field_file_pages_on_field_file_id_and_page_number", unique: true
+  end
+
   create_table "field_files", force: :cascade do |t|
     t.bigint "account_id", null: false
     t.string "uploaded_by_type"
@@ -785,11 +826,38 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "summarized_at"
     t.datetime "summary_claimed_at"
     t.integer "summary_attempts", default: 0, null: false
+    t.datetime "dated_at"
+    t.string "pdf_status"
+    t.string "pdf_status_reason", limit: 500
+    t.integer "pdf_page_count"
+    t.jsonb "pdf_coverage"
+    t.string "summary_input_digest", limit: 64
+    t.string "summary_refresh_digest", limit: 64
+    t.string "summary_claim_token"
+    t.datetime "summary_refresh_due_at"
     t.index ["account_id", "created_at"], name: "index_field_files_on_account_id_and_created_at"
     t.index ["account_id"], name: "index_field_files_on_account_id"
     t.index ["discarded_at"], name: "index_field_files_on_discarded_at"
     t.index ["search_vector"], name: "index_field_files_on_search_vector", using: :gin
     t.index ["uploaded_by_type", "uploaded_by_id"], name: "index_field_files_on_uploaded_by"
+  end
+
+  create_table "field_ocr_calls", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "field_file_id", null: false
+    t.integer "page_number", null: false
+    t.date "day", null: false
+    t.string "status", default: "reserved", null: false
+    t.decimal "charge_usd", precision: 14, scale: 8, null: false
+    t.string "model_id", null: false
+    t.string "upstream_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_field_ocr_calls_on_account_id"
+    t.index ["day"], name: "index_field_ocr_calls_on_day"
+    t.index ["field_file_id", "page_number"], name: "index_field_ocr_calls_on_field_file_id_and_page_number"
+    t.check_constraint "charge_usd >= 0::numeric", name: "field_ocr_calls_nonnegative_charge"
+    t.check_constraint "status::text = ANY (ARRAY['reserved'::character varying, 'settled'::character varying, 'failed'::character varying, 'uncertain'::character varying]::text[])", name: "field_ocr_calls_status"
   end
 
   create_table "field_recording_dispatches", force: :cascade do |t|
@@ -867,6 +935,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.integer "recognition_confidence"
     t.bigint "recognition_print_generation"
     t.integer "recognition_decision_generation"
+    t.datetime "ignored_at"
+    t.string "ignored_by_type"
+    t.bigint "ignored_by_id"
+    t.string "ignored_as", default: "noise", null: false
     t.index ["field_recording_id", "label"], name: "index_field_recording_speakers_on_field_recording_id_and_label", unique: true
     t.index ["field_recording_id"], name: "index_field_recording_speakers_on_field_recording_id"
     t.index ["field_voice_id"], name: "index_field_recording_speakers_on_field_voice_id"
@@ -901,12 +973,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.string "source_path", limit: 1000
     t.datetime "recorded_at"
     t.string "import_key", limit: 200
-    t.virtual "search_vector", type: :tsvector, as: "((setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE((((COALESCE(title, ''::character varying))::text || ' '::text) || translate((COALESCE(title, ''::character varying))::text, '._-/'::text, repeat(' '::text, 4))), ''::text), 1000)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE(note, ''::text), 4000)), 'B'::\"char\")) || setweight(to_tsvector('simple'::regconfig,\nCASE\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 128000)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 128000)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 121600)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 121600)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 115200)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 115200)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 102400)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 102400)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 89600)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 89600)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 76800)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 76800)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 64000)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 64000)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 51200)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 51200)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 42240)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 42240)\n    ELSE \"left\"(COALESCE(\n    CASE\n        WHEN ((status)::text = 'ready'::text) THEN transcript_text\n        ELSE NULL::text\n    END, ''::text), 32000)\nEND), 'C'::\"char\"))", stored: true
     t.string "summary_short", limit: 80
     t.string "summary_long", limit: 400
     t.datetime "summarized_at"
     t.datetime "summary_claimed_at"
     t.integer "summary_attempts", default: 0, null: false
+    t.text "notes"
+    t.virtual "search_vector", type: :tsvector, as: "((setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE((((COALESCE(title, ''::character varying))::text || ' '::text) || translate((COALESCE(title, ''::character varying))::text, '._-/'::text, repeat(' '::text, 4))), ''::text), 1000)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE(note, ''::text), 4000)), 'B'::\"char\")) || setweight(to_tsvector('simple'::regconfig,\nCASE\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 128000)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 128000)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 121600)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 121600)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 115200)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 115200)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 102400)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 102400)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 89600)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 89600)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 76800)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 76800)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 64000)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 64000)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 51200)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 51200)\n    WHEN (octet_length(\"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 42240)) <= 128000) THEN \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 42240)\n    ELSE \"left\"(COALESCE(\n    CASE\n        WHEN (COALESCE(notes, ''::text) = ''::text) THEN\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END\n        ELSE ((notes || ' '::text) || COALESCE(\n        CASE\n            WHEN ((status)::text = 'ready'::text) THEN transcript_text\n            ELSE NULL::text\n        END, ''::text))\n    END, ''::text), 32000)\nEND), 'C'::\"char\"))", stored: true
+    t.string "summary_input_digest", limit: 64
+    t.string "summary_refresh_digest", limit: 64
+    t.string "summary_claim_token"
+    t.datetime "summary_refresh_due_at"
     t.index ["account_id", "created_at"], name: "index_field_recordings_on_account_id_and_created_at"
     t.index ["account_id", "import_key"], name: "index_field_recordings_on_account_id_and_import_key", unique: true, where: "(import_key IS NOT NULL)"
     t.index ["account_id"], name: "index_field_recordings_on_account_id"
@@ -915,6 +992,89 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["search_vector"], name: "index_field_recordings_on_search_vector", using: :gin
     t.index ["status"], name: "index_field_recordings_on_status"
     t.index ["uploaded_by_type", "uploaded_by_id"], name: "index_field_recordings_on_uploaded_by"
+  end
+
+  create_table "field_songs", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "added_by_type"
+    t.bigint "added_by_id"
+    t.string "shared_for_type"
+    t.bigint "shared_for_id"
+    t.string "title", limit: 200, null: false
+    t.string "artist", limit: 200
+    t.string "album", limit: 200
+    t.integer "year"
+    t.jsonb "links", default: [], null: false
+    t.text "lyrics"
+    t.boolean "instrumental", default: false, null: false
+    t.text "note"
+    t.integer "duration_ms"
+    t.datetime "dated_at"
+    t.datetime "discarded_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.virtual "search_vector", type: :tsvector, as: "((setweight(to_tsvector('simple'::regconfig, (((COALESCE(title, ''::character varying))::text || ' '::text) || (COALESCE(artist, ''::character varying))::text)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, (((COALESCE(album, ''::character varying))::text || ' '::text) || \"left\"(COALESCE(note, ''::text), 4000))), 'B'::\"char\")) || setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE(lyrics, ''::text), 40000)), 'C'::\"char\"))", stored: true
+    t.index ["account_id", "created_at"], name: "index_field_songs_on_account_id_and_created_at"
+    t.index ["added_by_type", "added_by_id"], name: "index_field_songs_on_added_by"
+    t.index ["discarded_at"], name: "index_field_songs_on_discarded_at"
+    t.index ["search_vector"], name: "index_field_songs_on_search_vector", using: :gin
+    t.index ["shared_for_type", "shared_for_id"], name: "index_field_songs_on_shared_for"
+    t.check_constraint "NOT (instrumental AND lyrics ~ '[^[:space:]]'::text)", name: "field_songs_instrumental_without_lyrics"
+    t.check_constraint "year IS NULL OR year >= 1000 AND year <= 3000", name: "field_songs_year"
+  end
+
+  create_table "field_swarm_reads", force: :cascade do |t|
+    t.bigint "field_swarm_search_id", null: false
+    t.bigint "account_id", null: false
+    t.string "item_kind", null: false
+    t.bigint "item_id", null: false
+    t.integer "part", default: 1, null: false
+    t.integer "parts", default: 1, null: false
+    t.integer "input_chars", null: false
+    t.string "status", null: false
+    t.string "verdict"
+    t.string "error"
+    t.bigint "input_tokens"
+    t.bigint "output_tokens"
+    t.decimal "cost_usd", precision: 14, scale: 8
+    t.integer "latency_ms"
+    t.string "upstream_id"
+    t.boolean "cost_uncertain", default: false, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id", "created_at"], name: "index_field_swarm_reads_on_account_id_and_created_at"
+    t.index ["account_id"], name: "index_field_swarm_reads_on_account_id"
+    t.index ["field_swarm_search_id"], name: "index_field_swarm_reads_on_field_swarm_search_id"
+    t.check_constraint "status::text = ANY (ARRAY['read'::character varying, 'failed'::character varying, 'rate_limited'::character varying, 'timed_out'::character varying]::text[])", name: "field_swarm_reads_status"
+  end
+
+  create_table "field_swarm_searches", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "agent_id"
+    t.bigint "user_id"
+    t.string "status", default: "running", null: false
+    t.jsonb "tags", default: [], null: false
+    t.text "grep"
+    t.integer "question_chars", null: false
+    t.integer "matched_items", default: 0, null: false
+    t.integer "candidate_items", default: 0, null: false
+    t.integer "planned_reads", default: 0, null: false
+    t.integer "completed_reads", default: 0, null: false
+    t.integer "failed_reads", default: 0, null: false
+    t.integer "unrun_reads", default: 0, null: false
+    t.integer "uncertain_cost_reads", default: 0, null: false
+    t.bigint "input_tokens", default: 0, null: false
+    t.bigint "output_tokens", default: 0, null: false
+    t.decimal "cost_usd", precision: 14, scale: 8, default: "0.0", null: false
+    t.integer "elapsed_ms"
+    t.string "model_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id", "created_at"], name: "index_field_swarm_searches_on_account_id_and_created_at"
+    t.index ["account_id"], name: "index_field_swarm_searches_on_account_id"
+    t.index ["agent_id"], name: "index_field_swarm_searches_on_agent_id"
+    t.index ["user_id"], name: "index_field_swarm_searches_on_user_id"
+    t.check_constraint "status::text = ANY (ARRAY['running'::character varying, 'complete'::character varying, 'failed'::character varying]::text[])", name: "field_swarm_searches_status"
   end
 
   create_table "field_taggings", force: :cascade do |t|
@@ -935,7 +1095,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["field_tag_id"], name: "index_field_taggings_on_field_tag_id"
     t.index ["taggable_type", "taggable_id"], name: "index_field_taggings_on_taggable"
     t.index ["tagged_by_type", "tagged_by_id"], name: "index_field_taggings_on_tagged_by"
-    t.check_constraint "taggable_type::text = ANY (ARRAY['FieldFile'::character varying, 'FieldRecording'::character varying, 'Whiteboard'::character varying]::text[])", name: "field_taggings_taggable_type"
+    t.check_constraint "taggable_type::text = ANY (ARRAY['FieldFile'::character varying, 'FieldRecording'::character varying, 'Whiteboard'::character varying, 'FieldTweet'::character varying, 'FieldSong'::character varying]::text[])", name: "field_taggings_taggable_type"
   end
 
   create_table "field_tags", force: :cascade do |t|
@@ -952,6 +1112,109 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["account_id"], name: "index_field_tags_on_account_id"
     t.index ["created_by_type", "created_by_id"], name: "index_field_tags_on_created_by"
     t.index ["discarded_by_type", "discarded_by_id"], name: "index_field_tags_on_discarded_by"
+  end
+
+  create_table "field_tweet_backlog_items", force: :cascade do |t|
+    t.bigint "field_tweet_source_id", null: false
+    t.string "provider_tweet_id", limit: 32, null: false
+    t.datetime "posted_at", null: false
+    t.jsonb "attrs", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["field_tweet_source_id", "posted_at"], name: "index_field_tweet_backlog_on_source_and_posted"
+    t.index ["field_tweet_source_id", "provider_tweet_id"], name: "index_field_tweet_backlog_on_source_and_tweet", unique: true
+  end
+
+  create_table "field_tweet_calls", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "field_tweet_source_id"
+    t.string "funding", null: false
+    t.string "status", default: "reserved", null: false
+    t.decimal "charge_usd", precision: 14, scale: 8, null: false
+    t.integer "returned_count", default: 0, null: false
+    t.integer "already_stored_count", default: 0, null: false
+    t.integer "queued_count", default: 0, null: false
+    t.integer "rejected_count", default: 0, null: false
+    t.boolean "retry", default: false, null: false
+    t.integer "http_status"
+    t.string "error", limit: 300
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_field_tweet_calls_on_account_id"
+    t.index ["field_tweet_source_id"], name: "index_field_tweet_calls_on_field_tweet_source_id"
+    t.index ["funding", "created_at"], name: "index_field_tweet_calls_on_funding_and_created_at"
+    t.check_constraint "charge_usd >= 0::numeric", name: "field_tweet_calls_nonnegative_charge"
+    t.check_constraint "funding::text = ANY (ARRAY['house'::character varying, 'own'::character varying]::text[])", name: "field_tweet_calls_funding"
+    t.check_constraint "status::text = ANY (ARRAY['reserved'::character varying, 'settled'::character varying, 'failed'::character varying, 'uncertain'::character varying]::text[])", name: "field_tweet_calls_status"
+  end
+
+  create_table "field_tweet_sources", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "created_by_type"
+    t.bigint "created_by_id"
+    t.string "handle", limit: 15, null: false
+    t.boolean "include_replies", default: true, null: false
+    t.boolean "include_quotes", default: true, null: false
+    t.boolean "include_reposts", default: false, null: false
+    t.decimal "own_monthly_usd_limit", precision: 10, scale: 4, default: "5.0", null: false
+    t.string "state", default: "active", null: false
+    t.string "state_reason", limit: 300
+    t.datetime "connected_at", null: false
+    t.datetime "checkpoint_at", null: false
+    t.datetime "window_since"
+    t.datetime "window_until"
+    t.text "window_cursor"
+    t.integer "window_pages", default: 0, null: false
+    t.integer "window_rejected", default: 0, null: false
+    t.datetime "gap_since"
+    t.datetime "gap_until"
+    t.datetime "last_success_at"
+    t.datetime "next_attempt_at"
+    t.integer "failure_count", default: 0, null: false
+    t.datetime "sync_claimed_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_field_tweet_sources_on_account_id", unique: true
+    t.index ["created_by_type", "created_by_id"], name: "index_field_tweet_sources_on_created_by"
+    t.index ["next_attempt_at"], name: "index_field_tweet_sources_on_next_attempt_at"
+    t.check_constraint "state::text = ANY (ARRAY['active'::character varying, 'paused'::character varying, 'needs_attention'::character varying]::text[])", name: "field_tweet_sources_state"
+  end
+
+  create_table "field_tweets", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.bigint "field_tweet_source_id"
+    t.string "provider_tweet_id", limit: 32, null: false
+    t.string "author_id", limit: 32
+    t.string "author_handle", limit: 15, null: false
+    t.string "author_name", limit: 100
+    t.text "text", null: false
+    t.datetime "posted_at", null: false
+    t.datetime "fetched_at", null: false
+    t.string "url", limit: 300, null: false
+    t.boolean "is_reply", default: false, null: false
+    t.boolean "is_quote", default: false, null: false
+    t.boolean "is_repost", default: false, null: false
+    t.string "in_reply_to_tweet_id", limit: 32
+    t.string "in_reply_to_handle", limit: 15
+    t.string "conversation_id", limit: 32
+    t.string "quoted_tweet_id", limit: 32
+    t.string "reposted_tweet_id", limit: 32
+    t.jsonb "media", default: [], null: false
+    t.jsonb "metrics", default: {}, null: false
+    t.datetime "metrics_at"
+    t.jsonb "related", default: {}, null: false
+    t.string "lang", limit: 16
+    t.string "source", limit: 40, default: "twitterapi.io", null: false
+    t.datetime "discarded_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.virtual "search_vector", type: :tsvector, as: "(setweight(to_tsvector('simple'::regconfig, (((COALESCE(author_handle, ''::character varying))::text || ' '::text) || (COALESCE(author_name, ''::character varying))::text)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE(text, ''::text), 30000)), 'C'::\"char\"))", stored: true
+    t.index ["account_id", "created_at"], name: "index_field_tweets_on_account_id_and_created_at"
+    t.index ["account_id", "posted_at"], name: "index_field_tweets_on_account_id_and_posted_at"
+    t.index ["account_id", "provider_tweet_id"], name: "index_field_tweets_on_account_id_and_provider_tweet_id", unique: true
+    t.index ["discarded_at"], name: "index_field_tweets_on_discarded_at"
+    t.index ["field_tweet_source_id"], name: "index_field_tweets_on_field_tweet_source_id"
+    t.index ["search_vector"], name: "index_field_tweets_on_search_vector", using: :gin
   end
 
   create_table "field_voice_enrolments", force: :cascade do |t|
@@ -1230,6 +1493,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.bigint "user_id"
     t.boolean "reply_attention_pending", default: false, null: false
     t.bigint "safeguard_detection_id"
+    t.jsonb "notice_link"
     t.index ["agent_id"], name: "index_messages_on_agent_id"
     t.index ["ai_model_id"], name: "index_messages_on_ai_model_id"
     t.index ["chat_id", "created_at"], name: "index_messages_on_chat_id_and_created_at"
@@ -1583,6 +1847,46 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["watched_repository_id"], name: "index_repository_watches_on_watched_repository_id"
   end
 
+  create_table "resident_entitlements", force: :cascade do |t|
+    t.bigint "agent_id", null: false
+    t.bigint "account_id", null: false
+    t.string "source", null: false
+    t.string "tier"
+    t.bigint "current_subscription_id"
+    t.string "state", null: false
+    t.datetime "complimentary_granted_at"
+    t.datetime "grace_started_at"
+    t.datetime "grace_deadline"
+    t.jsonb "notices_sent", default: {}, null: false
+    t.datetime "held_at"
+    t.datetime "hold_released_at"
+    t.string "checkout_session_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_resident_entitlements_on_account_id"
+    t.index ["agent_id"], name: "index_resident_entitlements_on_agent_id", unique: true
+    t.index ["current_subscription_id"], name: "index_resident_entitlements_on_current_subscription_id"
+    t.index ["grace_deadline"], name: "index_resident_entitlements_on_grace_deadline", where: "((state)::text = 'grace'::text)"
+    t.index ["state"], name: "index_resident_entitlements_on_state"
+  end
+
+  create_table "resident_subscriptions", force: :cascade do |t|
+    t.bigint "agent_id", null: false
+    t.bigint "account_id", null: false
+    t.string "stripe_subscription_id", null: false
+    t.string "tier", null: false
+    t.string "stripe_status", null: false
+    t.datetime "current_period_end"
+    t.boolean "cancel_at_period_end", default: false, null: false
+    t.datetime "last_synced_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_resident_subscriptions_on_account_id"
+    t.index ["agent_id"], name: "index_resident_subscriptions_on_agent_id"
+    t.index ["agent_id"], name: "index_resident_subscriptions_one_live_per_agent", unique: true, where: "((stripe_status)::text = ANY ((ARRAY['incomplete'::character varying, 'trialing'::character varying, 'active'::character varying, 'past_due'::character varying])::text[]))"
+    t.index ["stripe_subscription_id"], name: "index_resident_subscriptions_on_stripe_subscription_id", unique: true
+  end
+
   create_table "resident_turns", force: :cascade do |t|
     t.datetime "admitted_at"
     t.bigint "agent_id", null: false
@@ -1682,6 +1986,17 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.index ["creator_id"], name: "index_rhythms_on_creator_id"
     t.index ["next_run_at"], name: "index_rhythms_on_next_run_at"
     t.check_constraint "creator_id IS NULL OR creator_agent_id IS NULL", name: "rhythms_one_creator"
+  end
+
+  create_table "rooms", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "name", limit: 40, null: false
+    t.integer "position", default: 0, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index "account_id, lower((name)::text)", name: "index_rooms_on_account_and_lower_name", unique: true
+    t.index ["account_id"], name: "index_rooms_on_account_id"
+    t.index ["id", "account_id"], name: "index_rooms_on_id_and_account_id", unique: true
   end
 
   create_table "runner_commands", force: :cascade do |t|
@@ -1823,6 +2138,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.text "pairing_qr"
     t.datetime "pairing_qr_expires_at"
     t.datetime "pairing_qr_issued_at"
+    t.integer "login_generation", default: 0, null: false
+    t.jsonb "connector_state", default: {}, null: false
+    t.bigint "comms_event_seq", default: 0, null: false
+    t.text "pairing_phone_code"
+    t.datetime "pairing_phone_code_issued_at"
+    t.datetime "pairing_phone_code_expires_at"
     t.index ["account_id", "provider", "credential_fingerprint"], name: "index_service_connections_on_account_provider_credential", unique: true, where: "(credential_fingerprint IS NOT NULL)"
     t.index ["account_id", "provider", "external_subject_id"], name: "index_service_connections_on_account_provider_subject", unique: true, where: "((external_subject_id IS NOT NULL) AND (credential_fingerprint IS NULL))"
     t.index ["account_id"], name: "index_service_connections_on_account_id"
@@ -1855,6 +2176,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.boolean "safeguard_conversations_enabled", default: false, null: false
     t.boolean "new_residents_on_vm", default: false, null: false
     t.integer "vm_resident_limit", default: 0, null: false
+    t.boolean "field_ocr_enabled", default: false, null: false
+    t.datetime "field_ocr_enabled_at"
+    t.decimal "field_ocr_daily_usd_ceiling", precision: 10, scale: 4, default: "1.0", null: false
+    t.boolean "field_tweets_enabled", default: true, null: false
+    t.decimal "field_tweets_site_monthly_usd_ceiling", precision: 10, scale: 4, default: "10.0", null: false
+    t.decimal "field_tweets_account_monthly_usd_ceiling", precision: 10, scale: 4, default: "1.0", null: false
+    t.integer "field_tweets_daily_import_cap", default: 50, null: false
+    t.integer "field_tweets_poll_minutes", default: 15, null: false
+    t.datetime "field_tweets_house_halted_at"
+    t.string "field_tweets_house_halt_reason", limit: 300
   end
 
   create_table "stone_revisions", force: :cascade do |t|
@@ -1884,6 +2215,20 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "updated_at", null: false
     t.index ["chat_id"], name: "index_stones_on_chat_id"
     t.index ["public_token"], name: "index_stones_on_public_token", unique: true
+  end
+
+  create_table "stripe_events", force: :cascade do |t|
+    t.string "stripe_event_id", null: false
+    t.string "event_type", null: false
+    t.jsonb "payload", default: {}, null: false
+    t.string "status", default: "received", null: false
+    t.integer "attempts", default: 0, null: false
+    t.text "last_error"
+    t.datetime "processed_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["status", "updated_at"], name: "index_stripe_events_on_status_and_updated_at"
+    t.index ["stripe_event_id"], name: "index_stripe_events_on_stripe_event_id", unique: true
   end
 
   create_table "telegram_messages", force: :cascade do |t|
@@ -1961,11 +2306,22 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.bigint "agent_id", null: false
     t.datetime "created_at", null: false
     t.text "text", null: false
-    t.string "tweet_id", null: false
+    t.string "tweet_id"
     t.datetime "updated_at", null: false
     t.bigint "x_integration_id", null: false
+    t.string "status", default: "posted", null: false
+    t.string "idempotency_key"
+    t.string "request_digest"
+    t.string "reply_to_tweet_id"
+    t.string "failure_reason"
+    t.text "error_message"
+    t.datetime "resolved_at"
+    t.bigint "resolved_by_agent_id"
+    t.index ["agent_id", "idempotency_key"], name: "index_tweet_logs_on_agent_and_idempotency_key", unique: true, where: "(idempotency_key IS NOT NULL)"
     t.index ["agent_id"], name: "index_tweet_logs_on_agent_id"
+    t.index ["resolved_by_agent_id"], name: "index_tweet_logs_on_resolved_by_agent_id"
     t.index ["tweet_id"], name: "index_tweet_logs_on_tweet_id", unique: true
+    t.index ["x_integration_id", "created_at"], name: "index_tweet_logs_on_x_integration_id_and_created_at"
     t.index ["x_integration_id"], name: "index_tweet_logs_on_x_integration_id"
   end
 
@@ -2047,8 +2403,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "removed_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.bigint "created_by_agent_id"
     t.index ["account_id", "provider", "full_name"], name: "index_watched_repositories_on_live_full_name", unique: true, where: "(removed_at IS NULL)"
     t.index ["account_id"], name: "index_watched_repositories_on_account_id"
+    t.index ["created_by_agent_id"], name: "index_watched_repositories_on_created_by_agent_id"
     t.index ["created_by_user_id"], name: "index_watched_repositories_on_created_by_user_id"
     t.index ["receiver_token"], name: "index_watched_repositories_on_receiver_token", unique: true
     t.index ["service_connection_id"], name: "index_watched_repositories_on_service_connection_id"
@@ -2068,6 +2426,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.string "summary", limit: 250
     t.datetime "updated_at", null: false
     t.virtual "search_vector", type: :tsvector, as: "((setweight(to_tsvector('simple'::regconfig, \"left\"(COALESCE((((COALESCE(name, ''::character varying))::text || ' '::text) || translate((COALESCE(name, ''::character varying))::text, '._-/'::text, repeat(' '::text, 4))), ''::text), 1000)), 'A'::\"char\") || setweight(to_tsvector('simple'::regconfig, \"left\"((COALESCE(summary, ''::character varying))::text, 4000)), 'B'::\"char\")) || setweight(to_tsvector('simple'::regconfig,\nCASE\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 128000)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 128000)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 121600)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 121600)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 115200)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 115200)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 102400)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 102400)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 89600)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 89600)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 76800)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 76800)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 64000)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 64000)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 51200)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 51200)\n    WHEN (octet_length(\"left\"(COALESCE(content, ''::text), 42240)) <= 128000) THEN \"left\"(COALESCE(content, ''::text), 42240)\n    ELSE \"left\"(COALESCE(content, ''::text), 32000)\nEND), 'C'::\"char\"))", stored: true
+    t.datetime "dated_at"
     t.index ["account_id", "deleted_at"], name: "index_whiteboards_on_account_id_and_deleted_at"
     t.index ["account_id", "name"], name: "index_whiteboards_on_account_id_and_name", unique: true, where: "(deleted_at IS NULL)"
     t.index ["account_id"], name: "index_whiteboards_on_account_id"
@@ -2084,9 +2443,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
     t.datetime "token_expires_at"
     t.datetime "updated_at", null: false
     t.string "x_username"
+    t.integer "daily_post_limit", default: 20, null: false
     t.index ["account_id"], name: "index_x_integrations_on_account_id", unique: true
   end
 
+  add_foreign_key "accounts", "rooms", column: "resident_room_id", on_delete: :nullify
   add_foreign_key "action_mcp_session_messages", "action_mcp_sessions", column: "session_id", name: "fk_action_mcp_session_messages_session_id", on_update: :cascade, on_delete: :cascade
   add_foreign_key "action_mcp_session_subscriptions", "action_mcp_sessions", column: "session_id", on_delete: :cascade
   add_foreign_key "action_mcp_session_tasks", "action_mcp_sessions", column: "session_id", name: "fk_action_mcp_session_tasks_session_id", on_update: :cascade, on_delete: :cascade
@@ -2102,6 +2463,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "agent_runtime_interactions", "agents"
   add_foreign_key "agent_runtime_interactions", "chats"
   add_foreign_key "agent_runtime_interactions", "message_dispatches", on_delete: :nullify
+  add_foreign_key "agent_runtime_interactions", "messages", column: "failure_notice_message_id", on_delete: :nullify
   add_foreign_key "agent_service_accesses", "agents"
   add_foreign_key "agent_service_accesses", "service_connections"
   add_foreign_key "agents", "accounts"
@@ -2116,11 +2478,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "app_sessions", "users"
   add_foreign_key "audit_logs", "accounts"
   add_foreign_key "audit_logs", "users"
+  add_foreign_key "billing_customers", "accounts"
   add_foreign_key "chat_agents", "agents"
   add_foreign_key "chat_agents", "chats"
   add_foreign_key "chats", "accounts"
   add_foreign_key "chats", "agents", column: "initiated_by_agent_id"
   add_foreign_key "chats", "ai_models"
+  add_foreign_key "chats", "rooms", column: ["room_id", "account_id"], primary_key: ["id", "account_id"]
   add_foreign_key "chats", "visual_tags", column: ["visual_tag_id", "account_id"], primary_key: ["id", "account_id"]
   add_foreign_key "chats", "whiteboards", column: "active_whiteboard_id"
   add_foreign_key "cloud_procurement_operations", "agent_placements"
@@ -2137,7 +2501,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "device_stream_sessions", "device_streams"
   add_foreign_key "device_streams", "accounts"
   add_foreign_key "device_streams", "users", column: "subject_user_id"
+  add_foreign_key "field_file_pages", "field_files"
   add_foreign_key "field_files", "accounts"
+  add_foreign_key "field_ocr_calls", "accounts"
+  add_foreign_key "field_ocr_calls", "field_files"
   add_foreign_key "field_recording_dispatches", "accounts"
   add_foreign_key "field_recording_dispatches", "field_recordings"
   add_foreign_key "field_recording_identifications", "field_recordings"
@@ -2149,9 +2516,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "field_recording_speakers", "field_voices", column: "suggested_voice_id", on_delete: :nullify
   add_foreign_key "field_recordings", "accounts"
   add_foreign_key "field_recordings", "field_recordings", column: "retried_from_id", on_delete: :nullify
+  add_foreign_key "field_songs", "accounts"
   add_foreign_key "field_taggings", "accounts"
   add_foreign_key "field_taggings", "field_tags"
   add_foreign_key "field_tags", "accounts"
+  add_foreign_key "field_tweet_backlog_items", "field_tweet_sources", on_delete: :cascade
+  add_foreign_key "field_tweet_calls", "accounts"
+  add_foreign_key "field_tweet_sources", "accounts"
+  add_foreign_key "field_tweets", "accounts"
+  add_foreign_key "field_tweets", "field_tweet_sources", on_delete: :nullify
   add_foreign_key "field_voice_enrolments", "accounts"
   add_foreign_key "field_voice_enrolments", "field_recording_speakers"
   add_foreign_key "field_voice_enrolments", "field_voices"
@@ -2160,6 +2533,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "field_voiceprints", "field_voices"
   add_foreign_key "field_voices", "accounts"
   add_foreign_key "field_voices", "users", on_delete: :nullify
+  add_foreign_key "field_swarm_reads", "accounts"
+  add_foreign_key "field_swarm_reads", "field_swarm_searches", on_delete: :cascade
+  add_foreign_key "field_swarm_searches", "accounts"
+  add_foreign_key "field_swarm_searches", "agents", on_delete: :nullify
+  add_foreign_key "field_swarm_searches", "users", on_delete: :nullify
   add_foreign_key "github_integrations", "accounts"
   add_foreign_key "github_resident_imports", "accounts"
   add_foreign_key "github_resident_imports", "service_connections"
@@ -2233,6 +2611,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "repository_watches", "chats", on_delete: :cascade
   add_foreign_key "repository_watches", "users", column: "created_by_user_id", on_delete: :nullify
   add_foreign_key "repository_watches", "watched_repositories", on_delete: :cascade
+  add_foreign_key "resident_entitlements", "accounts"
+  add_foreign_key "resident_entitlements", "agents"
+  add_foreign_key "resident_entitlements", "resident_subscriptions", column: "current_subscription_id"
+  add_foreign_key "resident_subscriptions", "accounts"
+  add_foreign_key "resident_subscriptions", "agents"
   add_foreign_key "resident_turns", "agent_runtime_interactions"
   add_foreign_key "resident_turns", "agents"
   add_foreign_key "rhythm_agents", "agents", on_delete: :cascade
@@ -2248,6 +2631,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "rhythms", "accounts", on_delete: :cascade
   add_foreign_key "rhythms", "agents", column: "creator_agent_id", on_delete: :nullify
   add_foreign_key "rhythms", "users", column: "creator_id", on_delete: :nullify
+  add_foreign_key "rooms", "accounts"
   add_foreign_key "runner_commands", "agent_placements"
   add_foreign_key "runner_commands", "resident_turns"
   add_foreign_key "runner_commands", "runner_enrollments"
@@ -2279,6 +2663,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "transcription_glossary_terms", "agents", column: "created_by_agent_id", on_delete: :nullify
   add_foreign_key "transcription_glossary_terms", "users", column: "created_by_user_id", on_delete: :nullify
   add_foreign_key "tweet_logs", "agents"
+  add_foreign_key "tweet_logs", "agents", column: "resolved_by_agent_id"
   add_foreign_key "tweet_logs", "x_integrations"
   add_foreign_key "users", "accounts", column: "default_account_id", on_delete: :nullify
   add_foreign_key "visual_tags", "accounts"
@@ -2286,6 +2671,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_10_140000) do
   add_foreign_key "vm_backups", "agents"
   add_foreign_key "vm_backups", "runner_commands"
   add_foreign_key "watched_repositories", "accounts", on_delete: :cascade
+  add_foreign_key "watched_repositories", "agents", column: "created_by_agent_id", on_delete: :nullify
   add_foreign_key "watched_repositories", "service_connections", on_delete: :cascade
   add_foreign_key "watched_repositories", "users", column: "created_by_user_id", on_delete: :nullify
   add_foreign_key "whiteboards", "accounts"

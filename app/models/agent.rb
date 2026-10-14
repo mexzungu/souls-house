@@ -201,6 +201,13 @@ class Agent < ApplicationRecord
 
   def external? = runtime == "external"
 
+  # Sharing screens offer live residents. A retired one (a discarded VM, a
+  # resident switched off) stays listed only while it still holds the grant,
+  # so the switch that takes it away is still there.
+  def offered_for_sharing?(granted:)
+    active? || granted
+  end
+
   def offline? = runtime == "offline"
 
   def externally_hosted?

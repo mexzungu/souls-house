@@ -8,6 +8,19 @@ module TestSupport
 
     PASSWORD = "password123"
 
+    # A recording that never became ready (failed), carrying meeting notes:
+    # its notes must still be reachable from the Field viewer.
+    def field_recording_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      audio = ActiveStorage::Blob.create_and_upload!(io: file_fixture_audio, filename: "standup.mp3", content_type: "audio/mpeg")
+      recording = account.field_recordings.create!(title: params.fetch(:title, "Failed standup"), notes: params[:notes],
+        uploaded_by: account.users.first!, audio: audio)
+      recording.update_columns(status: "failed", failure_reason: "The transcriber couldn't read this file.")
+      render json: { recording_param: recording.to_param }
+    end
+
     def stone_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
@@ -145,6 +158,9 @@ module TestSupport
           credential_metadata: { "repository" => "member/project" })
       end
 
+      telegram_fixtures(account, primary_user) if params[:telegram]
+      whatsapp = whatsapp_fixture(account, primary_user) if params[:whatsapp]
+
       github_imports = github_import_fixtures(account, primary_user, run_id) if params[:github_resident_onboarding]
 
       render json: {
@@ -157,6 +173,7 @@ module TestSupport
         secondary_user: user_json(secondary_user),
         admin_user: user_json(admin_user),
         **(github_imports || {}),
+        **(whatsapp ? { whatsapp: whatsapp } : {}),
         agents: agents.map { |agent|
           { id: agent.to_param, name: agent.name, edit_url: edit_account_agent_path(account, agent) }
         }
@@ -204,11 +221,19 @@ module TestSupport
           interaction.activity_configuration!
         end
       end
+      if params[:silence_seconds]
+        run.update!(started_at: params[:silence_seconds].to_i.clamp(0, 3600).seconds.ago)
+      end
+      if params[:post_update]
+        chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic progress update.")
+      end
       attempt = run.agent_runtime_attempts.first
       attempt_id = attempt&.attempt_id || SecureRandom.uuid
       seq = attempt&.last_seq || 0
       events = if params[:complete]
-        chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic work is complete.", runtime_interaction: run)
+        unless params[:quiet_complete]
+          chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic work is complete.", runtime_interaction: run)
+        end
         [ { "seq" => seq + 1, "type" => "supervisor.finished", "data" => { "outcome" => "completed" } } ]
       elsif attempt.nil?
         [
@@ -234,10 +259,12 @@ module TestSupport
         end
       end
       events << { "seq" => next_seq += 1, "type" => "stream.gap", "data" => {} } if params[:stream_gap]
+      events << { "seq" => next_seq + 1, "type" => "heartbeat", "data" => {} } if events.empty?
       RuntimeActivityIngestion.new(run, {
         "schema_version" => 1, "run_id" => run.run_id, "attempt_id" => attempt_id,
         "attempt_number" => 1, "events" => events
       }).call
+      run.agent_runtime_attempts.last.update!(last_report_at: 31.seconds.ago) if params[:stale_report]
       render json: { runtime_run_id: run.run_id }
     end
 
@@ -366,6 +393,12 @@ module TestSupport
             refinement_threshold: agent.refinement_threshold,
             heartbeat_wakes_per_day: agent.heartbeat_wakes_per_day
           }
+        },
+        # The phone request a WhatsApp connector would have been sent in the
+        # signed pair_phone command (the browser test plays the connector,
+        # and its code event must name the request it answers).
+        whatsapp: account.service_connections.where(provider: "whatsapp").order(:id).last&.then { |connection|
+          { id: connection.public_id, phone_request: connection.phone_pairing_state["request"] }
         }
       }
     end
@@ -376,6 +409,49 @@ module TestSupport
     end
 
     private
+
+    # Three Telegram connections owned by the primary user, with no connector
+    # behind them: one showing a QR code, one asking for the two-step
+    # password, and one signed in with a few chats.
+    def telegram_fixtures(account, user)
+      adapter = Services::Definition.fetch("telegram").adapter
+      create = lambda do |label, **attributes|
+        result = adapter.connection_attributes(credentials: {}, user: user)
+        account.service_connections.create!(
+          connected_by_user: user, provider: "telegram", management_scope: "personal", label: label,
+          credential_kind: result[:credential_kind], credential_fingerprint: result[:credential_fingerprint],
+          credential_metadata: result[:credential_metadata], credential_payload_hash: result[:credential_payload],
+          login_generation: 1, **attributes
+        )
+      end
+      now = Time.current
+      create.call("Telegram sign-in", status: "pairing",
+        pairing_qr: "tg://login?token=e2e-#{SecureRandom.hex(16)}",
+        pairing_qr_issued_at: now, pairing_qr_expires_at: now + 5.minutes)
+      create.call("Telegram password", status: "pairing",
+        connector_state: { "login" => { "step" => "password", "hint" => "the usual one" } })
+      connected = create.call("Telegram account", status: "connected",
+        external_subject_id: "e2e-telegram-#{SecureRandom.hex(6)}", external_identity: "Ada Example (@ada_example)",
+        connector_state: { "availability" => { "state" => "backlogged", "reason" => "6,000 events waiting" } })
+      [ [ "user:1", "direct", true ], [ "chat:2", "group", true ], [ "channel:3", "broadcast", false ] ].each do |chat_id, kind, synced|
+        connected.comms_chats.create!(provider_chat_id: chat_id, kind: kind, name: "E2E #{kind}",
+          sync_state: synced ? { "synced" => true } : { "synced" => false, "reason" => "broadcast_channel" })
+      end
+    end
+
+    # A WhatsApp connection owned by the primary user, waiting to pair, with no
+    # connector behind it. The test gets the callback secret so it can sign
+    # the connector's events itself and post them to the real events endpoint.
+    def whatsapp_fixture(account, user)
+      result = Services::Definition.fetch("whatsapp").adapter.connection_attributes(credentials: {}, user: user)
+      connection = account.service_connections.create!(
+        connected_by_user: user, provider: "whatsapp", management_scope: "personal", status: "pairing",
+        label: result[:label], credential_kind: result[:credential_kind],
+        credential_fingerprint: result[:credential_fingerprint], credential_metadata: result[:credential_metadata],
+        credential_payload_hash: result[:credential_payload]
+      )
+      { id: connection.public_id, callback_secret: result[:credential_payload]["callback_secret"] }
+    end
 
     def github_import_fixtures(account, user, run_id)
       connection = account.service_connections.create!(
@@ -468,6 +544,10 @@ module TestSupport
       head :not_found unless Rails.env.test?
     end
 
+    def file_fixture_audio
+      StringIO.new(File.binread(Rails.root.join("test/fixtures/files/test_audio.mp3")))
+    end
+
     def cleanup_run(run_id)
       users = User.where("email_address LIKE ?", "e2e-#{run_id}-%@example.com")
       member_account_ids = Membership.where(user_id: users.select(:id)).select(:account_id)
@@ -490,6 +570,9 @@ module TestSupport
       AuditLog.where(account: accounts).or(AuditLog.where(user: users)).destroy_all
       Session.where(user: users).destroy_all
       GithubResidentImport.where(account: accounts).destroy_all
+      connections = ServiceConnection.where(account_id: accounts.select(:id))
+      CommsMessage.where(service_connection: connections).delete_all
+      CommsChat.where(service_connection: connections).delete_all
       accounts.find_each(&:destroy!)
       users.find_each(&:destroy!)
     end

@@ -21,6 +21,23 @@ class Api::V1::Field::HumanFilesTest < ActionDispatch::IntegrationTest
     assert_equal [ "Wednesday", "From the call" ], [ @file.reload.title, @file.note ]
   end
 
+  test "a person dates a file, and clears the date" do
+    patch api_v1_field_file_path(@file), params: { dated_at: "2018-05-01T09:30:00Z" }, headers: @headers, as: :json
+    assert_response :success
+    assert_equal Time.utc(2018, 5, 1, 9, 30), @file.reload.dated_at
+    assert_equal "Tuesday", @file.title
+
+    [ "last tuesday", "2019-03-14T25:99:00Z", "2019-03-14T09:30:00+99:99", "2019-02-30T12:00:00Z" ].each do |value|
+      patch api_v1_field_file_path(@file), params: { dated_at: value, title: "Changed" }, headers: @headers, as: :json
+      assert_response :unprocessable_entity, value
+      assert_equal [ Time.utc(2018, 5, 1, 9, 30), "Tuesday" ], [ @file.reload.dated_at, @file.title ], value
+    end
+
+    patch api_v1_field_file_path(@file), params: { dated_at: "" }, headers: @headers, as: :json
+    assert_response :success
+    assert_nil @file.reload.dated_at
+  end
+
   test "an invalid title is refused" do
     patch api_v1_field_file_path(@file), params: { title: "x" * 201 }, headers: @headers, as: :json
     assert_response :unprocessable_entity
