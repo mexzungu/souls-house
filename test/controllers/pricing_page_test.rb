@@ -32,7 +32,7 @@ class PricingPageTest < ActionDispatch::IntegrationTest
         assert_equal tier.allowance_usd, card["allowance_usd"]
         assert_equal tier.features.stringify_keys, card["features"]
       end
-      assert_equal %w[starter studio hearth], tiers.map { |row| row["id"] }
+      assert_equal %w[conversation life work], tiers.map { |row| row["id"] }
       assert tiers.none? { |row| row.key?("memory_gb") || row.key?("cpu_shares") }, "container limits stay server-side"
     end
   end

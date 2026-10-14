@@ -19,11 +19,18 @@ module Billing
       "cx43" => { vcpus: 8, ram_gb: 16, disk_gb: 160 }
     }.freeze
 
+    # Outside services a resident on the plan may be connected to. Named by
+    # relationship (Daniel, WjNvXj 2026-10-14): Conversation talks with you,
+    # Life helps run your life, Work does serious work beside you. A plan with
+    # no connections is conversation only. These say what a plan WILL grant
+    # once plans open; nothing enforces them until checkout is gated on it.
+    CONNECTIONS = %w[google_workspace telegram whatsapp x github dns].freeze
+
     attr_reader :id, :name, :monthly_usd, :allowance_usd, :memory_gb, :cpu_shares, :server_type,
-      :transcription_hours, :backup_gb, :swarm_searches
+      :transcription_hours, :backup_gb, :swarm_searches, :connections
 
     def initialize(id:, name:, monthly_usd:, allowance_usd:, memory_gb:, cpu_shares:, server_type:,
-      transcription_hours:, backup_gb:, swarm_searches: 0)
+      transcription_hours:, backup_gb:, swarm_searches: 0, connections: [])
       @id = id
       @name = name
       @monthly_usd = monthly_usd
@@ -34,15 +41,17 @@ module Billing
       @transcription_hours = transcription_hours
       @backup_gb = backup_gb
       @swarm_searches = swarm_searches
+      @connections = connections
     end
 
     CATALOGUE = [
-      new(id: "starter", name: "Starter", monthly_usd: 20, allowance_usd: 8, memory_gb: 4, cpu_shares: 1024,
+      new(id: "conversation", name: "Conversation", monthly_usd: 20, allowance_usd: 8, memory_gb: 4, cpu_shares: 1024,
         server_type: "cx23", transcription_hours: 5, backup_gb: 10),
-      new(id: "studio", name: "Studio", monthly_usd: 50, allowance_usd: 25, memory_gb: 8, cpu_shares: 2048,
-        server_type: "cx33", transcription_hours: 20, backup_gb: 50),
-      new(id: "hearth", name: "Hearth", monthly_usd: 100, allowance_usd: 45, memory_gb: 16, cpu_shares: 4096,
-        server_type: "cx43", transcription_hours: 40, backup_gb: 200, swarm_searches: 100)
+      new(id: "life", name: "Life", monthly_usd: 50, allowance_usd: 25, memory_gb: 8, cpu_shares: 2048,
+        server_type: "cx33", transcription_hours: 20, backup_gb: 50, swarm_searches: 20, connections: CONNECTIONS),
+      new(id: "work", name: "Work", monthly_usd: 100, allowance_usd: 45, memory_gb: 16, cpu_shares: 4096,
+        server_type: "cx43", transcription_hours: 40, backup_gb: 200, swarm_searches: 100,
+        connections: CONNECTIONS)
     ].freeze
 
     # Entitlement states in which a resident's plan is in force.
@@ -83,7 +92,7 @@ module Billing
       {
         server_type: server_type, vcpus: machine[:vcpus], ram_gb: machine[:ram_gb], disk_gb: machine[:disk_gb],
         allowance_usd: allowance_usd, transcription_hours: transcription_hours, backup_gb: backup_gb,
-        swarm_searches: swarm_searches
+        swarm_searches: swarm_searches, connections: connections
       }
     end
 
