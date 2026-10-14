@@ -1,6 +1,7 @@
 """No Docker, SSH, credentials, network, or production DB used by these tests."""
 import importlib.util
 import json
+import shutil
 import os
 from pathlib import Path
 import subprocess
@@ -59,6 +60,62 @@ class WorkflowAuthorityTest(unittest.TestCase):
         # The tested commit travels to the host; nothing else chooses it.
         self.assertIn("expected_revision: ${{ github.event.workflow_run.head_sha }}", caller)
         self.assertIn("cancel-in-progress: false", caller)
+
+    def test_owner_inputs_reach_the_host_only_through_env(self):
+        workflows = OPS.parents[1] / ".github/workflows"
+        transport = (workflows / "deploy-house.yml").read_text()
+        script = transport.split("run: |", 1)[1]
+        self.assertNotIn("${{", script)  # inputs are never interpolated into shell
+        self.assertIn("ACCEPT_MIGRATIONS: ${{ inputs.accept_migrations }}", transport)
+        self.assertIn("ACKNOWLEDGE_JOB: ${{ inputs.acknowledge_failed_job }}", transport)
+        for name in ["deploy-chaos.yml", "deploy-both.yml"]:
+            caller = (workflows / name).read_text()
+            self.assertIn("accept_migrations: ${{ inputs.accept_migrations }}", caller)
+        for name in ["deploy-chaos.yml", "deploy-both.yml", "deploy-runtime.yml", "deploy-rails.yml"]:
+            self.assertIn("acknowledge_failed_job: ${{ inputs.acknowledge_failed_job }}",
+                          (workflows / name).read_text())
+        automatic = (workflows / "deploy-rails-on-green.yml").read_text()
+        self.assertNotIn("acknowledge", automatic)
+        self.assertNotIn("accept_migrations", automatic)
+
+    def run_transport(self, ssh_script, **env):
+        """Execute the checked-in transport script with a fake ssh on PATH."""
+        transport = (OPS.parents[1] / ".github/workflows/deploy-house.yml").read_text()
+        block = transport.split("        run: |\n", 1)[1].split("\n      # Marker steps", 1)[0]
+        script = "\n".join(line[10:] for line in block.splitlines())
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "ssh"
+            fake.write_text("#!/bin/bash\n" + ssh_script)
+            fake.chmod(0o755)
+            summary = Path(directory) / "summary"
+            base = dict(PATH=f"{directory}:{os.environ['PATH']}", DEPLOY_KEY="k",
+                        DEPLOY_KNOWN_HOSTS="h", DEPLOY_HOST="host.example", DEPLOY_PORT="22",
+                        GITHUB_STEP_SUMMARY=str(summary), GITHUB_OUTPUT=str(Path(directory) / "out"),
+                        OPERATION="chaos", EXPECTED_REVISION="", ACCEPT_MIGRATIONS="",
+                        ACKNOWLEDGE_JOB="")
+            base.update(env)
+            result = subprocess.run(["bash", "-c", script], env=base, capture_output=True, text=True)
+            calls = (Path(directory) / "calls").read_text() if (Path(directory) / "calls").exists() else ""
+            return result, calls
+
+    def test_refused_acknowledgement_stops_before_any_request(self):
+        result, calls = self.run_transport(
+            'echo "${@: -1}" >> "$(dirname "$0")/calls"\n'
+            'case "${@: -1}" in acknowledge*) echo "Deployment request unavailable" >&2; exit 1;; esac\n'
+            'echo \'{"id":"' + "b" * 32 + '","state":"success"}\'\n',
+            ACKNOWLEDGE_JOB="a" * 32)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(["acknowledge " + "a" * 32], calls.splitlines())
+
+    def test_accepted_acknowledgement_then_requests_with_acceptance(self):
+        entry = "srv/daemon/migrations/001_init.sql@" + "1" * 40
+        result, calls = self.run_transport(
+            'echo "${@: -1}" >> "$(dirname "$0")/calls"\n'
+            'echo \'{"id":"' + "b" * 32 + '","state":"success"}\'\n',
+            ACKNOWLEDGE_JOB="a" * 32, ACCEPT_MIGRATIONS=entry)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(["acknowledge " + "a" * 32, "chaos accept " + entry, "status " + "b" * 32],
+                         calls.splitlines())
 
     def test_superseded_is_a_failed_github_job_not_a_green_nothing(self):
         # #313: host superseded with GitHub success looks like a deploy.
@@ -185,6 +242,80 @@ class GateTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 gate.request("rails")
 
+    def test_chaos_may_carry_reviewed_migration_changes(self):
+        entry = "srv/daemon/migrations/001_init.sql@" + "1" * 40
+        two = entry + ",var/proc/db/migrate/sqlite/0001_bigbang.sql@" + "2" * 40
+        for args in [["chaos", "accept", entry], ["both", "accept", two]]:
+            self.assertTrue(gate.valid_args(args), args)
+        for args in [["rails", "accept", entry], ["runtime", "accept", entry],
+                     ["chaos", "accept", ""], ["chaos", "accept", entry + "," + entry],
+                     ["chaos", "accept", "../etc/x.sql@" + "1" * 40],
+                     ["chaos", "accept", "a/../b.sql@" + "1" * 40],
+                     ["chaos", "accept", "x.rb@" + "1" * 40],
+                     ["chaos", "accept", "x.sql@" + "1" * 39],
+                     ["chaos", "accept", ",".join(f"m{i}.sql@{'1' * 40}" for i in range(21))],
+                     ["chaos", "accept", entry, "extra"]]:
+            self.assertFalse(gate.valid_args(args), args)
+
+    def test_accepted_changes_are_recorded_and_returned(self):
+        accepted = ["srv/daemon/migrations/001_init.sql@" + "1" * 40]
+        with patch.object(gate.subprocess, "run"):
+            result = gate.request("chaos", accepted=accepted)
+        with patch.object(gate, "active", return_value=True):
+            self.assertEqual(accepted, gate.status(result["id"])["accepted_migrations"])
+            with self.assertRaises(RuntimeError):
+                gate.request("chaos")  # a running job with other acceptances is not joined
+
+    def test_acknowledge_releases_only_the_named_exited_failure(self):
+        job_id = self.job("failed")
+        with patch.object(gate, "active", return_value=False), \
+             patch.object(gate, "exited", return_value=True):
+            with self.assertRaises(RuntimeError):
+                gate.acknowledge("b" * 32)
+            self.assertTrue(gate.acknowledge(job_id)["acknowledged"])
+            self.assertFalse((self.root / "current.json").exists())
+            self.assertTrue((self.root / "runs" / job_id / "acknowledged-current.json").exists())
+            with patch.object(gate.subprocess, "run"):
+                self.assertEqual("starting", gate.request("rails")["state"])
+
+    def test_acknowledge_refuses_running_successful_or_still_exiting_jobs(self):
+        for state, running in [("running", True), ("success", False), ("failed", True)]:
+            shutil.rmtree(self.root / "runs" / ("a" * 32), ignore_errors=True)
+            job_id = self.job(state)
+            with patch.object(gate, "active", return_value=running), \
+                 patch.object(gate, "exited", return_value=not running):
+                with self.assertRaises(RuntimeError, msg=state):
+                    gate.acknowledge(job_id)
+            self.assertTrue((self.root / "current.json").exists())
+
+    def test_only_a_positively_exited_unit_counts_as_exited(self):
+        def unit(stdout, returncode=0):
+            return subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+        for result, expected in [(unit("inactive\n"), True), (unit("failed\n"), True),
+                                 (unit("deactivating\n"), False), (unit("activating\n"), False),
+                                 (unit("active\n"), False), (unit("reloading\n"), False),
+                                 (unit(""), False), (unit("inactive\n", 1), False)]:
+            with patch.object(gate.subprocess, "run", return_value=result):
+                self.assertEqual(expected, gate.exited("chaos"), result)
+
+    def test_failed_job_still_deactivating_is_not_acknowledged(self):
+        job_id = self.job("failed")
+        deactivating = subprocess.CompletedProcess([], 3, stdout="deactivating\n", stderr="")
+        with patch.object(gate.subprocess, "run", return_value=deactivating):
+            with self.assertRaises(RuntimeError):
+                gate.acknowledge(job_id)
+        self.assertTrue((self.root / "current.json").exists())
+
+    def test_forced_command_admits_accept_and_acknowledge_shapes(self):
+        import re
+        grammar = re.search(r're\.fullmatch\(r"(.+?)", command\)', (OPS / "ssh-command").read_text())[1]
+        for command in ["acknowledge " + "a" * 32, "chaos accept x/y.sql@" + "1" * 40,
+                        "both accept a.sql@" + "1" * 40 + ",b.sql@" + "2" * 40]:
+            self.assertTrue(re.fullmatch(grammar, command), command)
+        for command in ["acknowledge " + "a" * 31, "rails accept a.sql@" + "1" * 40,
+                        "chaos accept a.sql;id", "chaos accept a b"]:
+            self.assertFalse(re.fullmatch(grammar, command), command)
+
     def test_failed_unit_start_is_failed(self):
         with patch.object(gate.subprocess, "run", side_effect=subprocess.CalledProcessError(1, [])):
             self.assertEqual("failed", gate.request("rails")["state"])
@@ -207,6 +338,22 @@ class ReleaseTest(unittest.TestCase):
                       self.tree(**{"db/migrations/renamed.sql": "a"})]:
             with self.assertRaisesRegex(RuntimeError, "migrations changed"):
                 worker.verify_migrations(before, after)
+
+    def test_accepted_migration_change_passes_only_as_the_exact_listed_blob(self):
+        path, sha = "srv/daemon/migrations/001_init.sql", "1" * 40
+        runtime = {"var/proc/db/migrate/sqlite/0001.sql": "a" * 40}
+        before = self.tree(**{path: sha}, **runtime)
+        after = self.tree(**runtime)
+        with self.assertRaises(worker.MigrationsChanged) as refused:
+            worker.verify_migrations(before, after)
+        self.assertEqual([f"{path}@{sha}"], refused.exception.changes)
+        worker.verify_migrations(before, after, [f"{path}@{sha}"])
+        # Same path at another blob, or an unlisted change alongside, still refuses.
+        for b, a, accepted in [
+                (self.tree(**{path: "2" * 40}, **runtime), after, [f"{path}@{sha}"]),
+                (before, self.tree(), [f"{path}@{sha}"])]:
+            with self.assertRaisesRegex(RuntimeError, "migrations changed"):
+                worker.verify_migrations(b, a, accepted)
 
     def test_incomplete_or_unmarked_tree_fails_closed(self):
         good = self.tree()
@@ -424,6 +571,47 @@ class WorkerTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         return commands
+
+    def update_fixture(self, accepted=None):
+        """Update Chaos from c... to n..., where upstream deleted one applied migration."""
+        self.pinned_fixture(["c" * 40])
+        old, new = "c" * 40, "e" * 40
+        gone = "srv/daemon/migrations/001_init.sql"
+        trees = {old: {"truncated": False, "tree": [{"path": gone, "sha": "1" * 40, "type": "blob"}]},
+                 new: {"truncated": False, "tree": []}}
+
+        def github(path):
+            if path == "commits/master":
+                return {"sha": new}
+            if path.startswith("releases"):
+                name = f"chaos-linux-x86_64-{new}.tar.gz"
+                return [dict(tag_name="build-" + new, draft=False, published_at="2026-10-14",
+                             assets=[{"name": name}, {"name": name + ".sha256"}])]
+            if path.startswith("compare/"):
+                return {"status": "ahead"}
+            return trees[path.split("/")[2].split("?")[0]]
+        p = patch.object(worker, "github", side_effect=github)
+        p.start()
+        self.addCleanup(p.stop)
+        if accepted:
+            self.w.data["accepted_migrations"] = accepted
+        return f"{gone}@{'1' * 40}"
+
+    def test_refused_update_publishes_the_exact_changes_to_accept(self):
+        change = self.update_fixture()
+        with self.assertRaisesRegex(RuntimeError, "migrations changed"):
+            self.w.update_chaos()
+        self.assertEqual([change], self.w.data["migration_changes"])
+        self.assertIn("migration_changes", gate.FIELDS)
+        self.assertNotIn("docker", " ".join(" ".join(c) for c in self.w.run.call_args_list
+                                             for c in [c.args[0]]))
+
+    def test_update_with_the_accepted_change_rolls_out(self):
+        change = self.update_fixture()
+        self.w.data["accepted_migrations"] = [change]
+        self.w.update_chaos()
+        self.assertEqual("e" * 40, self.w.data["chaos_revision"])
+        self.assertEqual("all residents healthy", self.w.data["step"])
 
     def test_rebuild_keeps_the_running_chaos_revision(self):
         commands = self.pinned_fixture(["c" * 40, "c" * 40])
