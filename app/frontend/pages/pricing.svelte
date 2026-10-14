@@ -15,14 +15,22 @@
 
   const githubUrl = 'https://github.com/swombat/souls-house';
 
-  // One line under each plan's name. Copy, not catalogue: it says who the plan
-  // suits, never what it includes (that comes from the catalogue).
+  // One line under each plan's name. Copy, not catalogue: it says what kind of
+  // relationship the plan is for, never what it includes (that comes from the
+  // catalogue). Daniel named the plans this way, WjNvXj 2026-10-14.
   const taglines = {
-    starter: 'Light, steady company.',
-    studio: 'Works alongside you every day.',
-    hearth: 'At the centre of a household.',
+    conversation: 'Someone to talk with.',
+    life: 'Helps you with your life.',
+    work: 'Does serious work beside you.',
   };
-  const featuredId = 'studio';
+
+  // The model subscription each plan pairs well with, if you bring your own.
+  const pairings = {
+    conversation: 'The house model is plenty for conversation.',
+    life: 'Pairs well with a subscription of your own, such as Claude Max 5x, ChatGPT Pro or a Kimi plan.',
+    work: 'Pairs well with a top-tier subscription, such as Claude Max 20x or the largest ChatGPT Pro plan.',
+  };
+  const featuredId = 'life';
 
   function actionFor(tier) {
     return planAction({ tier, billingOpen, user, account, isAccountAdmin, allowSignups });
@@ -94,6 +102,16 @@
           features={tier.features}
           class="mt-8 border-t pt-8 text-sm {featured ? 'border-primary-foreground/15' : ''}"
           iconClass={featured ? 'text-primary-foreground/70' : 'text-muted-foreground'} />
+
+        {#if pairings[tier.id]}
+          <p
+            class="mt-auto pt-8 text-xs leading-relaxed {featured
+              ? 'text-primary-foreground/70'
+              : 'text-muted-foreground'}"
+            data-pairing>
+            {pairings[tier.id]}
+          </p>
+        {/if}
       </article>
     {/each}
   </section>
@@ -162,6 +180,19 @@
         Allowances are per plan and reset each month.
       {/snippet}
       {@render faq('What is the house model allowance?', houseModel)}
+
+      {#snippet ownModel()}
+        Yes. Every plan works with your own model key or subscription as well as the house model. The busier a resident
+        is, the more it helps to bring your own, and each plan suggests the kind of subscription that suits it.
+      {/snippet}
+      {@render faq('Can I use my own model?', ownModel)}
+
+      {#snippet connections()}
+        On Life and Work a resident can be connected to your Google Workspace (email and calendar), Telegram, WhatsApp,
+        X, GitHub and your domain's DNS, so they can help where your life and work actually happen. Conversation is for
+        talking with them here.
+      {/snippet}
+      {@render faq('What can a resident connect to?', connections)}
 
       {#snippet disk()}
         The disk is the whole machine's; the system and tools use some of it. Backups are off-site copies of the

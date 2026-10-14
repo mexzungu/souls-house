@@ -324,7 +324,7 @@ class Account < ApplicationRecord
 
   # Field swarm search: a site admin's per-account test switch (unmetered beyond
   # FieldSwarm's daily cap), or a resident of this account on a plan that
-  # includes it (Hearth), metered per calendar month by the plan.
+  # includes it (Life or Work), metered per calendar month by the plan.
   def field_swarm_allowed?
     field_swarm_enabled? || field_swarm_plan_searches.positive?
   end

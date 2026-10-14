@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { planAction } from './pricing';
 
-const priced = { id: 'starter', name: 'Starter', purchasable: true };
-const unpriced = { id: 'starter', name: 'Starter', purchasable: false };
+const priced = { id: 'conversation', name: 'Conversation', purchasable: true };
+const unpriced = { id: 'conversation', name: 'Conversation', purchasable: false };
 const account = { id: 'abc' };
 
 describe('planAction', () => {

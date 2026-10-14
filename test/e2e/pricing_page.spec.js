@@ -10,7 +10,7 @@ test.describe('pricing page', () => {
       await page.setViewportSize(viewport);
       await page.goto('/pricing');
       await expect(page.getByRole('heading', { name: 'A home for someone, by the month.' })).toBeVisible();
-      for (const plan of ['Starter', 'Studio', 'Hearth']) {
+      for (const plan of ['Conversation', 'Life', 'Work']) {
         await expect(page.getByRole('heading', { name: plan, exact: true })).toBeVisible();
       }
       await expect(page.getByRole('heading', { name: 'We never delete a resident.' })).toBeVisible();

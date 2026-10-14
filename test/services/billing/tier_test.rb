@@ -3,7 +3,7 @@ require "test_helper"
 class Billing::TierTest < ActiveSupport::TestCase
 
   test "three plans, each on a machine the house can buy" do
-    assert_equal %w[starter studio hearth], Billing::Tier.all.map(&:id)
+    assert_equal %w[conversation life work], Billing::Tier.all.map(&:id)
     assert_equal [ 20, 50, 100 ], Billing::Tier.all.map(&:monthly_usd)
     Billing::Tier.all.each do |tier|
       assert_includes CloudProcurementOperation::SERVER_TYPES, tier.server_type
@@ -11,9 +11,16 @@ class Billing::TierTest < ActiveSupport::TestCase
     end
   end
 
-  test "only Hearth includes swarm search" do
-    assert_equal %w[hearth], Billing::Tier.with_swarm_search.map(&:id)
-    assert_equal 100, Billing::Tier.find!("hearth").swarm_searches
+  test "Life and Work include swarm search, Work the most" do
+    assert_equal %w[life work], Billing::Tier.with_swarm_search.map(&:id)
+    assert_equal 20, Billing::Tier.find!("life").swarm_searches
+    assert_equal 100, Billing::Tier.find!("work").swarm_searches
+  end
+
+  test "Conversation connects to nothing outside; Life and Work to every connection" do
+    assert_empty Billing::Tier.find!("conversation").connections
+    assert_equal Billing::Tier::CONNECTIONS, Billing::Tier.find!("life").connections
+    assert_equal Billing::Tier::CONNECTIONS, Billing::Tier.find!("work").connections
   end
 
   # Costed 2026-10-14 (WjNvXj/YwkgkY). Machine at €1 = $1.10, Scribe $0.22/h,

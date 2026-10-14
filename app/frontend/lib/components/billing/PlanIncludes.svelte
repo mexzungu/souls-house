@@ -2,11 +2,14 @@
   // What a plan includes, from the catalogue (Billing::Tier#features), as short
   // lines with icons. Shared by /pricing and the Billing tab so the two can't
   // describe a plan differently. The longer explanations live in the FAQ.
-  import { Cpu, Sparkle, Waveform, CloudArrowUp, MagnifyingGlass } from 'phosphor-svelte';
+  import { Cpu, Sparkle, Waveform, CloudArrowUp, MagnifyingGlass, PlugsConnected } from 'phosphor-svelte';
 
   let { features, class: className = '', iconClass = 'text-muted-foreground' } = $props();
 
   const lines = $derived([
+    ...(features.connections?.length > 0
+      ? [{ icon: PlugsConnected, text: 'Email, calendar, Telegram, WhatsApp, X, GitHub, DNS' }]
+      : []),
     { icon: Cpu, text: `${features.vcpus} vCPU · ${features.ram_gb} GB RAM · ${features.disk_gb} GB disk` },
     { icon: Sparkle, text: `$${features.allowance_usd} a month of house model` },
     { icon: Waveform, text: `${features.transcription_hours} hours of transcription a month` },
