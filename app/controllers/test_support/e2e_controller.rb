@@ -393,6 +393,12 @@ module TestSupport
             refinement_threshold: agent.refinement_threshold,
             heartbeat_wakes_per_day: agent.heartbeat_wakes_per_day
           }
+        },
+        # The phone request a WhatsApp connector would have been sent in the
+        # signed pair_phone command (the browser test plays the connector,
+        # and its code event must name the request it answers).
+        whatsapp: account.service_connections.where(provider: "whatsapp").order(:id).last&.then { |connection|
+          { id: connection.public_id, phone_request: connection.phone_pairing_state["request"] }
         }
       }
     end

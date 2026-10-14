@@ -41,6 +41,19 @@ module Services
       raise Error, "Could not reach the WhatsApp connector. Disconnect this connection and try again."
     end
 
+    # The phone number pairing (Accounts::ServiceConnectionPairingsController#phone).
+    # Only the error's class is logged: never the number.
+    # :superseded when the connector already took a newer request (another
+    # tab's, sent after this one was recorded but arriving first).
+    def pair_phone(connection, phone_number, attempt:, request:, seq:)
+      CommsConnector.pair_phone(connection, phone_number, attempt:, request:, seq:)
+    rescue CommsConnector::StaleRequest
+      :superseded
+    rescue CommsConnector::Error, SystemCallError, Timeout::Error, IOError, OpenSSL::SSL::SSLError => e
+      Rails.logger.warn("Comms pair_phone failed for service connection #{connection.id}: #{e.class}")
+      raise Error, "Could not reach the WhatsApp connector. Try again in a moment."
+    end
+
     # Disconnecting unpairs: the connector logs the linked device out and
     # deletes its session store. The local secret is erased either way, so
     # the connector can no longer write to this connection; but until the

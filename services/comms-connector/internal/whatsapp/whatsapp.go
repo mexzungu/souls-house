@@ -55,13 +55,33 @@ func (noopSignalLogger) Configure(string)       {}
 // Factory makes whatsmeow sessions over each connection's store.
 func Factory() provider.Factory {
 	return func(st *store.Store) (provider.Session, error) {
-		return &Session{container: sqlstore.NewWithDB(st.DB(), Dialect, waLog.Noop)}, nil
+		return newSession(sqlstore.NewWithDB(st.DB(), Dialect, waLog.Noop)), nil
 	}
 }
 
 type Session struct {
 	container *sqlstore.Container
+
+	// Phone pairing (RequestPhoneCode). ready closes with the first QR,
+	// when the pairing connection is up; ended closes when pairing is over,
+	// linked or not.
+	ready, ended       chan struct{}
+	readyOnce, endOnce sync.Once
+	requests           sync.Mutex // one phone code request at a time
+
+	mu        sync.Mutex
+	pairPhone func(ctx context.Context, phone string) (string, error)
+	firstQR   time.Time
+	// codeSink is the sink of the request whose code was issued last: when
+	// pairing ends unused, that request is told its code expired.
+	codeSink provider.Sink
 }
+
+func newSession(c *sqlstore.Container) *Session {
+	return &Session{container: c, ready: make(chan struct{}), ended: make(chan struct{})}
+}
+
+func (s *Session) endPairing() { s.endOnce.Do(func() { close(s.ended) }) }
 
 func (s *Session) device(ctx context.Context) (*wastore.Device, error) {
 	if err := s.container.Upgrade(ctx); err != nil {
@@ -75,6 +95,7 @@ func (s *Session) device(ctx context.Context) (*wastore.Device, error) {
 }
 
 func (s *Session) Run(ctx context.Context, sink provider.Sink, pair bool) error {
+	defer s.endPairing()
 	dev, err := s.device(ctx)
 	if err != nil {
 		return err
@@ -96,12 +117,21 @@ func (s *Session) Run(ctx context.Context, sink provider.Sink, pair bool) error 
 		if err != nil {
 			return err
 		}
+		s.mu.Lock()
+		s.pairPhone = func(ctx context.Context, phone string) (string, error) {
+			// The phone shows "Chrome (Linux)" while the code is entered;
+			// once linked it shows the name SetOSInfo gave. WhatsApp
+			// accepts only common "Browser (OS)" names here.
+			return cli.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+		}
+		s.mu.Unlock()
 		if err := cli.ConnectContext(ctx); err != nil {
 			return err
 		}
-		if err := pairLoop(ctx, qr, sink); err != nil {
+		if err := s.pairLoop(ctx, qr, sink); err != nil {
 			return err
 		}
+		s.endPairing()
 	} else if err := cli.ConnectContext(ctx); err != nil {
 		return err
 	}
@@ -117,15 +147,18 @@ func (s *Session) Run(ctx context.Context, sink provider.Sink, pair bool) error 
 	}
 }
 
-// pairLoop pushes each code with its expiry until the phone scans one.
-func pairLoop(ctx context.Context, qr <-chan whatsmeow.QRChannelItem, sink provider.Sink) error {
+// pairLoop pushes each code with its expiry until the phone scans one or a
+// phone code is entered (both end in QRChannelSuccess). If the codes run
+// out after a phone code was issued, Rails is told that code has expired,
+// through the sink of the request that got it.
+func (s *Session) pairLoop(ctx context.Context, qr <-chan whatsmeow.QRChannelItem, sink provider.Sink) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case item, ok := <-qr:
 			if !ok {
-				return ErrPairingEnded
+				return s.pairingEnded(ctx, sink)
 			}
 			switch item.Event {
 			case whatsmeow.QRChannelEventCode:
@@ -133,13 +166,106 @@ func pairLoop(ctx context.Context, qr <-chan whatsmeow.QRChannelItem, sink provi
 				if err := sink.QR(ctx, item.Code, now, now.Add(item.Timeout)); err != nil {
 					return err
 				}
+				s.markReady(now)
 			case whatsmeow.QRChannelSuccess.Event:
 				return nil
 			default:
 				// timeout, client outdated, scanned without multidevice, error
-				return ErrPairingEnded
+				return s.pairingEnded(ctx, sink)
 			}
 		}
+	}
+}
+
+// markReady: the pairing connection is up; PairPhone may now be called.
+func (s *Session) markReady(at time.Time) {
+	s.readyOnce.Do(func() {
+		s.mu.Lock()
+		s.firstQR = at
+		s.mu.Unlock()
+		close(s.ready)
+	})
+}
+
+func (s *Session) pairingEnded(ctx context.Context, sink provider.Sink) error {
+	s.endPairing()
+	s.mu.Lock()
+	issued := s.codeSink
+	s.mu.Unlock()
+	if issued != nil {
+		// Best effort: the code also carries its own expiry. Through the
+		// request's own sink, so the expiry names that request.
+		_ = issued.PhoneCodeFailed(ctx, provider.PhoneCodeExpired)
+	}
+	return ErrPairingEnded
+}
+
+// PairingWindow: whatsmeow's pairing socket closes when its QR codes run
+// out (60 s, then 20 s each; six codes in practice), and a phone code dies
+// with it. A code is reported to expire at the end of that window.
+const PairingWindow = 160 * time.Second
+
+// ReadyTimeout bounds the wait for the pairing connection (the first QR).
+var ReadyTimeout = 30 * time.Second
+
+// RequestPhoneCode asks WhatsApp for an 8-character code the owner enters
+// on the phone under Linked devices → Link with phone number instead.
+// whatsmeow requires a live pairing connection that has already produced
+// its first QR, so this waits for that. The number and the code are never
+// logged, and WhatsApp's error text (which can echo the number) is reduced
+// to a fixed word.
+func (s *Session) RequestPhoneCode(ctx context.Context, sink provider.Sink, phone string) error {
+	s.requests.Lock()
+	defer s.requests.Unlock()
+	timer := time.NewTimer(ReadyTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.ended:
+		return provider.ErrNotPairing
+	case <-timer.C:
+		return sink.PhoneCodeFailed(ctx, provider.PhoneCodeNotReady)
+	case <-s.ready:
+	}
+	select {
+	case <-s.ended:
+		return provider.ErrNotPairing
+	default:
+	}
+	s.mu.Lock()
+	pairPhone, first := s.pairPhone, s.firstQR
+	s.mu.Unlock()
+	if pairPhone == nil {
+		return provider.ErrNotPairing
+	}
+	code, err := pairPhone(ctx, phone)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return sink.PhoneCodeFailed(ctx, phoneFailure(err))
+	}
+	now := time.Now()
+	expires := first.Add(PairingWindow)
+	if expires.Before(now.Add(10 * time.Second)) {
+		expires = now.Add(10 * time.Second)
+	}
+	s.mu.Lock()
+	s.codeSink = sink
+	s.mu.Unlock()
+	return sink.PhoneCode(ctx, code, now, expires)
+}
+
+func phoneFailure(err error) string {
+	switch {
+	case errors.Is(err, whatsmeow.ErrPhoneNumberTooShort), errors.Is(err, whatsmeow.ErrPhoneNumberIsNotInternational),
+		errors.Is(err, whatsmeow.ErrIQBadRequest):
+		return provider.PhoneCodeInvalid
+	case errors.Is(err, whatsmeow.ErrIQRateOverLimit):
+		return provider.PhoneCodeRateLimited
+	default:
+		return provider.PhoneCodeFailed
 	}
 }
 

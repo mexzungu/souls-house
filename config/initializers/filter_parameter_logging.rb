@@ -52,3 +52,10 @@ Rails.application.config.filter_parameters += [ /\A(?:identity|external_identity
 # Accounts::ServiceConnectionLoginsController, which forwards both to the
 # connector and keeps neither.
 Rails.application.config.filter_parameters += [ /\Aphone\z/ ]
+
+# WhatsApp's phone number pairing: the owner posts `phone` (above) to
+# Accounts::ServiceConnectionPairingsController#phone, which forwards it to
+# the connector as `phone_number` (never logged either way); the code the
+# connector sends back is `code` (masked above) and is stored encrypted in
+# `pairing_phone_code`, masked here in SQL binds too.
+Rails.application.config.filter_parameters += [ /\A(?:phone_number|pairing_phone_code)\z/ ]

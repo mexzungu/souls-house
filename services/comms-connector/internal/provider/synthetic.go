@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,8 +27,19 @@ type Synthetic struct {
 	// LogoutSignal, when closed, makes a running session behave as if the
 	// phone removed the device.
 	LogoutSignal <-chan struct{}
+	// PhoneCode is the code RequestPhoneCode reports (default SYNT-HABC);
+	// PhoneFailure, when set, is reported instead.
+	PhoneCode    string
+	PhoneFailure string
+	// PhoneCodeLifetime is how long a phone code is reported to last
+	// (default QRLifetime).
+	PhoneCodeLifetime time.Duration
 
-	logouts atomic.Int32
+	logouts     atomic.Int32
+	phoneCodes  atomic.Int32
+	lastPhoneMu sync.Mutex
+	lastPhone   string
+	eventsMu    sync.Mutex // Chats and MessagesPerChat, once sessions run
 }
 
 func DefaultSynthetic() *Synthetic {
@@ -40,20 +52,43 @@ func DefaultSynthetic() *Synthetic {
 
 // Factory returns a provider.Factory sharing this configuration.
 func (s *Synthetic) Factory() Factory {
-	return func(st *store.Store) (Session, error) { return &syntheticSession{cfg: s, st: st}, nil }
+	return func(st *store.Store) (Session, error) {
+		return &syntheticSession{cfg: s, st: st, ready: make(chan struct{}), ended: make(chan struct{})}, nil
+	}
 }
 
 // Logouts counts Logout calls on paired sessions (for tests).
 func (s *Synthetic) Logouts() int { return int(s.logouts.Load()) }
 
+// SetEvents changes how many chats and messages a paired session reports,
+// safely while sessions are running.
+func (s *Synthetic) SetEvents(chats, messagesPerChat int) {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	s.Chats, s.MessagesPerChat = chats, messagesPerChat
+}
+
+// PhoneCodes counts phone codes reported; LastPhone is the number the last
+// request named (tests only: the real provider keeps neither).
+func (s *Synthetic) PhoneCodes() int { return int(s.phoneCodes.Load()) }
+
+func (s *Synthetic) LastPhone() string {
+	s.lastPhoneMu.Lock()
+	defer s.lastPhoneMu.Unlock()
+	return s.lastPhone
+}
+
 // Events returns the chats and messages a paired session reports.
 func (s *Synthetic) Events() ([]Chat, []Message) {
+	s.eventsMu.Lock()
+	nChats, perChat := s.Chats, s.MessagesPerChat
+	s.eventsMu.Unlock()
 	var chats []Chat
 	var msgs []Message
-	for c := 0; c < s.Chats; c++ {
+	for c := 0; c < nChats; c++ {
 		chatID := fmt.Sprintf("4477009%05d@s.whatsapp.net", c)
 		var last time.Time
-		for m := 0; m < s.MessagesPerChat; m++ {
+		for m := 0; m < perChat; m++ {
 			at := s.Base.Add(time.Duration(c)*time.Hour + time.Duration(m)*time.Minute).UTC()
 			last = at
 			body := fmt.Sprintf("Synthetic message %d in chat %d %s", m, c, s.Marker)
@@ -80,6 +115,11 @@ func (s *Synthetic) Events() ([]Chat, []Message) {
 type syntheticSession struct {
 	cfg *Synthetic
 	st  *store.Store
+
+	ready     chan struct{} // closed with the first QR
+	ended     chan struct{} // closed when pairing ends, either way
+	readyOnce sync.Once
+	endOnce   sync.Once
 }
 
 const syntheticPaired = "synthetic_paired"
@@ -90,6 +130,7 @@ func (s *syntheticSession) paired(ctx context.Context) (bool, error) {
 }
 
 func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error {
+	defer s.endOnce.Do(func() { close(s.ended) })
 	paired, err := s.paired(ctx)
 	if err != nil {
 		return err
@@ -104,6 +145,7 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 			if err := sink.QR(ctx, fmt.Sprintf("2@synthetic-%d-%s", i, s.cfg.Marker), now, now.Add(s.cfg.QRLifetime)); err != nil {
 				return err
 			}
+			s.readyOnce.Do(func() { close(s.ready) })
 			if err := sleep(ctx, s.cfg.QRInterval); err != nil {
 				return err
 			}
@@ -112,6 +154,7 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 			return err
 		}
 	}
+	s.endOnce.Do(func() { close(s.ended) })
 	if err := sink.Connected(ctx, Identity{UserID: "447700900000", DisplayName: "Synthetic " + s.cfg.Marker}); err != nil {
 		return err
 	}
@@ -134,6 +177,40 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 		}
 		return ErrLoggedOut
 	}
+}
+
+// RequestPhoneCode waits for the first QR, as whatsmeow's PairPhone needs,
+// then reports the configured code or failure.
+func (s *syntheticSession) RequestPhoneCode(ctx context.Context, sink Sink, phone string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.ended:
+		return ErrNotPairing
+	case <-s.ready:
+	}
+	select {
+	case <-s.ended:
+		return ErrNotPairing
+	default:
+	}
+	s.cfg.lastPhoneMu.Lock()
+	s.cfg.lastPhone = phone
+	s.cfg.lastPhoneMu.Unlock()
+	if s.cfg.PhoneFailure != "" {
+		return sink.PhoneCodeFailed(ctx, s.cfg.PhoneFailure)
+	}
+	code := s.cfg.PhoneCode
+	if code == "" {
+		code = "SYNT-HABC"
+	}
+	lifetime := s.cfg.PhoneCodeLifetime
+	if lifetime == 0 {
+		lifetime = s.cfg.QRLifetime
+	}
+	now := time.Now().UTC()
+	s.cfg.phoneCodes.Add(1)
+	return sink.PhoneCode(ctx, code, now, now.Add(lifetime))
 }
 
 func (s *syntheticSession) Logout(ctx context.Context) error {

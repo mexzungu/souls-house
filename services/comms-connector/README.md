@@ -11,7 +11,7 @@ Receive only. There is no send endpoint, scope or code.
 cmd/comms-connector/   startup: hardening, env, manager, mTLS command server
 internal/command/      verifies Rails's signed commands (COMMS_COMMAND_KEY)
 internal/sig/          both signatures, byte for byte with the Ruby (vectors in tests)
-internal/server/       manager (start_pairing / unpair / boot) and the HTTP handler
+internal/server/       manager (start_pairing / unpair / pair_phone / boot) and the HTTP handler
 internal/worker/       one connection: lease, store, session, ordered delivery to Rails
 internal/rails/        signed POST /internal/comms/connections/:id/events
 internal/provider/     Session/Sink seam; deterministic Synthetic provider
@@ -30,7 +30,7 @@ envelope. Residents read through Rails, not the connector.
 ## Protocol
 
 **Rails → connector** (`app/lib/comms_connector.rb`, the same path as Telegram):
-`POST /connections/<svc_id>/start_pairing` and `/unpair`, over mutual TLS
+`POST /connections/<svc_id>/start_pairing`, `/unpair` and `/pair_phone`, over mutual TLS
 (Rails's client certificate, the connector's server certificate, one house
 CA), signed with the connector-wide `COMMS_COMMAND_KEY`:
 
@@ -66,6 +66,44 @@ codes. `unpair` logs the device out at WhatsApp (best effort, 20 s bound),
 then deletes the store and the connection's directory, and only then
 releases the lease. Unpairing an unknown connection succeeds.
 
+**Pairing by phone number** (WhatsApp's "Link with phone number instead",
+whatsmeow `PairPhone`), for an owner on the phone WhatsApp is on, who
+cannot scan a QR on that screen. `pair_phone` carries `phone_number`
+(E.164: `+`, country code, at most 15 digits; Rails normalises and checks
+it, the connector checks it again) and `attempt`, a JSON integer that must
+be the pairing attempt the connection is on (409 `stale_attempt`
+otherwise; 409 `not_pairing` for a connection that is linked, unknown or
+no longer pairing), and `request_id`, Rails' id for this one ask (16
+lowercase hex characters, random, never derived from the number; 422
+`bad_request_id` otherwise). It is accepted at once (202): the code follows
+as an event naming the same `request_id`. With it comes `request_seq`, the
+request's place in Rails' order: a positive JSON integer Rails assigns
+under the connection's row lock, per connection, never reset (a restart
+continues it), 422 `bad_request_seq` otherwise. Within one attempt the
+owner can ask again (another number, a retry, another tab), and Rails sends
+each command after recording it, so two commands can arrive in either
+order: the sequence decides, not arrival. A command whose `request_seq` is
+not above the highest this connection has accepted is refused, 409
+`stale_request`, before anything is cancelled (Rails treats that as
+harmless: its newer request is the one running); a newer one cancels the
+older request, and nothing the older one still reports is sent, in
+whatever order WhatsApp answers them. A command from before a restart is
+refused by its attempt (409 `stale_attempt`), whatever its sequence. Rails, in turn, accepts a code or
+failure only for its latest request, so a delayed or reordered answer for a
+superseded one is refused (409 `stale_phone_code`) rather than shown or
+allowed to clear the current code. whatsmeow can only ask for a code on a pairing connection that is
+up, i.e. after its first QR, so the request waits for that (at most 30 s,
+then `not_ready`); a number sent before WhatsApp has answered is fine. The
+session keeps pushing QR codes meanwhile; either links. The code lives as
+long as the pairing connection (160 s from its first QR); if the QR codes
+run out with a code issued and unused, the connector says so (`expired`,
+naming the request that got the code).
+The number is passed to WhatsApp and kept nowhere: not in the store, not in
+a log line (the handler logs the operation and fixed refusal words only),
+and WhatsApp's own error text, which can echo it, is reduced to a fixed
+word. Rails keeps the number nowhere either (`filter_parameters` covers
+`phone` and `phone_number`).
+
 **Revocation.** If the owner's disconnect cannot reach the connector, Rails
 still revokes the connection (and erases the secret), keeps it marked
 `unpair` pending, shows that on the owner's card, and retries `unpair` every
@@ -81,7 +119,10 @@ signed with the connection's callback secret (`CommsSignature`):
     connection LF METHOD LF path LF unix-seconds LF nonce LF raw-body
 
 Events: `pairing.qr` (code, `issued_at`, `expires_at`; sent at once, never
-stored, retried only until it expires), and, through the store's outbox,
+stored, retried only until it expires); `pairing.phone_code` (the same
+shape, the code as `XXXX-XXXX`, plus `request_id`) and
+`pairing.phone_code_failed` (`reason`: `phone_invalid`, `rate_limited`,
+`not_ready`, `expired` or `failed`, plus `request_id`), sent like a QR; and, through the store's outbox,
 `status.changed` (`connected` with identity, `logged_out`), `chat.upsert` and
 `message.upsert` (batches of ≤ 200 and ≤ 512 KiB; a body or caption past
 64 KiB is cut). Outbox events carry a sequence number; Rails applies them
@@ -188,6 +229,12 @@ WhatsApp integration stays hidden (its catalog entry requires
   phone-side logout and `Logout` reaching WhatsApp have not run against
   WhatsApp. They are tested only through the synthetic provider and through
   whatsmeow's store and event types offline.
+- Pairing by phone number has not run against WhatsApp either: the order
+  (first QR, then `PairPhone`), the error words and the expiry are tested
+  with a fake `PairPhone` on a driven QR channel, and the command and events
+  end to end with the synthetic provider. Whether WhatsApp accepts the
+  "Chrome (Linux)" display name, how long a code really lasts, and whether
+  the phone shows a notification for it are unverified.
 - Group names come from a `GetGroupInfo` call per chat per run; untested
   online.
 - Media are never downloaded (milestone 1): a message records the kind and

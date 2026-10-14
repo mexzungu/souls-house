@@ -177,7 +177,8 @@ class Accounts::ServiceConnectionPairingsControllerTest < ActionDispatch::Integr
 
     assert_response :ok
     assert_equal "no-store", response.headers["Cache-Control"]
-    assert_equal({ "status" => "pairing", "qr" => nil }, response.parsed_body)
+    assert_equal({ "status" => "pairing", "qr" => nil }, response.parsed_body.slice("status", "qr"))
+    assert_nil response.parsed_body["phone_code"]
     assert_equal [ @connection.id ], started
     @connection.reload
     assert_nil @connection.pairing_qr

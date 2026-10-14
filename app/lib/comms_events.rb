@@ -23,11 +23,18 @@ module CommsEvents
   MAX_BATCH = 200
   NONCE_RETENTION = (CommsSignature::MAX_SKEW * 2 + 60).seconds
   MAX_QR_LIFETIME = 5.minutes
+  # WhatsApp's phone pairing code: 8 characters from its linking alphabet,
+  # sent as XXXX-XXXX and stored without the dash.
+  PHONE_CODE = /\A[A-Z0-9]{4}-?[A-Z0-9]{4}\z/
+  # Why no phone code came, in the connector's fixed words
+  # (provider.PhoneCode*). Never WhatsApp's text, which can carry the number.
+  PHONE_CODE_FAILURES = %w[phone_invalid rate_limited not_ready expired failed].freeze
   MESSAGE_FIELDS = %w[provider_message_id chat sender_id sender_name sent_at body media_kind caption edited_at].freeze
   EDIT_FIELDS = %w[provider_message_id chat body caption edited_at].freeze
   CHAT_FIELDS = %w[provider_chat_id name kind last_activity_at sync_state].freeze
   LOGIN_FAILURES = %w[expired password_invalid flood_wait failed].freeze
-  LOGIN_EVENTS = %w[pairing.qr login.qr login.code_sent login.password_required login.failed status.changed].freeze
+  LOGIN_EVENTS = %w[pairing.qr pairing.phone_code pairing.phone_code_failed login.qr login.code_sent
+                    login.password_required login.failed status.changed].freeze
   # Where Telegram sent a phone sign-in's code (services/telegram-connector,
   # account.CODE_DELIVERIES).
   CODE_DELIVERIES = %w[app sms call fragment email other].freeze
@@ -38,7 +45,8 @@ module CommsEvents
   # them keeps moving; nothing about them is applied. (An earlier attempt's
   # chats and messages are refused, not acknowledged: the connector carries
   # them over to the next attempt.)
-  OBSOLETE = %i[stale_generation stale_qr expired_qr connection_not_accepting stale_attempt].freeze
+  OBSOLETE = %i[stale_generation stale_qr expired_qr connection_not_accepting stale_attempt
+                stale_phone_code expired_phone_code].freeze
 
   # Connector status → ServiceConnection status. A phone-side logout needs the
   # owner to pair again, which the house already calls reauthorizing.
@@ -144,8 +152,8 @@ module CommsEvents
         require_generation!(connection, event)
       end
       consume_nonce!(connection, nonce, now)
-      attributes = { status: change.fetch(:to), pairing_qr: nil, pairing_qr_expires_at: nil, pairing_qr_issued_at: nil }
-      attributes[:connector_state] = connection.connector_state.to_h.except("login")
+      attributes = { status: change.fetch(:to), **ServiceConnection::PAIRING_CODES_CLEARED }
+      attributes[:connector_state] = connection.connector_state.to_h.except("login", "phone_pairing")
       attributes.merge!(identity_attributes(event["identity"])) if change.fetch(:to) == "connected" && event["identity"].is_a?(Hash)
       connection.update!(attributes)
     when "pairing.qr", "login.qr"
@@ -167,6 +175,47 @@ module CommsEvents
       end
       consume_nonce!(connection, nonce, now)
       connection.update!(pairing_qr: code, pairing_qr_expires_at: expires_at, pairing_qr_issued_at: issued_at)
+    when "pairing.phone_code"
+      # WhatsApp only (the attempt was checked above). Shaped like a QR,
+      # with the QR's ordering and expiry rules, and only for an attempt in
+      # which the owner asked for a code.
+      raise Refused.new(:unknown_event, :unprocessable_entity) unless connection.provider == "whatsapp"
+      require_status!(connection, %w[pairing])
+      code, expires_at, issued_at = event["code"].to_s, time(event["expires_at"]), time(event["issued_at"])
+      raise Refused.new(:bad_phone_code, :unprocessable_entity) unless code.match?(PHONE_CODE) && expires_at && issued_at
+      raise Refused.new(:expired_phone_code, :unprocessable_entity) unless expires_at > now
+      raise Refused.new(:bad_phone_code, :unprocessable_entity) unless expires_at <= now + MAX_QR_LIFETIME
+      raise Refused.new(:stale_phone_code, :conflict) if connection.phone_pairing_state["step"].nil?
+      # Only the latest request's code: a code for a number the owner has
+      # since replaced (or retried) is out of date, even if it was issued
+      # later (the connector may answer requests out of order).
+      raise Refused.new(:stale_phone_code, :conflict) unless current_phone_request?(connection, event)
+      if connection.pairing_phone_code_issued_at && issued_at <= connection.pairing_phone_code_issued_at
+        raise Refused.new(:stale_phone_code, :conflict)
+      end
+      consume_nonce!(connection, nonce, now)
+      connection.update!(
+        pairing_phone_code: code.delete("-"), pairing_phone_code_issued_at: issued_at, pairing_phone_code_expires_at: expires_at,
+        connector_state: connection.connector_state.to_h.merge(
+          "phone_pairing" => { "step" => "code", "request" => connection.phone_pairing_state["request"], "at" => now.utc.iso8601 }
+        )
+      )
+    when "pairing.phone_code_failed"
+      raise Refused.new(:unknown_event, :unprocessable_entity) unless connection.provider == "whatsapp"
+      require_status!(connection, %w[pairing])
+      reason = event["reason"].to_s
+      raise Refused.new(:unknown_phone_code_failure, :unprocessable_entity) unless PHONE_CODE_FAILURES.include?(reason)
+      raise Refused.new(:stale_phone_code, :conflict) if connection.phone_pairing_state["step"].nil? && connection.phone_pairing_state["error"].nil?
+      # Only the latest request's failure: an old request's must not clear
+      # the code a newer one got.
+      raise Refused.new(:stale_phone_code, :conflict) unless current_phone_request?(connection, event)
+      consume_nonce!(connection, nonce, now)
+      connection.update!(
+        pairing_phone_code: nil, pairing_phone_code_issued_at: nil, pairing_phone_code_expires_at: nil,
+        connector_state: connection.connector_state.to_h.merge(
+          "phone_pairing" => { "error" => reason, "request" => connection.phone_pairing_state["request"], "at" => now.utc.iso8601 }
+        )
+      )
     when "login.code_sent"
       # The phone-number sign-in: Telegram sent a code. Never the number
       # itself; only where the code went.
@@ -245,6 +294,13 @@ module CommsEvents
 
   def record_sequence!(connection, seq)
     connection.update_columns(comms_event_seq: seq)
+  end
+
+  # A phone code or failure names the phone request it answers; only the
+  # connection's latest request is current.
+  def current_phone_request?(connection, event)
+    request = event["request_id"]
+    request.is_a?(String) && request.present? && request == connection.phone_pairing_state["request"]
   end
 
   def require_status!(connection, allowed)

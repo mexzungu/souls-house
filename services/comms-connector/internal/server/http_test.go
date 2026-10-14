@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -27,6 +28,7 @@ import (
 
 	"services/comms-connector/internal/command"
 	"services/comms-connector/internal/sig"
+	"services/comms-connector/internal/worker"
 )
 
 type issued struct {
@@ -75,8 +77,9 @@ func (i *issued) tlsCert() tls.Certificate {
 }
 
 type recorder struct {
-	mu    sync.Mutex
-	calls []string
+	mu       sync.Mutex
+	calls    []string
+	phoneErr error
 }
 
 func (r *recorder) StartPairing(_ context.Context, ref, secret string, version int64) error {
@@ -91,6 +94,13 @@ func (r *recorder) Unpair(_ context.Context, ref string) error {
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, "unpair "+ref)
 	return nil
+}
+
+func (r *recorder) PairPhone(_ context.Context, ref, phone string, attempt int64, request string, seq int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "pair_phone "+ref+" "+phone+" "+strconv.FormatInt(attempt, 10)+" "+request+" "+strconv.FormatInt(seq, 10))
+	return r.phoneErr
 }
 
 type tlsRig struct {
@@ -236,5 +246,97 @@ func TestHealthz(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, r.srv.URL+"/healthz", nil)
 	if status, _, err := do(t, r.client(r.rails), req); err != nil || status != 200 {
 		t.Fatalf("healthz %d %v", status, err)
+	}
+}
+
+// pair_phone: signed like every command, the number checked as E.164 and
+// passed on as digits, the attempt required; accepted (202), since the code
+// follows as an event. The number is in no log line.
+func TestPairPhoneCommand(t *testing.T) {
+	r := newTLSRig(t)
+	c := r.client(r.rails)
+	const phone = "+447700900123"
+	status, body, err := do(t, c, r.command(t, "svc_7", "pair_phone",
+		map[string]any{"phone_number": phone, "attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3}, "test-command-key"))
+	if err != nil || status != 202 || !strings.Contains(body, `"requested"`) {
+		t.Fatalf("pair_phone: %d %s %v", status, body, err)
+	}
+	for name, fields := range map[string]map[string]any{
+		"spaces":         {"phone_number": "+44 7700 900123", "attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3},
+		"no plus":        {"phone_number": "447700900123", "attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3},
+		"trunk zero":     {"phone_number": "+07700900123", "attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3},
+		"no number":      {"attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3},
+		"no attempt":     {"phone_number": phone, "request_id": "0123456789abcdef", "request_seq": 3},
+		"attempt zero":   {"phone_number": phone, "attempt": 0, "request_id": "0123456789abcdef", "request_seq": 3},
+		"attempt string": {"phone_number": phone, "attempt": "2", "request_id": "0123456789abcdef", "request_seq": 3},
+	} {
+		status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone", fields, "test-command-key"))
+		if status != 422 && status != 401 {
+			t.Errorf("%s: %d %s", name, status, body)
+		}
+	}
+	// The request id is Rails' SecureRandom.hex(8): required, exactly that.
+	for name, request := range map[string]any{
+		"no request": nil, "empty": "", "upper case": "0123456789ABCDEF", "short": "0123456789abcde",
+		"long": "0123456789abcdef0", "the number": "447700900123", "a number": 1234567890123456,
+	} {
+		fields := map[string]any{"phone_number": phone, "attempt": 2, "request_seq": 3}
+		if request != nil {
+			fields["request_id"] = request
+		}
+		status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone", fields, "test-command-key"))
+		// A non-string fails to decode (the verifier's 401 bad_json).
+		refused := status == 422 && strings.Contains(body, "bad_request_id") || status == 401 && strings.Contains(body, "bad_json")
+		if !refused {
+			t.Errorf("%s: %d %s", name, status, body)
+		}
+	}
+	// The request sequence (Rails' order of requests): a positive JSON
+	// integer, required.
+	for name, seq := range map[string]any{"no sequence": nil, "zero": 0, "negative": -1, "string": "3", "fraction": 1.5} {
+		fields := map[string]any{"phone_number": phone, "attempt": 2, "request_id": "0123456789abcdef"}
+		if seq != nil {
+			fields["request_seq"] = seq
+		}
+		status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone", fields, "test-command-key"))
+		refused := status == 422 && strings.Contains(body, "bad_request_seq") || status == 401 && strings.Contains(body, "bad_request_seq")
+		if !refused {
+			t.Errorf("%s: %d %s", name, status, body)
+		}
+	}
+	if status, body, _ := do(t, c, r.command(t, "svc_7", "pair_phone",
+		map[string]any{"phone_number": phone, "attempt": 2, "request_id": "0123456789abcdef", "request_seq": 3}, "wrong-key")); status != 401 || !strings.Contains(body, "bad_signature") {
+		t.Fatalf("wrong key: %d %s", status, body)
+	}
+	if got := strings.Join(r.rec.calls, "|"); got != "pair_phone svc_7 447700900123 2 0123456789abcdef 3" {
+		t.Fatalf("calls %q", got)
+	}
+	for _, needle := range []string{"447700900123", "7700"} {
+		if strings.Contains(r.logs.String(), needle) {
+			t.Fatalf("phone number logged: %s", r.logs.String())
+		}
+	}
+}
+
+func TestPairPhoneRefusalsMapToCodes(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{worker.ErrStaleAttempt, 409, "stale_attempt"},
+		// An older request than one the connector has already accepted:
+		// refused before anything is cancelled.
+		{worker.ErrStaleRequest, 409, "stale_request"},
+		{worker.ErrNotPairing, 409, "not_pairing"},
+		{errors.New("boom"), 500, "pair_phone_failed"},
+	} {
+		r := newTLSRig(t)
+		r.rec.phoneErr = tc.err
+		status, body, _ := do(t, r.client(r.rails), r.command(t, "svc_7", "pair_phone",
+			map[string]any{"phone_number": "+447700900123", "attempt": 1, "request_id": "0123456789abcdef", "request_seq": 3}, "test-command-key"))
+		if status != tc.status || !strings.Contains(body, tc.code) {
+			t.Errorf("%v: %d %s", tc.err, status, body)
+		}
 	}
 }

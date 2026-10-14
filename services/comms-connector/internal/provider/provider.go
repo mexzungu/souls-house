@@ -19,6 +19,19 @@ var (
 	ErrNotPaired = errors.New("session is not paired")
 	// ErrLoggedOut: the phone removed this linked device. The sink has been told.
 	ErrLoggedOut = errors.New("session was logged out")
+	// ErrNotPairing: a phone pairing code was asked for while the session
+	// is not pairing (already linked, or its pairing has ended).
+	ErrNotPairing = errors.New("session is not pairing")
+)
+
+// Phone pairing failures, as Rails shows them (CommsEvents::PHONE_CODE_FAILURES).
+// Fixed words: never the number, never WhatsApp's own error text.
+const (
+	PhoneCodeInvalid     = "phone_invalid"
+	PhoneCodeRateLimited = "rate_limited"
+	PhoneCodeNotReady    = "not_ready"
+	PhoneCodeExpired     = "expired"
+	PhoneCodeFailed      = "failed"
 )
 
 // Identity is who the paired account is, as Rails shows it on the connection.
@@ -52,6 +65,13 @@ type Message struct {
 // are never stored; everything else is queued durably, in order.
 type Sink interface {
 	QR(ctx context.Context, code string, issuedAt, expiresAt time.Time) error
+	// PhoneCode is the 8-character code the owner types into WhatsApp
+	// ("Link with phone number instead"). Like a QR: posted at once, never
+	// stored or logged.
+	PhoneCode(ctx context.Context, code string, issuedAt, expiresAt time.Time) error
+	// PhoneCodeFailed: asking for a phone code failed, or the pairing it
+	// belonged to ended unused. reason is one of the PhoneCode* words.
+	PhoneCodeFailed(ctx context.Context, reason string) error
 	Connected(ctx context.Context, id Identity) error
 	LoggedOut(ctx context.Context) error
 	Chats(ctx context.Context, chats []Chat) error
@@ -69,6 +89,16 @@ type Session interface {
 	// one. Called only while Run is not running. Best effort: the caller
 	// deletes the store either way.
 	Logout(ctx context.Context) error
+}
+
+// PhonePairer is a Session that can pair by phone number instead of a QR
+// (whatsmeow's PairPhone). RequestPhoneCode may be called while Run is
+// pairing; it waits until the pairing connection is up (the first QR), asks
+// for a code for phone (E.164 digits, no "+") and reports the code, or the
+// failure, to sink. ErrNotPairing (reported to nobody) when the session is
+// not pairing.
+type PhonePairer interface {
+	RequestPhoneCode(ctx context.Context, sink Sink, phone string) error
 }
 
 // Factory makes a session over a connection's encrypted store.

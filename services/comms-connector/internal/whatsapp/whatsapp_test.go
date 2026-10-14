@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -123,11 +124,38 @@ func TestSessionStoreLivesInTheEncryptedStoreAndSurvivesReopen(t *testing.T) {
 type recSink struct {
 	msgs  []provider.Message
 	chats []provider.Chat
+
+	mu          sync.Mutex
+	qrs         []string
+	phoneCodes  []phoneCodeCall
+	phoneFailed []string
 }
 
-func (r *recSink) QR(context.Context, string, time.Time, time.Time) error { return nil }
-func (r *recSink) Connected(context.Context, provider.Identity) error     { return nil }
-func (r *recSink) LoggedOut(context.Context) error                        { return nil }
+type phoneCodeCall struct {
+	code              string
+	issued, expiresAt time.Time
+}
+
+func (r *recSink) QR(_ context.Context, code string, _, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.qrs = append(r.qrs, code)
+	return nil
+}
+func (r *recSink) PhoneCode(_ context.Context, code string, issued, expires time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.phoneCodes = append(r.phoneCodes, phoneCodeCall{code, issued, expires})
+	return nil
+}
+func (r *recSink) PhoneCodeFailed(_ context.Context, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.phoneFailed = append(r.phoneFailed, reason)
+	return nil
+}
+func (r *recSink) Connected(context.Context, provider.Identity) error { return nil }
+func (r *recSink) LoggedOut(context.Context) error                    { return nil }
 func (r *recSink) Chats(_ context.Context, c []provider.Chat) error {
 	r.chats = append(r.chats, c...)
 	return nil

@@ -17,7 +17,7 @@ require "net/http"
 # intent is logged and :not_configured returned.
 module CommsConnector
 
-  COMMANDS = %w[start_pairing unpair].freeze
+  COMMANDS = %w[start_pairing unpair pair_phone].freeze
   WHATSAPP_URL_ENV = "COMMS_WHATSAPP_CONNECTOR_URL".freeze
   # Everything a WhatsApp command needs; the catalog hides WhatsApp until all
   # of it is set.
@@ -28,6 +28,8 @@ module CommsConnector
                    "COMMS_CONNECTOR_CLIENT_CERT", "COMMS_CONNECTOR_CLIENT_KEY", "COMMS_CONNECTOR_CA_FILE" ].freeze
 
   class Error < StandardError; end
+  # pair_phone refused because the connector already took a newer request.
+  class StaleRequest < Error; end
   # An unpair that could not be sent because no connector is configured.
   # Not a confirmation: the accessory outlives Rails deploys and its
   # configuration, so it may still hold the device.
@@ -49,6 +51,21 @@ module CommsConnector
 
   def unpair(connection)
     command(connection, "unpair", url: ENV[WHATSAPP_URL_ENV].presence)
+  end
+
+  # WhatsApp's "Link with phone number instead": ask the connection's
+  # pairing session for a code for this number (E.164, already validated)
+  # in this attempt. The connector accepts at once; the code follows as a
+  # pairing.phone_code event. The number travels only in this signed body,
+  # over mutual TLS; command logs only name the operation.
+  # request: the id ServiceConnection#request_phone_pairing! minted for this
+  # ask (never the number); the code or failure that answers names it.
+  # seq: that ask's sequence number. The connector answers 409
+  # stale_request when it has already accepted a newer ask (raised as
+  # StaleRequest: Rails has moved on, so it is not a failure to send).
+  def pair_phone(connection, phone_number, attempt:, request:, seq:)
+    command(connection, "pair_phone", url: ENV[WHATSAPP_URL_ENV].presence, phone_number:, attempt:,
+                                      request_id: request, request_seq: seq)
   end
 
   # Unpair, raising NotConfigured instead of returning :not_configured, for
@@ -105,7 +122,11 @@ module CommsConnector
     response = Net::HTTP.start(uri.hostname, uri.port, **tls, open_timeout: 5, read_timeout: 30) do |http|
       http.request(request)
     end
-    raise Error, "comms connector #{operation} failed (#{response.code})" unless response.is_a?(Net::HTTPSuccess)
+    unless response.is_a?(Net::HTTPSuccess)
+      raise StaleRequest, "comms connector #{operation}: a newer request was accepted" if stale_request?(operation, response)
+
+      raise Error, "comms connector #{operation} failed (#{response.code})"
+    end
 
     parsed = response.body.present? ? JSON.parse(response.body) : {}
     parsed.is_a?(Hash) ? parsed : {}
@@ -113,6 +134,15 @@ module CommsConnector
     raise Error, "comms connector #{operation} returned invalid JSON"
   rescue CommsCommandSignature::MissingKey => e
     raise Error, e.message
+  end
+
+  def stale_request?(operation, response)
+    return false unless operation == "pair_phone" && response.code == "409"
+
+    body = JSON.parse(response.body.to_s)
+    body.is_a?(Hash) && body["error"] == "stale_request"
+  rescue JSON::ParserError
+    false
   end
 
   TLS_SETTINGS = %w[COMMS_CONNECTOR_CLIENT_CERT COMMS_CONNECTOR_CLIENT_KEY COMMS_CONNECTOR_CA_FILE].freeze

@@ -29,7 +29,8 @@ func (r *Refused) Error() string { return "command refused: " + r.Code }
 
 func refuse(code string) error { return &Refused{Code: code} }
 
-// Command is a verified command. CallbackSecret is only set by start_pairing.
+// Command is a verified command. CallbackSecret is only set by
+// start_pairing; PhoneNumber, Attempt and PhoneRequest only by pair_phone.
 type Command struct {
 	Connection            string
 	Operation             string
@@ -37,20 +38,34 @@ type Command struct {
 	IssuedAt              int64
 	CallbackSecret        string
 	CallbackSecretVersion int64
+	PhoneNumber           string
+	Attempt               int64
+	// PhoneRequest is Rails' id for this one phone request (never the
+	// number); the code or failure that answers it names it.
+	PhoneRequest string
+	// PhoneRequestSeq is that request's place in Rails' order (a positive
+	// integer, increasing per connection): which of two requests is newer.
+	PhoneRequestSeq int64
 }
 
-// String never shows the secret.
+// String never shows the secret or the phone number.
 func (c Command) String() string {
 	return "command(" + c.Operation + " " + c.Connection + ")"
 }
 
 type body struct {
-	Connection            *string      `json:"connection"`
-	Operation             *string      `json:"operation"`
-	CommandID             *string      `json:"command_id"`
-	IssuedAt              *json.Number `json:"issued_at"`
-	CallbackSecret        *string      `json:"callback_secret"`
-	CallbackSecretVersion *json.Number `json:"callback_secret_version"`
+	Connection            *string         `json:"connection"`
+	Operation             *string         `json:"operation"`
+	CommandID             *string         `json:"command_id"`
+	IssuedAt              *json.Number    `json:"issued_at"`
+	CallbackSecret        *string         `json:"callback_secret"`
+	CallbackSecretVersion *json.Number    `json:"callback_secret_version"`
+	PhoneNumber           *string         `json:"phone_number"`
+	PhoneRequest          *string         `json:"request_id"`
+	PhoneRequestSeq       json.RawMessage `json:"request_seq"`
+	// RawMessage, not json.Number: json.Number also takes "2" (a string),
+	// and the attempt must be the integer Rails sends.
+	Attempt json.RawMessage `json:"attempt"`
 }
 
 type Verifier struct {
@@ -119,6 +134,27 @@ func (v *Verifier) Verify(ref, op string, h http.Header, raw []byte) (Command, e
 			return Command{}, refuse("bad_secret_version")
 		}
 		cmd.CallbackSecretVersion = n
+	}
+	if b.PhoneNumber != nil {
+		cmd.PhoneNumber = *b.PhoneNumber
+	}
+	if b.PhoneRequest != nil {
+		cmd.PhoneRequest = *b.PhoneRequest
+	}
+	if b.PhoneRequestSeq != nil {
+		// A bare JSON integer, like the attempt.
+		n, err := strconv.ParseInt(string(b.PhoneRequestSeq), 10, 64)
+		if err != nil || n < 1 {
+			return Command{}, refuse("bad_request_seq")
+		}
+		cmd.PhoneRequestSeq = n
+	}
+	if b.Attempt != nil {
+		n, err := strconv.ParseInt(string(b.Attempt), 10, 64)
+		if err != nil || n < 1 {
+			return Command{}, refuse("bad_attempt")
+		}
+		cmd.Attempt = n
 	}
 
 	// Only a verified, fresh command reaches the cache, so it cannot be

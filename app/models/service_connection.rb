@@ -24,6 +24,14 @@ class ServiceConnection < ApplicationRecord
 
   encrypts :credential_payload
   encrypts :pairing_qr
+  encrypts :pairing_phone_code
+
+  # Everything the owner's pairing card shows while pairing, cleared
+  # together whenever pairing ends or starts over.
+  PAIRING_CODES_CLEARED = {
+    pairing_qr: nil, pairing_qr_expires_at: nil, pairing_qr_issued_at: nil,
+    pairing_phone_code: nil, pairing_phone_code_issued_at: nil, pairing_phone_code_expires_at: nil
+  }.freeze
 
   validates :provider, :management_scope, :credential_kind, :status, presence: true
   validates :management_scope, inclusion: { in: MANAGEMENT_SCOPES }
@@ -260,8 +268,8 @@ class ServiceConnection < ApplicationRecord
     definition.adapter.revoke(self) if revoke_provider
     update!(
       credential_payload: nil,
-      pairing_qr: nil,
-      pairing_qr_expires_at: nil, pairing_qr_issued_at: nil,
+      **PAIRING_CODES_CLEARED,
+      connector_state: connector_state.to_h.except("phone_pairing"),
       status: "revoked",
       credential_revision: credential_revision + 1
     )
@@ -332,6 +340,92 @@ class ServiceConnection < ApplicationRecord
     { code: pairing_qr, issued_at: pairing_qr_issued_at&.utc&.iso8601(3), expires_at: pairing_qr_expires_at.utc.iso8601 }
   end
 
+  # WhatsApp's "Link with phone number instead". The owner gives the number
+  # of the phone WhatsApp is on (it is forwarded to the connector and kept
+  # nowhere); the connector answers with an 8-character code
+  # (pairing.phone_code) the owner types into WhatsApp. The step is in
+  # connector_state["phone_pairing"]: "requested", then "code", or an error,
+  # with "request": the id of the request it belongs to.
+  def phone_pairing_state
+    connector_state.to_h["phone_pairing"].to_h
+  end
+
+  # Records the owner's request, under the row lock, for the attempt the
+  # owner's page showed: only while that attempt is pairing. Clears any
+  # earlier phone code. Returns the request's id (random, never derived from
+  # the number), which the caller sends with pair_phone; false otherwise.
+  # Within one attempt the owner can ask again (another number, a retry,
+  # another tab): each ask gets a new id, and CommsEvents accepts a code or
+  # failure only for the latest, whatever order the connector answers in.
+  # Each ask also gets the next sequence number ("seq"), under the same
+  # lock: the id says which result belongs to which ask, the sequence says
+  # which ask is newer. The command is sent after the lock is released, so
+  # two asks' commands can reach the connector in either order; it refuses
+  # one whose sequence is not above the newest it has accepted
+  # (stale_request) before cancelling anything. The counter
+  # (connector_state["phone_request_seq"]) is per connection and never
+  # resets, a restart included, so a command from before a restart is
+  # always older than one after it.
+  def request_phone_pairing!(attempt, now: Time.current)
+    with_lock do
+      return false unless status == "pairing" && attempt == pairing_attempt
+
+      request = SecureRandom.hex(8)
+      seq = connector_state.to_h["phone_request_seq"].to_i + 1
+      update!(
+        connector_state: connector_state.to_h.merge(
+          "phone_request_seq" => seq,
+          "phone_pairing" => { "step" => "requested", "request" => request, "seq" => seq, "at" => now.utc.iso8601 }
+        ),
+        pairing_phone_code: nil, pairing_phone_code_issued_at: nil, pairing_phone_code_expires_at: nil
+      )
+      request
+    end
+  end
+
+  # The phone code, as XXXX-XXXX. Like the QR: owner only (the pairing
+  # endpoint), never served once expired.
+  def current_pairing_phone_code(now: Time.current)
+    return unless status == "pairing" && pairing_phone_code.present?
+    return unless pairing_phone_code_expires_at.present? && pairing_phone_code_expires_at > now
+
+    { code: "#{pairing_phone_code[0, 4]}-#{pairing_phone_code[4..]}", issued_at: pairing_phone_code_issued_at&.utc&.iso8601(3),
+      expires_at: pairing_phone_code_expires_at.utc.iso8601 }
+  end
+
+  # pair_phone could not be sent: that request, and only that one, is
+  # withdrawn. Compare-and-withdraw under the row lock: nothing changes if
+  # the pairing has restarted since (another attempt), the owner has asked
+  # again (another request), or a code or failure has come back meanwhile.
+  def withdraw_phone_pairing_request!(attempt:, request:)
+    with_lock do
+      return false unless pairing_attempt == attempt && request.present?
+      return false unless phone_pairing_state["request"] == request && phone_pairing_state["step"] == "requested"
+
+      update!(connector_state: connector_state.to_h.except("phone_pairing"))
+      true
+    end
+  end
+
+  # Clears the expired code this instance loaded, and only that one, as
+  # clear_expired_pairing_qr! does for the QR. The phone step becomes
+  # "expired", so the owner is offered a restart. The request stays named
+  # (the one this instance loaded: a newer request clears the code, so the
+  # conditional write would not match). Then reloads.
+  def clear_expired_pairing_phone_code!(now: Time.current)
+    cleared = ServiceConnection.where(id:, pairing_phone_code_issued_at:, pairing_phone_code_expires_at:)
+                               .where(pairing_phone_code_expires_at: ..now)
+                               .update_all([
+                                 "pairing_phone_code = NULL, pairing_phone_code_issued_at = NULL, " \
+                                 "pairing_phone_code_expires_at = NULL, updated_at = ?, " \
+                                 "connector_state = jsonb_set(connector_state, '{phone_pairing}', ?::jsonb)",
+                                 now, { "error" => "expired", "request" => phone_pairing_state["request"],
+                                        "at" => now.utc.iso8601 }.compact.to_json
+                               ])
+    reload
+    cleared.positive?
+  end
+
   # WhatsApp: pair (again) from the start, after the codes ran out, an error,
   # or WhatsApp logging the linked device out. Under the row lock: back to
   # "pairing" with no code, and a new pairing attempt (the callback secret
@@ -351,8 +445,8 @@ class ServiceConnection < ApplicationRecord
       update!(
         status: "pairing",
         credential_payload_hash: payload.merge("callback_secret_version" => pairing_attempt + 1),
-        connector_state: connector_state.to_h.except("login"),
-        pairing_qr: nil, pairing_qr_expires_at: nil, pairing_qr_issued_at: nil
+        connector_state: connector_state.to_h.except("login", "phone_pairing"),
+        **PAIRING_CODES_CLEARED
       )
       true
     end
@@ -369,8 +463,7 @@ class ServiceConnection < ApplicationRecord
     definition.adapter.revoke!(self)
     update!(
       credential_payload: nil,
-      pairing_qr: nil,
-      pairing_qr_expires_at: nil, pairing_qr_issued_at: nil,
+      **PAIRING_CODES_CLEARED,
       status: "reauthorizing",
       credential_revision: credential_revision + 1
     )

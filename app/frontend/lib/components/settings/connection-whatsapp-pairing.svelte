@@ -1,23 +1,38 @@
 <script>
   import { router } from '@inertiajs/svelte';
   import { untrack } from 'svelte';
-  import QRCode from 'qrcode';
   import { Button } from '$lib/components/shadcn/button';
-  import { formatCountdown, postLoginJson, secondsUntil } from '$lib/telegram-connection';
-  import { newerQr, pairingPhase } from '$lib/whatsapp-pairing';
+  import { postLoginJson, secondsUntil } from '$lib/telegram-connection';
+  import {
+    PHONE_FIRST_QUERY,
+    defaultPairingMethod,
+    newerQr,
+    pairingPhase,
+    phonePairingPhase,
+    phonePairingUnderway,
+  } from '$lib/whatsapp-pairing';
+  import WhatsappQr from './connection-whatsapp-qr.svelte';
+  import WhatsappPhone from './connection-whatsapp-phone.svelte';
 
-  // The QR code comes only from the owner's pairing endpoint, by fetch: it
-  // never enters page props, browser history or the console.
-  let { connection, account, pollInterval = 2500 } = $props();
+  // The owner pairs WhatsApp by QR or by phone number ("Link with phone
+  // number instead"). Both codes come only from the owner's pairing
+  // endpoint, by fetch: never page props, browser history or the console.
+  // phoneFirst: lead with the phone number. Left unset, a phone-sized or
+  // touch screen decides (it cannot scan a QR on its own screen).
+  let { connection, account, pollInterval = 2500, phoneFirst = undefined } = $props();
 
   let loaded = $state(false);
   let notOwner = $state(false);
   let status = $state(untrack(() => connection.status));
   let qr = $state(null);
+  let phone = $state({});
+  let phoneCode = $state(null);
+  let attempt = $state(null);
   let now = $state(Date.now());
-  let qrImage = $state(null);
   let busy = $state(false);
   let notice = $state(null);
+  let chosen = $state(null);
+  let touchScreen = $state(false);
 
   const base = $derived(`/accounts/${account.id}/service_connections/${connection.id}`);
   const polling = $derived(connection.status === 'pairing');
@@ -26,9 +41,55 @@
     qr?.expires_at ? Math.max(0, Math.floor((now - Date.parse(qr.expires_at)) / 1000)) : 0
   );
   const phase = $derived(pairingPhase({ status, qr, secondsLeft, secondsSinceExpiry }));
-  const showQr = $derived(['scan', 'rotating', 'expired'].includes(phase));
+  const phoneSecondsLeft = $derived(phoneCode?.expires_at ? secondsUntil(phoneCode.expires_at, now) : 0);
+  const phonePhase = $derived(phonePairingPhase({ status, phone, phoneCode, secondsLeft: phoneSecondsLeft }));
+  const method = $derived(
+    chosen ?? (phonePairingUnderway(phone, phoneCode) ? 'phone' : defaultPairingMethod(phoneFirst ?? touchScreen))
+  );
+  const pairing = $derived(['waiting', 'scan', 'rotating', 'expired'].includes(phase));
+  const timedOut = $derived(method === 'phone' ? phonePhase === 'expired' : phase === 'expired');
 
-  async function poll() {
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(PHONE_FIRST_QUERY);
+    if (!query) return;
+    touchScreen = query.matches;
+    const change = (event) => (touchScreen = event.matches);
+    query.addEventListener?.('change', change);
+    return () => query.removeEventListener?.('change', change);
+  });
+
+  // Responses can arrive out of order: a poll sent before the owner
+  // restarted, or sent a number, may answer after the change's own response
+  // and must not undo it (bring back the old attempt, an old code, the old
+  // step). `changes` counts the owner's changes; a poll is taken only if no
+  // change began after it was sent, and a change's response only if no later
+  // change began. `run` names the polling run, so nothing that answers after
+  // polling has stopped is taken. Neither is reactive state. And attempts
+  // only go up: a response for a lower attempt than the one shown is never
+  // taken.
+  let changes = 0;
+  let run = 0;
+
+  function take(json, since = changes) {
+    if (since !== changes) return false;
+    if (json.attempt != null && attempt != null && json.attempt < attempt) return false;
+    status = json.status;
+    qr = newerQr(qr, json.qr, Date.now());
+    phone = json.phone ?? {};
+    phoneCode = json.phone_code ?? null;
+    attempt = json.attempt ?? attempt;
+    return true;
+  }
+
+  // Called as a change starts; its result takes the change's response.
+  function beginChange() {
+    const mine = ++changes;
+    return (json) => take(json, mine);
+  }
+
+  async function poll(token = run) {
+    const since = changes;
     let response;
     try {
       response = await fetch(`${base}/pairing`, {
@@ -39,6 +100,7 @@
     } catch {
       return true;
     }
+    if (token !== run) return false;
     if (response.status === 404) {
       notOwner = true;
       loaded = true;
@@ -46,9 +108,10 @@
     }
     if (!response.ok) return true;
     const json = await response.json();
+    if (token !== run) return false;
     loaded = true;
-    status = json.status;
-    qr = newerQr(qr, json.qr, Date.now());
+    // Older than a change since: drop it and poll again.
+    if (!take(json, since)) return true;
     if (json.status === 'pairing') return true;
     // Linked, logged out or failed: the card's header and the rest of the
     // page follow the connection's new status.
@@ -62,47 +125,35 @@
       loaded = true;
       return;
     }
-    let stopped = false;
+    const token = ++run;
     let timer;
     const tick = async () => {
-      const again = await poll();
-      if (!stopped && again) timer = setTimeout(tick, pollInterval);
+      const again = await poll(token);
+      if (token === run && again) timer = setTimeout(tick, pollInterval);
     };
     untrack(tick);
     return () => {
-      stopped = true;
+      run += 1;
       clearTimeout(timer);
     };
   });
 
   $effect(() => {
-    if (!qr?.expires_at) return;
+    if (!qr?.expires_at && !phoneCode?.expires_at) return;
     now = Date.now();
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(timer);
   });
 
-  $effect(() => {
-    const code = qr?.code;
-    if (!code) {
-      qrImage = null;
-      return;
-    }
-    let current = true;
-    QRCode.toDataURL(code, { margin: 1, width: 240, errorCorrectionLevel: 'M' })
-      .then((url) => current && (qrImage = url))
-      .catch(() => current && (qrImage = null));
-    return () => (current = false);
-  });
-
   async function restart() {
     busy = true;
     notice = null;
+    const commit = beginChange();
     const result = await postLoginJson(`${base}/pairing/restart`);
     busy = false;
     if (result.ok) {
       qr = null;
-      status = result.body.status || 'pairing';
+      commit({ phone: {}, phone_code: null, ...result.body, status: result.body.status || 'pairing' });
       router.reload();
     } else {
       notice = result.body.error || 'Something went wrong. Try again.';
@@ -124,43 +175,20 @@
       <p class="text-sm text-destructive" role="alert">Pairing failed. Restart pairing to try again.</p>
     {:else if phase === 'connected'}
       <p class="text-sm text-emerald-700">Linked. Loading the connection.</p>
-    {:else if showQr}
-      <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
-        <div class="w-fit shrink-0 rounded-lg bg-white p-2">
-          {#if qrImage}
-            <img
-              src={qrImage}
-              alt="WhatsApp pairing QR code"
-              width="200"
-              height="200"
-              data-issued-at={qr.issued_at}
-              class={`size-[200px] ${phase === 'scan' ? '' : 'opacity-30'}`} />
-          {:else}
-            <div class="size-[200px]"></div>
-          {/if}
-        </div>
-        <div class="min-w-0 space-y-2 text-sm">
-          <p class="font-medium">Scan this code with WhatsApp on your phone.</p>
-          <ol class="list-decimal space-y-1 pl-5 text-muted-foreground">
-            <li>Open WhatsApp and go to Settings, then Linked devices.</li>
-            <li>Tap Link a device.</li>
-            <li>Point the camera at this code.</li>
-          </ol>
-          <p
-            class={phase === 'expired' ? 'text-destructive' : 'text-muted-foreground'}
-            data-testid="whatsapp-qr-countdown">
-            {#if phase === 'scan'}
-              This code expires in {formatCountdown(secondsLeft)}. A new one appears by itself.
-            {:else if phase === 'rotating'}
-              This code expired. Waiting for a new one.
-            {:else}
-              Pairing timed out: WhatsApp stopped sending codes. Restart pairing for a new one.
-            {/if}
-          </p>
-        </div>
-      </div>
-    {:else if phase === 'waiting'}
-      <p class="text-sm text-muted-foreground">Waiting for a pairing code from WhatsApp.</p>
+    {:else if pairing && method === 'phone'}
+      <WhatsappPhone
+        {base}
+        {attempt}
+        phase={phonePhase}
+        {phoneCode}
+        failure={phone.error}
+        secondsLeft={phoneSecondsLeft}
+        bind:busy
+        begin={beginChange}
+        onstale={poll}
+        onnotice={(text) => (notice = text)} />
+    {:else if pairing}
+      <WhatsappQr {qr} {phase} {secondsLeft} />
     {/if}
 
     {#if notice}
@@ -171,12 +199,25 @@
       <div class="flex flex-wrap gap-2">
         <Button
           type="button"
-          variant={phase === 'expired' || phase === 'logged_out' || phase === 'error' ? 'default' : 'outline'}
+          variant={timedOut || phase === 'logged_out' || phase === 'error' ? 'default' : 'outline'}
           size="sm"
           disabled={busy}
           onclick={restart}>
           {phase === 'logged_out' ? 'Pair again' : 'Restart pairing'}
         </Button>
+        {#if pairing}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onclick={() => {
+              notice = null;
+              chosen = method === 'phone' ? 'qr' : 'phone';
+            }}>
+            {method === 'phone' ? 'Scan a QR code instead' : 'Use a phone number instead'}
+          </Button>
+        {/if}
       </div>
     {/if}
   {/if}

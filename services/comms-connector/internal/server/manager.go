@@ -1,6 +1,6 @@
 // Package server is the connector's command side: the manager that owns one
-// worker per connection, and the mutual-TLS HTTP handler for Rails's two
-// commands, start_pairing and unpair.
+// worker per connection, and the mutual-TLS HTTP handler for Rails's
+// commands: start_pairing, unpair and pair_phone.
 package server
 
 import (
@@ -144,6 +144,23 @@ func (m *Manager) Unpair(ctx context.Context, ref string) error {
 	}
 	cfg.Log.Info("command", slog.String("op", "unpair"))
 	return w.Unpair(ctx)
+}
+
+// PairPhone asks the connection's pairing session for a phone pairing code
+// (worker.PairPhone): only for the attempt that is pairing now. request is
+// Rails' id for this ask; the result names it.
+func (m *Manager) PairPhone(ctx context.Context, ref, phone string, attempt int64, request string, seq int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	w := m.workers[ref]
+	if w == nil {
+		return worker.ErrNotPairing
+	}
+	if err := w.PairPhone(phone, attempt, request, seq); err != nil {
+		return err
+	}
+	m.configFor(ref).Log.Info("command", slog.String("op", "pair_phone"))
+	return nil
 }
 
 // removeLeftovers deletes a store-less connection directory under its

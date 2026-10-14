@@ -59,6 +59,16 @@ const (
 var (
 	ErrStaleSecret = errors.New("callback secret version is older than the one held")
 	ErrNoSecret    = errors.New("connection has no callback secret")
+	// ErrStaleAttempt: a pair_phone command for another pairing attempt.
+	ErrStaleAttempt = errors.New("command is for another pairing attempt")
+	// ErrNoRequest: a pair_phone command that names no phone request.
+	ErrNoRequest = errors.New("pair_phone names no request")
+	// ErrStaleRequest: a pair_phone command older (by Rails' request
+	// sequence) than one already accepted. Refused before anything is
+	// cancelled.
+	ErrStaleRequest = errors.New("pair_phone is older than an accepted request")
+	// ErrNotPairing: a pair_phone command for a connection that is not pairing.
+	ErrNotPairing = errors.New("connection is not pairing")
 )
 
 // Rails is what the worker needs from rails.Client.
@@ -91,10 +101,22 @@ type Worker struct {
 	attempt int64 // the secret version: which pairing attempt this is
 	session provider.Session
 	cancel  context.CancelFunc
+	ctx     context.Context // the running session's; nil when stopped
 	done    chan struct{}
-	wake    chan struct{}
-	state   string // idle | pairing | connected | logged_out | not_paired
-	revoked sync.Once
+	bg      sync.WaitGroup // phone code requests; Stop waits for them
+	// phoneRequest is the latest pair_phone accepted for this session (its
+	// Rails-minted request id), and phoneCancel cancels that request's
+	// context. A result for any other request is not posted.
+	phoneRequest string
+	phoneCancel  context.CancelFunc
+	// phoneSeq is the highest request sequence accepted by this worker.
+	// Rails assigns sequences under its row lock and never resets them
+	// (a restart continues them), so it only ever goes up; a command
+	// arriving with a lower or equal one is older than what is running.
+	phoneSeq int64
+	wake     chan struct{}
+	state    string // idle | pairing | connected | logged_out | not_paired
+	revoked  sync.Once
 
 	// refusals counts consecutive content refusals of the head event: any
 	// other outcome of a delivery attempt (a transport failure, another
@@ -239,7 +261,7 @@ func (w *Worker) Start(pair bool) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w.session, w.cancel, w.done = session, cancel, make(chan struct{})
+	w.session, w.cancel, w.ctx, w.done = session, cancel, ctx, make(chan struct{})
 	if pair {
 		w.state = "pairing"
 	} else {
@@ -274,13 +296,71 @@ func (w *Worker) runSession(ctx context.Context, s provider.Session, pair bool) 
 func (w *Worker) Stop() {
 	w.mu.Lock()
 	cancel, done := w.cancel, w.done
-	w.cancel, w.done = nil, nil
+	w.cancel, w.done, w.ctx = nil, nil, nil
+	w.phoneRequest, w.phoneCancel = "", nil
 	w.mu.Unlock()
 	if cancel == nil {
 		return
 	}
 	cancel()
 	<-done
+	w.bg.Wait()
+}
+
+// PairPhone asks the pairing session for a phone pairing code, for the
+// pairing attempt and the phone request (Rails' id for this one ask) the
+// command names. It returns at once; the code (or the failure) goes to
+// Rails as an event naming the request, like a QR. A newer request
+// supersedes this one: its context is cancelled, and whatever it still
+// reports is not posted, so a late answer to an old number never reaches
+// Rails, whichever order the provider ran them in (Rails also refuses any
+// result but its latest request's). The number is passed on and kept
+// nowhere: not in the store, not in a log.
+//
+// Rails sends each command after recording its request, so two commands
+// can arrive in either order; seq (Rails' order) decides, not arrival: a
+// command whose seq is not above the highest accepted is refused
+// (ErrStaleRequest) before anything is cancelled.
+func (w *Worker) PairPhone(phone string, attempt int64, request string, seq int64) error {
+	if request == "" || seq < 1 {
+		return ErrNoRequest
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if attempt != w.attempt {
+		return ErrStaleAttempt
+	}
+	if w.cancel == nil || w.state != "pairing" {
+		return ErrNotPairing
+	}
+	pp, ok := w.session.(provider.PhonePairer)
+	if !ok {
+		return ErrNotPairing
+	}
+	if seq <= w.phoneSeq {
+		return ErrStaleRequest
+	}
+	w.phoneSeq = seq
+	if w.phoneCancel != nil {
+		w.phoneCancel()
+	}
+	ctx, cancel := context.WithCancel(w.ctx)
+	w.phoneRequest, w.phoneCancel = request, cancel
+	rs := &requestSink{sink: (*sink)(w), request: request}
+	// Added under w.mu while running, so before any Stop can Wait.
+	w.bg.Add(1)
+	go func() {
+		defer w.bg.Done()
+		err := pp.RequestPhoneCode(ctx, rs, phone)
+		switch {
+		case err == nil, errors.Is(err, context.Canceled):
+		case errors.Is(err, provider.ErrNotPairing):
+			w.cfg.Log.Info("phone_code", slog.String("refused", "not_pairing"))
+		default:
+			w.cfg.Log.Warn("phone_code", slog.String("reason", "request_failed"))
+		}
+	}()
+	return nil
 }
 
 // Close stops the worker, closes the store and releases the lease.
@@ -514,14 +594,75 @@ func (s *sink) QR(ctx context.Context, code string, issuedAt, expiresAt time.Tim
 	if err != nil {
 		return err
 	}
+	return s.postLive(ctx, raw, expiresAt, "qr")
+}
+
+// PhoneCode and PhoneCodeFailed on the session's own sink answer no
+// request: Rails would refuse them, so they are not sent. Phone results go
+// through the requestSink handed to RequestPhoneCode.
+func (s *sink) PhoneCode(ctx context.Context, code string, issuedAt, expiresAt time.Time) error {
+	return (&requestSink{sink: s}).PhoneCode(ctx, code, issuedAt, expiresAt)
+}
+
+func (s *sink) PhoneCodeFailed(ctx context.Context, reason string) error {
+	return (&requestSink{sink: s}).PhoneCodeFailed(ctx, reason)
+}
+
+// requestSink is the sink one phone request reports through: its results
+// name the request, and are dropped once a newer request (or a stop) has
+// superseded it.
+type requestSink struct {
+	*sink
+	request string
+}
+
+func (r *requestSink) current() bool {
+	w := r.w()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return r.request != "" && r.request == w.phoneRequest
+}
+
+// PhoneCode posts a phone pairing code like a QR: at once, retried until it
+// expires, never stored or logged.
+func (r *requestSink) PhoneCode(ctx context.Context, code string, issuedAt, expiresAt time.Time) error {
+	if !r.current() {
+		r.w().cfg.Log.Info("phone_code", slog.String("dropped", "superseded"))
+		return nil
+	}
+	raw, err := encodePhoneCode(code, r.request, issuedAt, expiresAt)
+	if err != nil {
+		return err
+	}
+	return r.postLive(ctx, raw, expiresAt, "phone_code")
+}
+
+// PhoneCodeFailed tells Rails why no phone code came (a fixed word), retried
+// for a minute.
+func (r *requestSink) PhoneCodeFailed(ctx context.Context, reason string) error {
+	if !r.current() {
+		r.w().cfg.Log.Info("phone_code_failed", slog.String("dropped", "superseded"))
+		return nil
+	}
+	raw, err := encodePhoneCodeFailed(reason, r.request)
+	if err != nil {
+		return err
+	}
+	return r.postLive(ctx, raw, time.Now().Add(time.Minute), "phone_code_failed")
+}
+
+// postLive posts an unqueued pairing event, retrying until the deadline.
+// raw is cleared once stamped.
+func (s *sink) postLive(ctx context.Context, raw []byte, until time.Time, what string) error {
 	w := s.w()
 	w.mu.Lock()
 	secret, attempt := w.secret, w.attempt
 	w.mu.Unlock()
 	body := stamp(raw, 0, attempt)
 	clear(raw)
+	defer clear(body)
 	backoff := w.cfg.MinBackoff
-	for time.Now().Before(expiresAt) {
+	for time.Now().Before(until) {
 		reply, err := w.cfg.Rails.Post(ctx, w.cfg.Ref, secret, body)
 		if err == nil && isRevoked(reply) {
 			w.revoke()
@@ -531,7 +672,7 @@ func (s *sink) QR(ctx context.Context, code string, issuedAt, expiresAt time.Tim
 			// Accepted, or refused as stale/expired/not pairing: either way
 			// resending this code cannot help.
 			if reply.Status >= 300 {
-				w.cfg.Log.Info("qr", slog.String("refused", reply.Error))
+				w.cfg.Log.Info(what, slog.String("refused", reply.Error))
 			}
 			return nil
 		}
