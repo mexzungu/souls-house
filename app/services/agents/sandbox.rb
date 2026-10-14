@@ -627,12 +627,17 @@ module Agents
       agent.update!(endpoint_url: "http://#{host}:#{port}")
     end
 
+    # A resident's first boot on a new image can take ~40s (tailnet, home import,
+    # settings preparation); at 30s Lume's rollout on 2026-10-14 was failed and
+    # left paused although the container came up healthy 11s later.
+    HEALTH_WAIT_SECONDS = 90
+
     def wait_for_health!
-      30.times do
+      HEALTH_WAIT_SECONDS.times do
         return true if healthy?
         sleep 1
       end
-      raise SandboxError, "container did not become healthy within 30s"
+      raise SandboxError, "container did not become healthy within #{HEALTH_WAIT_SECONDS}s"
     end
 
     def agent_slug
