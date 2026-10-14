@@ -22,6 +22,7 @@ class ApplicationController < ActionController::Base
         current_room: -> { current_account ? selected_room_key : RoomSelection::MAIN },
         accounts: Current.user.confirmed_accounts.map(&:as_json),
         reply_attention: -> { ReplyExpectation.summary_for(Current.user, account: current_account, chat: @chat) },
+        expired_subscriptions: -> { ExpiredProviderSubscriptions.summary_for(Current.user) },
         theme_preference: Current.user&.theme || cookies[:theme],
         site_settings: shared_site_settings,
         is_account_admin: current_account&.manageable_by?(Current.user) || false,
