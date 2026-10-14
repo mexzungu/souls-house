@@ -41,6 +41,37 @@ describe('Telegram sign-in', () => {
     );
   });
 
+  it('offers the same login link as a tap for someone already on their phone', async () => {
+    const expires = new Date(Date.now() + 90_000).toISOString();
+    globalThis.fetch = vi.fn(() =>
+      reply(200, { status: 'pairing', qr: { code: 'tg://login?token=abc_-', expires_at: expires }, login: {} })
+    );
+    mount();
+    const link = await screen.findByTestId('telegram-login-link');
+    expect(link).toHaveAttribute('href', 'tg://login?token=abc_-');
+    expect(link).toHaveTextContent('Open in Telegram');
+  });
+
+  it('never links a code that is not a Telegram login link', async () => {
+    const expires = new Date(Date.now() + 90_000).toISOString();
+    globalThis.fetch = vi.fn(() =>
+      reply(200, { status: 'pairing', qr: { code: 'javascript:alert(1)', expires_at: expires }, login: {} })
+    );
+    mount();
+    await screen.findByAltText('Telegram sign-in QR code');
+    expect(screen.queryByTestId('telegram-login-link')).not.toBeInTheDocument();
+  });
+
+  it('hides the link once the code has expired', async () => {
+    const expired = new Date(Date.now() - 1_000).toISOString();
+    globalThis.fetch = vi.fn(() =>
+      reply(200, { status: 'pairing', qr: { code: 'tg://login?token=old', expires_at: expired }, login: {} })
+    );
+    mount();
+    await screen.findByAltText('Telegram sign-in QR code');
+    expect(screen.queryByTestId('telegram-login-link')).not.toBeInTheDocument();
+  });
+
   it('tells someone who is not the owner to wait, and stops asking', async () => {
     globalThis.fetch = vi.fn(() => reply(404, {}));
     mount();

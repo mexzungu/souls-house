@@ -25,6 +25,9 @@
   const status = $derived(pairing?.status ?? connection.status);
   const login = $derived(pairing?.login ?? {});
   const qrCode = $derived(pairing?.qr?.code ?? null);
+  // The QR only encodes a tg://login link. On a phone the camera can't scan its own
+  // screen, so the same link is offered as a tap. Only that scheme is ever linked.
+  const loginLink = $derived(typeof qrCode === 'string' && qrCode.startsWith('tg://login?') ? qrCode : null);
   const qrExpiresAt = $derived(pairing?.qr?.expires_at ?? null);
   const secondsLeft = $derived(qrExpiresAt ? secondsUntil(qrExpiresAt, now) : 0);
   const errorText = $derived(loginErrorMessage(login));
@@ -173,6 +176,15 @@
               ? `This code expires in ${formatCountdown(secondsLeft)}. A new one appears by itself.`
               : 'This code expired. Waiting for a new one.'}
           </p>
+          {#if loginLink && secondsLeft > 0}
+            <div class="space-y-1 border-t pt-2">
+              <p class="font-medium">On your phone already?</p>
+              <p class="text-muted-foreground">
+                Tap the button and Telegram on this phone will ask you to confirm the sign-in.
+              </p>
+              <Button href={loginLink} size="sm" data-testid="telegram-login-link">Open in Telegram</Button>
+            </div>
+          {/if}
         </div>
       </div>
     {:else if !errorText}
