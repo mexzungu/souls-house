@@ -69,9 +69,13 @@ class Accounts::ServiceConnectionPairingsController < ApplicationController
     unless request
       return render json: { error: "This pairing has moved on. Reload the page and try again." }, status: :conflict
     end
+    seq = @connection.phone_pairing_state["seq"]
 
     begin
-      @connection.definition.adapter.pair_phone(@connection, phone, attempt:, request:)
+      # :superseded (the connector already took a newer request) is no
+      # failure: the newer request is the one being answered. Answered as
+      # accepted, with the pairing as it now stands.
+      @connection.definition.adapter.pair_phone(@connection, phone, attempt:, request:, seq:)
     rescue Services::AdapterError => e
       # Only this request: another tab may have restarted or asked again
       # while this one was being sent.

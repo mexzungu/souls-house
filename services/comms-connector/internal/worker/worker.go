@@ -63,6 +63,10 @@ var (
 	ErrStaleAttempt = errors.New("command is for another pairing attempt")
 	// ErrNoRequest: a pair_phone command that names no phone request.
 	ErrNoRequest = errors.New("pair_phone names no request")
+	// ErrStaleRequest: a pair_phone command older (by Rails' request
+	// sequence) than one already accepted. Refused before anything is
+	// cancelled.
+	ErrStaleRequest = errors.New("pair_phone is older than an accepted request")
 	// ErrNotPairing: a pair_phone command for a connection that is not pairing.
 	ErrNotPairing = errors.New("connection is not pairing")
 )
@@ -105,9 +109,14 @@ type Worker struct {
 	// context. A result for any other request is not posted.
 	phoneRequest string
 	phoneCancel  context.CancelFunc
-	wake         chan struct{}
-	state        string // idle | pairing | connected | logged_out | not_paired
-	revoked      sync.Once
+	// phoneSeq is the highest request sequence accepted by this worker.
+	// Rails assigns sequences under its row lock and never resets them
+	// (a restart continues them), so it only ever goes up; a command
+	// arriving with a lower or equal one is older than what is running.
+	phoneSeq int64
+	wake     chan struct{}
+	state    string // idle | pairing | connected | logged_out | not_paired
+	revoked  sync.Once
 
 	// refusals counts consecutive content refusals of the head event: any
 	// other outcome of a delivery attempt (a transport failure, another
@@ -307,8 +316,13 @@ func (w *Worker) Stop() {
 // Rails, whichever order the provider ran them in (Rails also refuses any
 // result but its latest request's). The number is passed on and kept
 // nowhere: not in the store, not in a log.
-func (w *Worker) PairPhone(phone string, attempt int64, request string) error {
-	if request == "" {
+//
+// Rails sends each command after recording its request, so two commands
+// can arrive in either order; seq (Rails' order) decides, not arrival: a
+// command whose seq is not above the highest accepted is refused
+// (ErrStaleRequest) before anything is cancelled.
+func (w *Worker) PairPhone(phone string, attempt int64, request string, seq int64) error {
+	if request == "" || seq < 1 {
 		return ErrNoRequest
 	}
 	w.mu.Lock()
@@ -323,6 +337,10 @@ func (w *Worker) PairPhone(phone string, attempt int64, request string) error {
 	if !ok {
 		return ErrNotPairing
 	}
+	if seq <= w.phoneSeq {
+		return ErrStaleRequest
+	}
+	w.phoneSeq = seq
 	if w.phoneCancel != nil {
 		w.phoneCancel()
 	}

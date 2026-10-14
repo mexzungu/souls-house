@@ -38,7 +38,7 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     sent = []
     log_start = File.size?(Rails.root.join("log/test.log")).to_i
     sign_in @owner
-    CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:, request:) { sent << [ connection.id, phone, attempt, request ]; {} }) do
+    CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:, request:, seq:) { sent << [ connection.id, phone, attempt, request, seq ]; {} }) do
       post phone_account_service_connection_pairing_path(@account, @connection.public_id),
            params: { phone: PHONE, attempt: 1 }, as: :json
     end
@@ -46,7 +46,7 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     assert_response :accepted
     assert_equal "no-store", response.headers["Cache-Control"]
     @connection.reload
-    assert_equal [ [ @connection.id, E164, 1, @connection.phone_pairing_state["request"] ] ], sent
+    assert_equal [ [ @connection.id, E164, 1, @connection.phone_pairing_state["request"], @connection.phone_pairing_state["seq"] ] ], sent
     assert_equal "requested", response.parsed_body.dig("phone", "step")
     assert_equal "requested", @connection.phone_pairing_state["step"]
     row = ServiceConnection.connection.select_all("SELECT * FROM service_connections WHERE id = #{@connection.id}").to_a.to_json
@@ -141,13 +141,13 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
 
   test "pair_phone is a signed command carrying the E.164 number and the attempt" do
     with_whatsapp_connector do |requests, options|
-      CommsConnector.pair_phone(@connection, E164, attempt: 3, request: "0123456789abcdef")
+      CommsConnector.pair_phone(@connection, E164, attempt: 3, request: "0123456789abcdef", seq: 4)
       request = requests.sole
       assert_equal "/connections/#{@connection.public_id}/pair_phone", request.path
       body = JSON.parse(request.body)
-      assert_equal({ "phone_number" => E164, "attempt" => 3, "request_id" => "0123456789abcdef",
+      assert_equal({ "phone_number" => E164, "attempt" => 3, "request_id" => "0123456789abcdef", "request_seq" => 4,
                      "connection" => @connection.public_id, "operation" => "pair_phone" },
-                   body.slice("phone_number", "attempt", "request_id", "connection", "operation"))
+                   body.slice("phone_number", "attempt", "request_id", "request_seq", "connection", "operation"))
       expected = CommsCommandSignature.sign(
         secret: "test-command-key", key_id: "k1", connection_id: @connection.public_id, operation: "pair_phone",
         command_id: request["X-Comms-Command-Id"], issued_at: request["X-Comms-Issued-At"], body: request.body

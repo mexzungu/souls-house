@@ -357,14 +357,25 @@ class ServiceConnection < ApplicationRecord
   # Within one attempt the owner can ask again (another number, a retry,
   # another tab): each ask gets a new id, and CommsEvents accepts a code or
   # failure only for the latest, whatever order the connector answers in.
+  # Each ask also gets the next sequence number ("seq"), under the same
+  # lock: the id says which result belongs to which ask, the sequence says
+  # which ask is newer. The command is sent after the lock is released, so
+  # two asks' commands can reach the connector in either order; it refuses
+  # one whose sequence is not above the newest it has accepted
+  # (stale_request) before cancelling anything. The counter
+  # (connector_state["phone_request_seq"]) is per connection and never
+  # resets, a restart included, so a command from before a restart is
+  # always older than one after it.
   def request_phone_pairing!(attempt, now: Time.current)
     with_lock do
       return false unless status == "pairing" && attempt == pairing_attempt
 
       request = SecureRandom.hex(8)
+      seq = connector_state.to_h["phone_request_seq"].to_i + 1
       update!(
         connector_state: connector_state.to_h.merge(
-          "phone_pairing" => { "step" => "requested", "request" => request, "at" => now.utc.iso8601 }
+          "phone_request_seq" => seq,
+          "phone_pairing" => { "step" => "requested", "request" => request, "seq" => seq, "at" => now.utc.iso8601 }
         ),
         pairing_phone_code: nil, pairing_phone_code_issued_at: nil, pairing_phone_code_expires_at: nil
       )

@@ -43,6 +43,9 @@ type Command struct {
 	// PhoneRequest is Rails' id for this one phone request (never the
 	// number); the code or failure that answers it names it.
 	PhoneRequest string
+	// PhoneRequestSeq is that request's place in Rails' order (a positive
+	// integer, increasing per connection): which of two requests is newer.
+	PhoneRequestSeq int64
 }
 
 // String never shows the secret or the phone number.
@@ -51,14 +54,15 @@ func (c Command) String() string {
 }
 
 type body struct {
-	Connection            *string      `json:"connection"`
-	Operation             *string      `json:"operation"`
-	CommandID             *string      `json:"command_id"`
-	IssuedAt              *json.Number `json:"issued_at"`
-	CallbackSecret        *string      `json:"callback_secret"`
-	CallbackSecretVersion *json.Number `json:"callback_secret_version"`
-	PhoneNumber           *string      `json:"phone_number"`
-	PhoneRequest          *string      `json:"request_id"`
+	Connection            *string         `json:"connection"`
+	Operation             *string         `json:"operation"`
+	CommandID             *string         `json:"command_id"`
+	IssuedAt              *json.Number    `json:"issued_at"`
+	CallbackSecret        *string         `json:"callback_secret"`
+	CallbackSecretVersion *json.Number    `json:"callback_secret_version"`
+	PhoneNumber           *string         `json:"phone_number"`
+	PhoneRequest          *string         `json:"request_id"`
+	PhoneRequestSeq       json.RawMessage `json:"request_seq"`
 	// RawMessage, not json.Number: json.Number also takes "2" (a string),
 	// and the attempt must be the integer Rails sends.
 	Attempt json.RawMessage `json:"attempt"`
@@ -136,6 +140,14 @@ func (v *Verifier) Verify(ref, op string, h http.Header, raw []byte) (Command, e
 	}
 	if b.PhoneRequest != nil {
 		cmd.PhoneRequest = *b.PhoneRequest
+	}
+	if b.PhoneRequestSeq != nil {
+		// A bare JSON integer, like the attempt.
+		n, err := strconv.ParseInt(string(b.PhoneRequestSeq), 10, 64)
+		if err != nil || n < 1 {
+			return Command{}, refuse("bad_request_seq")
+		}
+		cmd.PhoneRequestSeq = n
 	}
 	if b.Attempt != nil {
 		n, err := strconv.ParseInt(string(b.Attempt), 10, 64)

@@ -43,8 +43,12 @@ module Services
 
     # The phone number pairing (Accounts::ServiceConnectionPairingsController#phone).
     # Only the error's class is logged: never the number.
-    def pair_phone(connection, phone_number, attempt:, request:)
-      CommsConnector.pair_phone(connection, phone_number, attempt:, request:)
+    # :superseded when the connector already took a newer request (another
+    # tab's, sent after this one was recorded but arriving first).
+    def pair_phone(connection, phone_number, attempt:, request:, seq:)
+      CommsConnector.pair_phone(connection, phone_number, attempt:, request:, seq:)
+    rescue CommsConnector::StaleRequest
+      :superseded
     rescue CommsConnector::Error, SystemCallError, Timeout::Error, IOError, OpenSSL::SSL::SSLError => e
       Rails.logger.warn("Comms pair_phone failed for service connection #{connection.id}: #{e.class}")
       raise Error, "Could not reach the WhatsApp connector. Try again in a moment."

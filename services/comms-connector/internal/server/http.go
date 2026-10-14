@@ -26,7 +26,7 @@ const MaxCommandBytes = 16 << 10
 type Commands interface {
 	StartPairing(ctx context.Context, ref, secret string, version int64) error
 	Unpair(ctx context.Context, ref string) error
-	PairPhone(ctx context.Context, ref, phone string, attempt int64, request string) error
+	PairPhone(ctx context.Context, ref, phone string, attempt int64, request string, seq int64) error
 }
 
 type Handler struct {
@@ -110,10 +110,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.refuse(w, op, "bad_request_id", http.StatusUnprocessableEntity)
 			return
 		}
-		err := h.Commands.PairPhone(ctx, ref, strings.TrimPrefix(cmd.PhoneNumber, "+"), cmd.Attempt, cmd.PhoneRequest)
+		if cmd.PhoneRequestSeq < 1 {
+			h.refuse(w, op, "bad_request_seq", http.StatusUnprocessableEntity)
+			return
+		}
+		err := h.Commands.PairPhone(ctx, ref, strings.TrimPrefix(cmd.PhoneNumber, "+"), cmd.Attempt, cmd.PhoneRequest, cmd.PhoneRequestSeq)
 		switch {
 		case errors.Is(err, worker.ErrStaleAttempt):
 			h.refuse(w, op, "stale_attempt", http.StatusConflict)
+		case errors.Is(err, worker.ErrStaleRequest):
+			// A newer request already reached this connector (commands can
+			// arrive out of Rails' order): this one is not run, and the
+			// newer one keeps running.
+			h.refuse(w, op, "stale_request", http.StatusConflict)
 		case errors.Is(err, worker.ErrNotPairing):
 			h.refuse(w, op, "not_pairing", http.StatusConflict)
 		case err != nil:

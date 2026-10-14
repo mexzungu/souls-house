@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -32,9 +33,23 @@ const (
 // cancellation on purpose: a provider may still answer a request after it
 // was superseded, and the worker must not pass that answer on.
 type gatedSession struct {
-	mu    sync.Mutex
-	gates map[string]chan gatedResult
-	done  sync.WaitGroup
+	mu        sync.Mutex
+	gates     map[string]chan gatedResult
+	started   map[string]bool // RequestPhoneCode was called for this number
+	cancelled map[string]bool // its context was cancelled by the time it answered
+	done      sync.WaitGroup
+}
+
+func (g *gatedSession) wasStarted(phone string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.started[phone]
+}
+
+func (g *gatedSession) wasCancelled(phone string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cancelled[phone]
 }
 
 type gatedResult struct{ code, failure string }
@@ -55,10 +70,16 @@ func (g *gatedSession) Run(ctx context.Context, _ provider.Sink, _ bool) error {
 
 func (g *gatedSession) Logout(context.Context) error { return nil }
 
-func (g *gatedSession) RequestPhoneCode(_ context.Context, sink provider.Sink, phone string) error {
+func (g *gatedSession) RequestPhoneCode(ctx context.Context, sink provider.Sink, phone string) error {
 	g.done.Add(1)
 	defer g.done.Done()
+	g.mu.Lock()
+	g.started[phone] = true
+	g.mu.Unlock()
 	res := <-g.gate(phone)
+	g.mu.Lock()
+	g.cancelled[phone] = ctx.Err() != nil
+	g.mu.Unlock()
 	if res.failure != "" {
 		return sink.PhoneCodeFailed(context.Background(), res.failure)
 	}
@@ -91,7 +112,7 @@ func (p *phoneRails) snapshot() []map[string]any {
 
 func startGated(t *testing.T) (*Worker, *gatedSession, *phoneRails) {
 	t.Helper()
-	g := &gatedSession{gates: map[string]chan gatedResult{}}
+	g := &gatedSession{gates: map[string]chan gatedResult{}, started: map[string]bool{}, cancelled: map[string]bool{}}
 	r := &phoneRails{}
 	w, err := Open(context.Background(), Config{
 		DataDir: t.TempDir(), Ref: "svc_7", StoreKey: bytes.Repeat([]byte{7}, 32), Rails: r,
@@ -131,7 +152,7 @@ func settle(w *Worker, g *gatedSession) {
 
 func TestPhoneResultNamesItsRequest(t *testing.T) {
 	w, g, r := startGated(t)
-	if err := w.PairPhone("447700900001", 1, requestA); err != nil {
+	if err := w.PairPhone("447700900001", 1, requestA, 1); err != nil {
 		t.Fatal(err)
 	}
 	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"}
@@ -141,7 +162,7 @@ func TestPhoneResultNamesItsRequest(t *testing.T) {
 		t.Fatalf("event %v", ev)
 	}
 	g.gate("447700900002") // unused
-	if err := w.PairPhone("447700900002", 1, requestB); err != nil {
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
 		t.Fatal(err)
 	}
 	g.gate("447700900002") <- gatedResult{failure: provider.PhoneCodeRateLimited}
@@ -155,10 +176,10 @@ func TestPhoneResultNamesItsRequest(t *testing.T) {
 // B's): it is not posted; B's is, naming B.
 func TestDelayedCodeOfASupersededRequestIsNotPosted(t *testing.T) {
 	w, g, r := startGated(t)
-	if err := w.PairPhone("447700900001", 1, requestA); err != nil {
+	if err := w.PairPhone("447700900001", 1, requestA, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.PairPhone("447700900002", 1, requestB); err != nil {
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
 		t.Fatal(err)
 	}
 	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"}
@@ -174,10 +195,10 @@ func TestDelayedCodeOfASupersededRequestIsNotPosted(t *testing.T) {
 // so B's code stands.
 func TestDelayedFailureOfASupersededRequestIsNotPosted(t *testing.T) {
 	w, g, r := startGated(t)
-	if err := w.PairPhone("447700900001", 1, requestA); err != nil {
+	if err := w.PairPhone("447700900001", 1, requestA, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.PairPhone("447700900002", 1, requestB); err != nil {
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
 		t.Fatal(err)
 	}
 	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
@@ -194,10 +215,10 @@ func TestDelayedFailureOfASupersededRequestIsNotPosted(t *testing.T) {
 // code is the newer one by issue time. Still only B's reaches Rails.
 func TestReversedExecutionStillPostsOnlyTheLatestRequest(t *testing.T) {
 	w, g, r := startGated(t)
-	if err := w.PairPhone("447700900001", 1, requestA); err != nil {
+	if err := w.PairPhone("447700900001", 1, requestA, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.PairPhone("447700900002", 1, requestB); err != nil {
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
 		t.Fatal(err)
 	}
 	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
@@ -214,7 +235,107 @@ func TestReversedExecutionStillPostsOnlyTheLatestRequest(t *testing.T) {
 // A request id must be given: Rails refuses results that name none.
 func TestPairPhoneNeedsARequest(t *testing.T) {
 	w, _, _ := startGated(t)
-	if err := w.PairPhone("447700900001", 1, ""); err == nil {
+	if err := w.PairPhone("447700900001", 1, "", 1); err == nil {
 		t.Fatal("a pair_phone without a request id was accepted")
+	}
+}
+
+// Mira's second review: Rails records A (seq 1) then B (seq 2), but B's
+// command reaches the connector first. A's late command is refused before
+// it can cancel anything; B runs uncancelled and its code reaches Rails.
+func TestOlderCommandArrivingLateIsRefusedWithoutCancellingTheCurrentRequest(t *testing.T) {
+	w, g, r := startGated(t)
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "B started", func() bool { return g.wasStarted("447700900002") })
+	if err := w.PairPhone("447700900001", 1, requestA, 1); !errors.Is(err, ErrStaleRequest) {
+		t.Errorf("A after B: %v, want ErrStaleRequest", err)
+	}
+	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
+	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"} // in case A was run
+	settle(w, g)
+	got := r.snapshot()
+	if len(got) != 1 || got[0]["code"] != "BBBB-BBBB" || got[0]["request_id"] != requestB {
+		t.Errorf("Rails got %v, want only B's code", got)
+	}
+	if g.wasCancelled("447700900002") {
+		t.Error("A's late command cancelled B")
+	}
+	if g.wasStarted("447700900001") {
+		t.Error("A's late command was run")
+	}
+}
+
+// A repeat of the current sequence (same or another id) is no newer, and a
+// sequence must be given.
+func TestEqualOrMissingSequenceIsRefused(t *testing.T) {
+	w, g, _ := startGated(t)
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "B started", func() bool { return g.wasStarted("447700900002") })
+	if err := w.PairPhone("447700900001", 1, requestA, 2); !errors.Is(err, ErrStaleRequest) {
+		t.Errorf("equal sequence: %v", err)
+	}
+	if err := w.PairPhone("447700900001", 1, requestA, 0); err == nil {
+		t.Error("sequence 0 accepted")
+	}
+	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
+	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"}
+	settle(w, g)
+	if g.wasCancelled("447700900002") {
+		t.Error("B was cancelled")
+	}
+}
+
+// A newer sequence still supersedes: it cancels the current request.
+func TestNewerSequenceCancelsTheCurrentRequest(t *testing.T) {
+	w, g, r := startGated(t)
+	if err := w.PairPhone("447700900001", 1, requestA, 1); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "A started", func() bool { return g.wasStarted("447700900001") })
+	if err := w.PairPhone("447700900002", 1, requestB, 2); err != nil {
+		t.Fatal(err)
+	}
+	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"}
+	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
+	settle(w, g)
+	if !g.wasCancelled("447700900001") || g.wasCancelled("447700900002") {
+		t.Fatalf("cancelled: A %v, B %v", g.wasCancelled("447700900001"), g.wasCancelled("447700900002"))
+	}
+	if got := r.snapshot(); len(got) != 1 || got[0]["request_id"] != requestB {
+		t.Fatalf("Rails got %v", got)
+	}
+}
+
+// Across a restart: Rails continues the sequence, and a command from the
+// old attempt, whatever its sequence, cannot cancel the new attempt's
+// request (refused by its attempt, before anything is cancelled).
+func TestPreRestartCommandCannotCancelAPostRestartRequest(t *testing.T) {
+	w, g, r := startGated(t)
+	w.Stop()
+	if err := w.SetSecret(context.Background(), "s3cret", 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Start(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PairPhone("447700900002", 2, requestB, 5); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "B started", func() bool { return g.wasStarted("447700900002") })
+	if err := w.PairPhone("447700900001", 1, requestA, 9); !errors.Is(err, ErrStaleAttempt) {
+		t.Errorf("pre-restart command: %v", err)
+	}
+	g.gate("447700900002") <- gatedResult{code: "BBBB-BBBB"}
+	g.gate("447700900001") <- gatedResult{code: "AAAA-AAAA"}
+	settle(w, g)
+	if g.wasCancelled("447700900002") || g.wasStarted("447700900001") {
+		t.Error("the pre-restart command cancelled or ran")
+	}
+	if got := r.snapshot(); len(got) != 1 || got[0]["request_id"] != requestB {
+		t.Errorf("Rails got %v", got)
 	}
 }

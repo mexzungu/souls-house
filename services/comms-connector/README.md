@@ -76,10 +76,19 @@ otherwise; 409 `not_pairing` for a connection that is linked, unknown or
 no longer pairing), and `request_id`, Rails' id for this one ask (16
 lowercase hex characters, random, never derived from the number; 422
 `bad_request_id` otherwise). It is accepted at once (202): the code follows
-as an event naming the same `request_id`. Within one attempt the owner can
-ask again (another number, a retry, another tab): a newer `pair_phone`
-cancels the older request, and nothing the older one still reports is sent,
-in whatever order WhatsApp answers them. Rails, in turn, accepts a code or
+as an event naming the same `request_id`. With it comes `request_seq`, the
+request's place in Rails' order: a positive JSON integer Rails assigns
+under the connection's row lock, per connection, never reset (a restart
+continues it), 422 `bad_request_seq` otherwise. Within one attempt the
+owner can ask again (another number, a retry, another tab), and Rails sends
+each command after recording it, so two commands can arrive in either
+order: the sequence decides, not arrival. A command whose `request_seq` is
+not above the highest this connection has accepted is refused, 409
+`stale_request`, before anything is cancelled (Rails treats that as
+harmless: its newer request is the one running); a newer one cancels the
+older request, and nothing the older one still reports is sent, in
+whatever order WhatsApp answers them. A command from before a restart is
+refused by its attempt (409 `stale_attempt`), whatever its sequence. Rails, in turn, accepts a code or
 failure only for its latest request, so a delayed or reordered answer for a
 superseded one is refused (409 `stale_phone_code`) rather than shown or
 allowed to clear the current code. whatsmeow can only ask for a code on a pairing connection that is

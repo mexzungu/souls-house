@@ -103,7 +103,7 @@ class Accounts::WhatsappPhoneRequestTest < ActionDispatch::IntegrationTest
   test "pair_phone carries the request id in the signed body" do
     current = request_phone!
     with_whatsapp_connector do |requests, _options|
-      CommsConnector.pair_phone(@connection, E164, attempt: 1, request: current)
+      CommsConnector.pair_phone(@connection, E164, attempt: 1, request: current, seq: 1)
       assert_equal current, JSON.parse(requests.sole.body)["request_id"]
     end
   end
