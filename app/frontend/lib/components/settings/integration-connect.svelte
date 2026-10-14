@@ -115,7 +115,10 @@
     </div>
   {:else}
     <p class="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
-      {#if canManageAccount}
+      {#if focusedService.management_scopes?.length === 1 && focusedService.management_scopes[0] === 'account_managed'}
+        {focusedService.name} is connected for the whole account. It belongs to the account, not to you: account admins manage
+        or disconnect it and choose which residents can use it.
+      {:else if canManageAccount}
         {focusedService.name} can only be connected personally. It will belong to you, and you choose which residents can
         use it.
       {:else}

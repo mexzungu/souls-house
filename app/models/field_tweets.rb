@@ -71,8 +71,11 @@ module FieldTweets
     end
   end
 
-  # A change to the account's integration is a person's act: a stream
-  # stopped for its key, or waiting for someone to pay, tries again now.
+  # A change to who pays (an integration added, removed or given a new key;
+  # the house grant turned on or off) is a person's act: a stream stopped
+  # for its key, or waiting for someone to pay, tries again now. Paused
+  # streams stay paused. Not called for edits that change nothing about
+  # paying (ServiceConnection#tweet_funding_changed?).
   def integration_changed!(account)
     source = FieldTweetSource.find_by(account_id: account.id) or return
     if source.state == "needs_attention"
@@ -116,11 +119,14 @@ module FieldTweets
     FieldTweetCall.transaction do
       FieldTweetCall.connection.execute("SELECT pg_advisory_xact_lock(hashtext(#{FieldTweetCall.connection.quote(LOCK_KEY)}))")
 
-      funding = funding_for(source.account)
+      # Read fresh under the lock: a grant revoked or an integration removed
+      # since the run began stops the next page, not just the next run.
+      account = Account.find(source.account_id)
+      funding = funding_for(account)
       raise LimitReached, NO_FUNDING if funding.nil?
 
       if funding == "house"
-        raise LimitReached, "Tweet collection paid by the house is off" unless house_available_for?(source.account)
+        raise LimitReached, "Tweet collection paid by the house is off" unless house_available_for?(account)
 
         house = FieldTweetCall.where(funding: "house")
         if spent_this_month(house.where(account_id: source.account_id), now: now) + reserve > setting.field_tweets_account_monthly_usd_ceiling.to_d

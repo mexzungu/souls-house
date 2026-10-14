@@ -144,7 +144,10 @@ module FieldTweets
     def fetch_page!
       call = FieldTweets.reserve!(@source, retry_call: @source.failure_count.positive?, now: now)
     rescue FieldTweets::LimitReached => e
-      schedule!(FieldTweets.month_start(now) + 1.month, reason: e.message)
+      # Nobody paying is waited out at the poll interval (a funding change
+      # also brings it forward); a spent budget waits for the next month.
+      retry_at = e.message == FieldTweets::NO_FUNDING ? now + FieldTweets.poll_interval : FieldTweets.month_start(now) + 1.month
+      schedule!(retry_at, reason: e.message)
       :waiting
     else
       key = FieldTweets.key_for(@source.account, call.funding)
