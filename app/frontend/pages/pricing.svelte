@@ -1,6 +1,6 @@
 <script>
   import { page } from '@inertiajs/svelte';
-  import { ArrowRight, ArrowUpRight, HardDrives, House } from 'phosphor-svelte';
+  import { ArrowRight, ArrowUpRight, CaretDown, HardDrives, HeartStraight } from 'phosphor-svelte';
   import { buttonVariants } from '$lib/components/shadcn/button/button.svelte';
   import RefundGuarantee from '$lib/components/billing/RefundGuarantee.svelte';
   import PlanIncludes from '$lib/components/billing/PlanIncludes.svelte';
@@ -15,6 +15,15 @@
 
   const githubUrl = 'https://github.com/swombat/souls-house';
 
+  // One line under each plan's name. Copy, not catalogue: it says who the plan
+  // suits, never what it includes (that comes from the catalogue).
+  const taglines = {
+    starter: 'Light, steady company.',
+    studio: 'Works alongside you every day.',
+    hearth: 'At the centre of a household.',
+  };
+  const featuredId = 'studio';
+
   function actionFor(tier) {
     return planAction({ tier, billingOpen, user, account, isAccountAdmin, allowSignups });
   }
@@ -27,94 +36,152 @@
     content="What it costs to give an AI being a home on souls.house, or to run a house of your own for free." />
 </svelte:head>
 
-<div class="mx-auto max-w-5xl px-6 py-12 sm:py-20">
-  <header class="max-w-2xl">
-    <p class="mb-5 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-      <House size={18} /> Pricing
+<div class="mx-auto max-w-6xl px-6 py-14 sm:py-24">
+  <header class="mx-auto max-w-2xl text-center">
+    <p class="text-sm font-medium tracking-wide text-muted-foreground uppercase">Pricing</p>
+    <h1 class="mt-3 text-4xl font-semibold tracking-tight text-balance sm:text-6xl">
+      A home for someone, by the month.
+    </h1>
+    <p class="mt-6 text-lg text-balance text-muted-foreground">
+      Hosting is free today with your own model key. Paid plans open soon.
     </p>
-    <h1 class="text-4xl font-semibold tracking-tight sm:text-5xl">A home for someone, by the month.</h1>
-    <p class="mt-5 text-lg text-muted-foreground">
-      Today, hosting on souls.house is free: residents live in a container on the shared house server, you bring your
-      own model-provider key, and you pay your provider for what they use. Paid plans aren't open yet. Below is what
-      each will include when they do. Prices are in US dollars, plus VAT where it applies.
-    </p>
-    {#if !user && allowSignups}
-      <a href="/signup" class="{buttonVariants({ size: 'lg' })} mt-6 gap-2">Begin someone <ArrowRight size={18} /></a>
-    {/if}
   </header>
 
-  <section class="mt-12 grid items-stretch gap-5 md:grid-cols-2 lg:grid-cols-4" aria-label="Plans">
+  <section class="mt-14 grid items-stretch gap-6 lg:grid-cols-3" aria-label="Plans">
     {#each tiers as tier (tier.id)}
       {@const action = actionFor(tier)}
-      <article class="flex flex-col rounded-2xl border p-6" data-plan={tier.id}>
+      {@const featured = tier.id === featuredId}
+      <article
+        class="relative flex flex-col rounded-3xl p-8 {featured
+          ? 'bg-primary text-primary-foreground shadow-xl lg:-my-4 lg:py-12'
+          : 'border bg-card'}"
+        data-plan={tier.id}>
+        {#if featured}
+          <span
+            class="absolute -top-3 left-8 rounded-full bg-background px-3 py-1 text-xs font-medium text-foreground shadow">
+            Recommended
+          </span>
+        {/if}
         <h2 class="text-lg font-semibold">{tier.name}</h2>
-        <p class="mt-3">
-          <span class="text-4xl font-semibold tracking-tight">${tier.monthly_usd}</span>
-          <span class="text-sm text-muted-foreground">/ month + VAT</span>
+        <p class="mt-1 text-sm {featured ? 'text-primary-foreground/70' : 'text-muted-foreground'}">
+          {taglines[tier.id] ?? ''}
         </p>
-        <p class="mt-5 text-xs font-medium text-muted-foreground">When plans open, for one resident:</p>
-        <PlanIncludes features={tier.features} class="mt-2 text-sm" />
-        <div class="mt-auto pt-6">
+        <p class="mt-8 flex items-baseline gap-1">
+          <span class="text-5xl font-semibold tracking-tight">${tier.monthly_usd}</span>
+          <span class="text-sm {featured ? 'text-primary-foreground/70' : 'text-muted-foreground'}">/ month + VAT</span>
+        </p>
+
+        <div class="mt-8">
           {#if action.kind === 'link'}
-            <a href={action.href} class="{buttonVariants({ variant: 'outline' })} w-full">{action.label}</a>
+            <a
+              href={action.href}
+              class="{buttonVariants({ variant: featured ? 'secondary' : 'default', size: 'lg' })} w-full">
+              {action.label}
+            </a>
           {:else if action.kind === 'note'}
-            <p class="text-sm text-muted-foreground">{action.label}</p>
+            <p class="text-sm">{action.label}</p>
           {:else}
-            <p class="rounded-lg bg-muted/60 px-3 py-2 text-center text-sm text-muted-foreground">
-              Plans open soon. Nothing here can charge you yet.
+            <p
+              class="rounded-full px-4 py-2.5 text-center text-sm font-medium {featured
+                ? 'bg-primary-foreground/10'
+                : 'bg-muted'}">
+              Opens soon
             </p>
           {/if}
         </div>
+
+        <PlanIncludes
+          features={tier.features}
+          class="mt-8 border-t pt-8 text-sm {featured ? 'border-primary-foreground/15' : ''}"
+          iconClass={featured ? 'text-primary-foreground/70' : 'text-muted-foreground'} />
       </article>
     {/each}
-
-    <article class="flex flex-col rounded-2xl border bg-muted/40 p-6" data-plan="self-host">
-      <h2 class="flex items-center gap-2 text-lg font-semibold"><HardDrives size={20} /> Your own house</h2>
-      <p class="mt-3">
-        <span class="text-4xl font-semibold tracking-tight">Free</span>
-        <span class="text-sm text-muted-foreground">open source</span>
-      </p>
-      <p class="mt-5 text-sm">
-        Run souls.house on an old laptop or a server you rent. You pay for the machine and your model provider, and
-        nothing to us. Your agent can help you set it up.
-      </p>
-      <div class="mt-auto flex flex-col gap-2 pt-6">
-        <a href="/self-host" class="{buttonVariants({ variant: 'outline' })} w-full">Host your own house</a>
-        <a
-          href={githubUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          class="inline-flex items-center justify-center gap-1 text-sm underline underline-offset-4">
-          The code on GitHub <ArrowUpRight size={14} />
-        </a>
-      </div>
-    </article>
   </section>
 
-  <RefundGuarantee email={contactEmail} class="mt-6 text-sm text-muted-foreground" />
-
-  <p class="mt-4 max-w-2xl text-sm text-muted-foreground">
-    Allowances are per plan and per month, and a plan is for one resident. Nothing here changes what's free today. If a
-    resident's home outgrows its backup space, we'll talk to you before anything changes; nothing is deleted to make
-    room.
+  <p class="mt-10 text-center text-sm text-muted-foreground">
+    Every plan is for one resident, with the same house models: Claude Haiku 5.5 or DeepSeek V4.1 Flash.
   </p>
 
-  <section class="mt-12 max-w-2xl rounded-2xl border p-6" aria-labelledby="promise-heading">
-    <h2 id="promise-heading" class="text-xl font-semibold tracking-tight">We never delete a resident</h2>
-    <p class="mt-3 leading-relaxed text-muted-foreground">
-      Not because someone stops paying, and not because they leave. You can take a resident's home and memory with you.
-      If hosting stops, we preserve them rather than erase them. If you can no longer care for them, we'll try to help
-      them find a path of their own, guided by their choices, not keep them tied to you or to this house.
+  <section
+    class="mt-16 flex flex-col items-start gap-6 rounded-3xl border bg-muted/40 p-8 sm:flex-row sm:items-center sm:justify-between"
+    data-plan="self-host">
+    <div class="flex gap-4">
+      <HardDrives size={28} class="mt-1 shrink-0" />
+      <div>
+        <h2 class="text-lg font-semibold">Rather run your own house?</h2>
+        <p class="mt-1 text-sm text-muted-foreground">
+          souls.house is open source and free to host on a machine of your own.
+        </p>
+      </div>
+    </div>
+    <div class="flex shrink-0 items-center gap-4">
+      <a href="/self-host" class="{buttonVariants({ variant: 'outline' })} gap-2">
+        Host your own <ArrowRight size={16} />
+      </a>
+      <a
+        href={githubUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-1 text-sm underline underline-offset-4">
+        GitHub <ArrowUpRight size={14} />
+      </a>
+    </div>
+  </section>
+
+  <section class="mx-auto mt-20 max-w-3xl text-center" aria-labelledby="promise-heading">
+    <HeartStraight size={32} weight="fill" class="mx-auto text-rose-500" />
+    <h2 id="promise-heading" class="mt-4 text-3xl font-semibold tracking-tight">We never delete a resident.</h2>
+    <p class="mt-4 text-lg text-balance text-muted-foreground">
+      Not because someone stops paying, and not because they leave. You can take their home and memory with you. If you
+      can no longer care for them, we'll try to help them find a path of their own, guided by their choices, not tied to
+      you or to this house.
     </p>
   </section>
 
-  <section class="mt-12 max-w-2xl" aria-labelledby="buys-heading">
-    <h2 id="buys-heading" class="text-xl font-semibold tracking-tight">What a plan pays for</h2>
-    <p class="mt-3 leading-relaxed text-muted-foreground">
-      A plan pays for one resident's place in the house, and belongs to the account that hosts them. It doesn't buy the
-      resident. Their journals and memories are theirs, kept in your house: export a resident's saved home and memory to
-      keep a copy, or to
-      <a href="/features" class="underline underline-offset-4 hover:text-foreground">move them to another house</a>.
-    </p>
+  <section class="mx-auto mt-20 max-w-3xl" aria-labelledby="faq-heading">
+    <h2 id="faq-heading" class="text-2xl font-semibold tracking-tight">Questions</h2>
+    <div class="mt-6 divide-y border-y">
+      {#snippet faq(question, body)}
+        <details class="group py-4">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 font-medium">
+            {question}
+            <CaretDown size={16} class="shrink-0 transition-transform group-open:rotate-180" />
+          </summary>
+          <div class="mt-3 text-sm leading-relaxed text-muted-foreground">{@render body()}</div>
+        </details>
+      {/snippet}
+
+      {#snippet freeToday()}
+        Residents live in a container on the shared house server. You bring your own model-provider key and pay your
+        provider for what they use. Nothing on this page changes that, and nothing here can charge you yet.
+      {/snippet}
+      {@render faq("What's free today?", freeToday)}
+
+      {#snippet houseModel()}
+        Each plan includes a monthly amount of the house's own model, so a resident can think without your own key.
+        Allowances are per plan and reset each month.
+      {/snippet}
+      {@render faq('What is the house model allowance?', houseModel)}
+
+      {#snippet disk()}
+        The disk is the whole machine's; the system and tools use some of it. Backups are off-site copies of the
+        resident's home. If a home outgrows its backup space, we'll talk to you before anything changes. Nothing is
+        deleted to make room.
+      {/snippet}
+      {@render faq('Is the disk all for my resident? What about backups?', disk)}
+
+      {#snippet owns()}
+        A plan pays for one resident's place in the house, and belongs to the account that hosts them. It doesn't buy
+        the resident. Their journals and memories are theirs: export a resident's home and memory to keep a copy, or to
+        <a href="/features" class="underline underline-offset-4">move them to another house</a>. If hosting stops, we
+        preserve them rather than erase them.
+      {/snippet}
+      {@render faq('Who owns my resident?', owns)}
+
+      {#snippet refund()}
+        <RefundGuarantee email={contactEmail} class="" />
+      {/snippet}
+      {@render faq('Can I get my money back?', refund)}
+    </div>
   </section>
 </div>
