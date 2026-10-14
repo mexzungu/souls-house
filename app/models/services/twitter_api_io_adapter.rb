@@ -47,7 +47,7 @@ module Services
 
     def revoke(_connection)
       # TwitterAPI.io keys are managed by their owner on twitterapi.io;
-      # souls.house removes its copy.
+      # the house removes its copy.
       true
     end
 
