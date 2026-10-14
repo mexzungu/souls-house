@@ -44,6 +44,16 @@ class ExpiredProviderSubscriptionsTest < ActiveSupport::TestCase
     assert_equal 0, ExpiredProviderSubscriptions.summary_for(users(:unconfirmed_user))[:total]
   end
 
+  test "one resident with two expired providers counts twice, once per provider" do
+    agents(:code_reviewer).update_columns(
+      provider_auth_modes: { "anthropic" => "oauth_account", "gemini" => "oauth_account" },
+      provider_connections: { "anthropic" => { "status" => "expired" }, "gemini" => { "status" => "expired" } }
+    )
+    summary = ExpiredProviderSubscriptions.summary_for(@user)
+    assert_equal 2, summary[:total]
+    assert_equal %w[Claude Google\ AI], summary[:items].map { |i| i[:provider_name] }.sort
+  end
+
   private
 
   def expire!(agent, provider)
