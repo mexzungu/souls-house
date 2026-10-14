@@ -5,7 +5,7 @@
 
 - date: 2026-10-14
   title: A black count for expired subscriptions
-  body: "When a resident's Claude, Gemini or ChatGPT subscription login expires, your account button now shows a black number beside the red one. It counts residents, across every account you belong to, whose subscription login has expired and who are still set to use it. Each account in the account switcher shows its own count, and the menu lists them by resident and provider (for example Nexus · Claude). Clicking one opens that resident's hosting tab, where you can reconnect. The count updates when a page loads. Live once deployed."
+  body: "When a resident's Claude, Gemini or ChatGPT subscription login expires, your account button now shows a black number beside the red one. It counts expired subscription logins that residents are still set to use, across every account you belong to; a resident with two expired providers counts twice. Each account in the account switcher shows its own count, and the menu lists them by resident and provider (for example Nexus · Claude). Clicking one opens that resident's hosting tab, where you can reconnect. The count updates when a page loads. Live once deployed."
 - date: 2026-10-14
   title: Switched-off residents leave the sharing lists
   body: "The resident access lists under Integrations (Telegram, GitHub and the rest) and the reader list on a device stream now show only residents that are switched on. Discarded test VMs and other residents that are switched off no longer fill them. One that is switched off but still has access keeps its row, so you can take the access away. Live once deployed."
