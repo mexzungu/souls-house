@@ -243,7 +243,9 @@ accessories:
         COMMS_TLS_CLIENT_NAME: rails # Only Rails's client certificate is accepted.
         GOTRACEBACK: none
       secret:
-        - COMMS_STORE_KEY # base64 of 32 bytes; each connection's SQLCipher key is HKDF(it, connection).
+        # base64 of 32 bytes; each connection's SQLCipher key is HKDF(it, connection).
+        # Its own secret: Telegram's COMMS_STORE_KEY is hex, which this refuses.
+        - COMMS_STORE_KEY:COMMS_WHATSAPP_STORE_KEY
         - COMMS_COMMAND_KEY
     volumes:
       - comms:/data # The linked devices' session stores. Losing it costs a re-pair, not history.

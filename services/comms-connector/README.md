@@ -169,7 +169,7 @@ WhatsApp integration stays hidden (its catalog entry requires
    ```
    Move `ca.key` off the host afterwards. The files must be readable by the
    containers' users (Rails's `rails` user; the connector runs as 65532).
-4. **Secrets** in `.kamal/secrets`: `COMMS_STORE_KEY` (`openssl rand -base64 32`)
+4. **Secrets** in `.kamal/secrets`: `COMMS_WHATSAPP_STORE_KEY` (`openssl rand -base64 32`; the accessory sees it as `COMMS_STORE_KEY`)
    and `COMMS_COMMAND_KEY` (`openssl rand -hex 32`). Telegram's connector, when
    it exists, uses the same `COMMS_COMMAND_KEY` and client certificate.
 5. **`config/house.env`**: `HOUSE_COMMS_WHATSAPP_IMAGE`,

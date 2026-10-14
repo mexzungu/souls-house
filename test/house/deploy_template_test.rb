@@ -145,7 +145,7 @@ class DeployTemplateTest < ActiveSupport::TestCase
       assert_equal "registry.example/comms@#{DUMMY_DIGEST}", accessory.fetch("image")
       assert_includes accessory.fetch("volumes"), "comms:/data"
       assert_equal "core=0", accessory.fetch("options").fetch("ulimit")
-      assert_equal %w[COMMS_STORE_KEY COMMS_COMMAND_KEY], accessory.fetch("env").fetch("secret")
+      assert_equal %w[COMMS_STORE_KEY:COMMS_WHATSAPP_STORE_KEY COMMS_COMMAND_KEY], accessory.fetch("env").fetch("secret")
       assert_equal "rails", accessory.dig("env", "clear", "COMMS_TLS_CLIENT_NAME")
 
       runtime = config.fetch("env")
