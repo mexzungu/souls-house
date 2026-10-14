@@ -211,6 +211,7 @@
       {/if}
       <UserAccountMenu
         replyAttention={$page.props?.reply_attention || {}}
+        expiredSubscriptions={$page.props?.expired_subscriptions || {}}
         allowAccountCreation={siteSettings?.allow_account_creation !== false}
         {currentUser}
         {currentAccount}
