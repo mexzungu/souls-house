@@ -50,6 +50,18 @@ class Accounts::IntegrationsControllerTest < ActionDispatch::IntegrationTest
     )
   end
 
+  test "a retired resident is offered only while it still holds the grant" do
+    @disabled_agent.update!(active: false)
+    @enabled_agent.update!(active: false)
+
+    get account_integrations_path(@account)
+
+    connection = inertia_shared_props.fetch("connections").find { |item| item.fetch("id") == @connection.public_id }
+    ids = connection.fetch("residents").map { |resident| resident.fetch("id") }
+    assert_not_includes ids, @disabled_agent.to_param, "a discarded resident with no grant is not offered"
+    assert_includes ids, @enabled_agent.to_param, "a granted one stays so the grant can be taken away"
+  end
+
   test "a Tailscale connection lists each granted resident's sign-in panel" do
     tailnet = @account.service_connections.create!(
       connected_by_user: @user,
