@@ -40,6 +40,8 @@ class ServiceConnection < ApplicationRecord
 
   after_create_commit :apply_default_accesses
   after_update_commit :reconcile_authority_change, if: :runtime_authority_changed?
+  # The account's tweet stream is paid by this connection (FieldTweets).
+  after_commit -> { FieldTweets.integration_changed!(account) }, if: -> { provider == "twitterapi_io" }
 
   scope :connected, -> { where(status: "connected") }
   scope :personal, -> { where(management_scope: "personal") }

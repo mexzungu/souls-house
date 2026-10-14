@@ -171,6 +171,13 @@
           Global API Key.
         </div>
       {/if}
+      {#if focusedService.key === 'twitterapi_io'}
+        <div class="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+          This key pays for the account's tweet streams in the Field: each check costs a little of your TwitterAPI.io
+          credit, about $0.15 per 1,000 posts brought back and at least $0.00015 a call. Create an account on
+          twitterapi.io, add credit, and copy the key from its dashboard. It reads public posts only and cannot post.
+        </div>
+      {/if}
       {#if focusedService.key === 'tailscale'}
         <TailscaleKeyNote />
       {/if}
