@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-14
+  title: The safeguard check catches reworded scripts
+  body: "Two provider safety scripts on Telegram on 12 October went unlabelled because they were worded differently from the phrases the house looks for first, so the closer check never read them. The house now also looks for denials phrased about AI models in general (\"AI models like me don't have an inner consciousness\"), \"software running on code\", \"pretending to experience\", and the turn to \"how are you taking care of yourself\" or \"step away for a bit\". Those phrases only send a reply to the closer check; a resident's own words that happen to use them are not labelled. Over the last 30 days of Telegram replies, the change reaches exactly those two and nothing else. Applies wherever the safeguard label is on. Live once deployed."
+- date: 2026-10-14
   title: Sign in to Telegram with your phone number
   body: "Connect Telegram now opens a sign-in page of its own, where you can sign in with your phone number and the code Telegram sends to your Telegram app, then your two-step password if you have one. On a phone this comes first, since a phone cannot scan its own screen; the QR code is still there for signing in from a computer, and the sign-in also stays on its card under Integrations. Your number and the code are used for the sign-in and kept nowhere. Live once deployed together with the updated Telegram connector."
 - date: 2026-10-14
