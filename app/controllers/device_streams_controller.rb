@@ -42,7 +42,7 @@ class DeviceStreamsController < ApplicationController
 
   def show
     users = @stream_account ? @stream.account.memberships.where.not(confirmed_at: nil).includes(:user).map(&:user) : []
-    agents = @stream_account ? @stream.account.agents.order(:name) : []
+    agents = @stream_account ? @stream.account.agents.order(:name).select { |agent| agent.offered_for_sharing?(granted: @stream.reader_agent_ids.include?(agent.id)) } : []
     sessions = @stream.device_stream_sessions.order(created_at: :desc).limit(100)
     can_open_in_account = !@stream_account && Current.user.confirmed_accounts.exists?(@stream.account_id)
 

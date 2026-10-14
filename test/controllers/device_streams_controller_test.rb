@@ -90,6 +90,19 @@ class DeviceStreamsControllerTest < ActionDispatch::IntegrationTest
     assert_nil @stream.reload.erased_at
   end
 
+  test "reader controls leave out a retired resident unless it already reads" do
+    retired = agents(:other_account_agent)
+    retired.update!(active: false)
+
+    get account_device_stream_path(@account, @stream.stream_key)
+    assert_not_includes inertia_shared_props["agents"].map { |agent| agent["id"] }, retired.to_param
+
+    @stream.update!(reader_agent_ids: [ retired.id ])
+    @inertia_props = nil
+    get account_device_stream_path(@account, @stream.stream_key)
+    assert_includes inertia_shared_props["agents"].map { |agent| agent["id"] }, retired.to_param
+  end
+
   test "reader controls show only residents of the stream account" do
     get account_device_stream_path(@account, @stream.stream_key)
     agent_ids = inertia_shared_props["agents"].map { |agent| agent["id"] }
