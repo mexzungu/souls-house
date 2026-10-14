@@ -20,7 +20,7 @@ class PricingPageTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "plan cards carry the catalogue's prices and allowances, and no container sizes" do
+  test "plan cards carry the catalogue's prices, allowances and what each plan includes" do
     without_stripe_env do
       get pricing_path
 
@@ -30,8 +30,10 @@ class PricingPageTest < ActionDispatch::IntegrationTest
         assert_equal tier.name, card["name"]
         assert_equal tier.monthly_usd, card["monthly_usd"]
         assert_equal tier.allowance_usd, card["allowance_usd"]
+        assert_equal tier.features.stringify_keys, card["features"]
       end
-      assert tiers.none? { |row| row.key?("memory_gb") || row.key?("cpu_shares") }
+      assert_equal %w[starter studio hearth], tiers.map { |row| row["id"] }
+      assert tiers.none? { |row| row.key?("memory_gb") || row.key?("cpu_shares") }, "container limits stay server-side"
     end
   end
 

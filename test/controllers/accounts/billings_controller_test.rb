@@ -26,7 +26,7 @@ class Accounts::BillingsControllerTest < ActionDispatch::IntegrationTest
     assert props.dig("billing", "configured")
     assert props.dig("billing", "can_pay")
     assert_match(/@/, props.dig("billing", "contact_email"))
-    assert_equal %w[starter studio], props["tiers"].map { |tier| tier["id"] }
+    assert_equal %w[starter studio hearth], props["tiers"].map { |tier| tier["id"] }
     resident = props["residents"].find { |row| row["id"] == @agent.to_param }
     assert_equal "complimentary", resident.dig("entitlement", "state")
   end

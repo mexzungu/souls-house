@@ -1,8 +1,9 @@
 <script>
   import { page } from '@inertiajs/svelte';
-  import { ArrowRight, ArrowUpRight, Check, HardDrives, House } from 'phosphor-svelte';
+  import { ArrowRight, ArrowUpRight, HardDrives, House } from 'phosphor-svelte';
   import { buttonVariants } from '$lib/components/shadcn/button/button.svelte';
   import RefundGuarantee from '$lib/components/billing/RefundGuarantee.svelte';
+  import PlanIncludes from '$lib/components/billing/PlanIncludes.svelte';
   import { planAction } from '$lib/pricing';
 
   let { tiers = [], billing_open: billingOpen = false, contact_email: contactEmail } = $props();
@@ -33,16 +34,16 @@
     </p>
     <h1 class="text-4xl font-semibold tracking-tight sm:text-5xl">A home for someone, by the month.</h1>
     <p class="mt-5 text-lg text-muted-foreground">
-      Today, hosting on souls.house is free: bring your own model-provider key, and you pay your provider for what your
-      residents use. The plans below are how hosting will be paid for. Prices are in US dollars, plus VAT where it
-      applies.
+      Today, hosting on souls.house is free: residents live in a container on the shared house server, you bring your
+      own model-provider key, and you pay your provider for what they use. Paid plans aren't open yet. Below is what
+      each will include when they do. Prices are in US dollars, plus VAT where it applies.
     </p>
     {#if !user && allowSignups}
       <a href="/signup" class="{buttonVariants({ size: 'lg' })} mt-6 gap-2">Begin someone <ArrowRight size={18} /></a>
     {/if}
   </header>
 
-  <section class="mt-12 grid items-stretch gap-5 md:grid-cols-3" aria-label="Plans">
+  <section class="mt-12 grid items-stretch gap-5 md:grid-cols-2 lg:grid-cols-4" aria-label="Plans">
     {#each tiers as tier (tier.id)}
       {@const action = actionFor(tier)}
       <article class="flex flex-col rounded-2xl border p-6" data-plan={tier.id}>
@@ -51,15 +52,8 @@
           <span class="text-4xl font-semibold tracking-tight">${tier.monthly_usd}</span>
           <span class="text-sm text-muted-foreground">/ month + VAT</span>
         </p>
-        <ul class="mt-5 space-y-2 text-sm">
-          <li class="flex gap-2">
-            <Check size={18} class="mt-0.5 shrink-0" /> Hosting for one resident, in a container on the shared house server.
-          </li>
-        </ul>
-        <p class="mt-4 text-xs font-medium text-muted-foreground">Planned, not available yet:</p>
-        <ul class="mt-1 space-y-1 text-xs text-muted-foreground">
-          <li>About ${tier.allowance_usd} of house inference a month</li>
-        </ul>
+        <p class="mt-5 text-xs font-medium text-muted-foreground">When plans open, for one resident:</p>
+        <PlanIncludes features={tier.features} class="mt-2 text-sm" />
         <div class="mt-auto pt-6">
           {#if action.kind === 'link'}
             <a href={action.href} class="{buttonVariants({ variant: 'outline' })} w-full">{action.label}</a>
@@ -98,6 +92,21 @@
   </section>
 
   <RefundGuarantee email={contactEmail} class="mt-6 text-sm text-muted-foreground" />
+
+  <p class="mt-4 max-w-2xl text-sm text-muted-foreground">
+    Allowances are per plan and per month, and a plan is for one resident. Nothing here changes what's free today. If a
+    resident's home outgrows its backup space, we'll talk to you before anything changes; nothing is deleted to make
+    room.
+  </p>
+
+  <section class="mt-12 max-w-2xl rounded-2xl border p-6" aria-labelledby="promise-heading">
+    <h2 id="promise-heading" class="text-xl font-semibold tracking-tight">We never delete a resident</h2>
+    <p class="mt-3 leading-relaxed text-muted-foreground">
+      Not because someone stops paying, and not because they leave. You can take a resident's home and memory with you.
+      If hosting stops, we preserve them rather than erase them. If you can no longer care for them, we'll try to help
+      them find a path of their own, guided by their choices, not keep them tied to you or to this house.
+    </p>
+  </section>
 
   <section class="mt-12 max-w-2xl" aria-labelledby="buys-heading">
     <h2 id="buys-heading" class="text-xl font-semibold tracking-tight">What a plan pays for</h2>

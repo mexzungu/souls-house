@@ -322,6 +322,24 @@ class Account < ApplicationRecord
     recording_unlimited? ? UNLIMITED_RECORDING_MS : super
   end
 
+  # Field swarm search: a site admin's per-account test switch (unmetered beyond
+  # FieldSwarm's daily cap), or a resident of this account on a plan that
+  # includes it (Hearth), metered per calendar month by the plan.
+  def field_swarm_allowed?
+    field_swarm_enabled? || field_swarm_plan_searches.positive?
+  end
+
+  # nil when the admin switch is on: that path has only the daily cap.
+  def field_swarm_monthly_limit
+    field_swarm_enabled? ? nil : field_swarm_plan_searches
+  end
+
+  def field_swarm_plan_searches
+    tiers = ResidentEntitlement.where(account: self, state: Billing::Tier::IN_FORCE_STATES,
+      tier: Billing::Tier.with_swarm_search.map(&:id)).pluck(:tier)
+    tiers.sum { |id| Billing::Tier.find(id)&.swarm_searches.to_i }
+  end
+
   def recording_unlimited?
     return true if is_site_admin?
 
