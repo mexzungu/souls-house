@@ -3,6 +3,7 @@
   import { untrack } from 'svelte';
   import QRCode from 'qrcode';
   import { Button } from '$lib/components/shadcn/button';
+  import TelegramPhoneSignIn from './connection-telegram-phone.svelte';
   import {
     formatCountdown,
     loginErrorMessage,
@@ -11,7 +12,9 @@
     secondsUntil,
   } from '$lib/telegram-connection';
 
-  let { connection, account, pollInterval = 2500 } = $props();
+  // phoneFirst: lead with the phone number (a phone cannot scan its own
+  // screen). Left unset, a small screen decides.
+  let { connection, account, pollInterval = 2500, phoneFirst = undefined } = $props();
 
   let pairing = $state(null);
   let notOwner = $state(false);
@@ -19,19 +22,32 @@
   let qrImage = $state(null);
   let busy = $state(false);
   let notice = $state(null);
+  let phoneOpen = $state(false);
+  let smallScreen = $state(false);
 
   const base = $derived(`/accounts/${account.id}/service_connections/${connection.id}`);
   const waiting = $derived(connection.status === 'pairing' || connection.status === 'reauthorizing');
   const status = $derived(pairing?.status ?? connection.status);
   const login = $derived(pairing?.login ?? {});
   const qrCode = $derived(pairing?.qr?.code ?? null);
-  // The QR only encodes a tg://login link. On a phone the camera can't scan its own
-  // screen, so the same link is offered as a tap. Only that scheme is ever linked.
-  const loginLink = $derived(typeof qrCode === 'string' && qrCode.startsWith('tg://login?') ? qrCode : null);
   const qrExpiresAt = $derived(pairing?.qr?.expires_at ?? null);
   const secondsLeft = $derived(qrExpiresAt ? secondsUntil(qrExpiresAt, now) : 0);
   const errorText = $derived(loginErrorMessage(login));
+  const signingIn = $derived(status === 'pairing' && !login.error);
   const askingPassword = $derived(status === 'pairing' && login.step === 'password');
+  const leadWithPhone = $derived(phoneFirst ?? smallScreen);
+  // The phone path: chosen, leading on a small screen, or under way.
+  const showPhone = $derived(signingIn && !askingPassword && (login.step === 'code' || phoneOpen || leadWithPhone));
+
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia('(max-width: 639px)');
+    if (!query) return;
+    smallScreen = query.matches;
+    const change = (event) => (smallScreen = event.matches);
+    query.addEventListener?.('change', change);
+    return () => query.removeEventListener?.('change', change);
+  });
 
   async function poll() {
     let response;
@@ -97,6 +113,7 @@
     const result = await postLoginJson(`${base}/login/${path}`);
     busy = false;
     if (result.ok) {
+      phoneOpen = false;
       pairing = {
         status: result.body.status,
         qr: null,
@@ -150,6 +167,25 @@
         {/if}
         <Button type="submit" size="sm" disabled={busy}>Sign in</Button>
       </form>
+    {:else if showPhone}
+      {#key pairing.generation}
+        <TelegramPhoneSignIn
+          {base}
+          generation={pairing.generation}
+          {login}
+          bind:busy
+          onlogin={(next) => (pairing = { ...pairing, qr: null, login: next })}
+          onnotice={(next) => (notice = next)}
+          onshowqr={phoneOpen && !leadWithPhone && login.step !== 'code' ? () => (phoneOpen = false) : null} />
+      {/key}
+      {#if leadWithPhone && login.step !== 'code' && qrCode && qrImage}
+        <details class="text-sm" data-testid="telegram-qr-elsewhere">
+          <summary class="cursor-pointer text-muted-foreground">Signing in from a computer? Show the QR code</summary>
+          <div class="mt-3 w-fit rounded-lg bg-white p-2">
+            <img src={qrImage} alt="Telegram sign-in QR code" width="200" height="200" class="size-[200px]" />
+          </div>
+        </details>
+      {/if}
     {:else if qrCode}
       <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
         <div class="w-fit shrink-0 rounded-lg bg-white p-2">
@@ -176,15 +212,12 @@
               ? `This code expires in ${formatCountdown(secondsLeft)}. A new one appears by itself.`
               : 'This code expired. Waiting for a new one.'}
           </p>
-          {#if loginLink && secondsLeft > 0}
-            <div class="space-y-1 border-t pt-2">
-              <p class="font-medium">On your phone already?</p>
-              <p class="text-muted-foreground">
-                Tap the button and Telegram on this phone will ask you to confirm the sign-in.
-              </p>
-              <Button href={loginLink} size="sm" data-testid="telegram-login-link">Open in Telegram</Button>
-            </div>
-          {/if}
+          <div class="space-y-1 border-t pt-2">
+            <p class="text-muted-foreground">On this phone, or no camera to hand?</p>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onclick={() => (phoneOpen = true)}>
+              Sign in with your phone number instead
+            </Button>
+          </div>
         </div>
       </div>
     {:else if !errorText}

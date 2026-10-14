@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-14
+  title: Sign in to Telegram with your phone number
+  body: "Connect Telegram now opens a sign-in page of its own, where you can sign in with your phone number and the code Telegram sends to your Telegram app, then your two-step password if you have one. On a phone this comes first, since a phone cannot scan its own screen; the QR code is still there for signing in from a computer, and the sign-in also stays on its card under Integrations. Your number and the code are used for the sign-in and kept nowhere. Live once deployed together with the updated Telegram connector."
+- date: 2026-10-14
   title: Tweet streams are paid by each account
   body: "Following an X account into the Field now needs a TwitterAPI.io integration, because every check costs a little money. Add your own key under Integrations (it is checked with a free call, stored encrypted, and never shown again) and it pays for the account's tweets from your own TwitterAPI.io credit, with a monthly limit you set. Without one, the Tweets tab says you need to set up a TwitterAPI.io integration first and links straight to it. The house can lend its own key to particular accounts, which a site admin switches on per account, within the house's monthly limits. An account with its own integration is never paid for by the house, even when its key is refused. The Tweets tab is now there for everyone. Live once deployed."
 - date: 2026-10-13
