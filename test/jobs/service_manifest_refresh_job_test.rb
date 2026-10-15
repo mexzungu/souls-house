@@ -76,6 +76,29 @@ class ServiceManifestRefreshJobTest < ActiveJob::TestCase
     assert_equal @connection.credential_revision, @access.reload.provisioned_revision
   end
 
+  test "broker token cache refresh during publication does not strand a pending grant" do
+    @connection.update!(
+      provider: "google_workspace",
+      credential_metadata: { "credential_strategy" => "refresh_broker" }
+    )
+    clear_enqueued_jobs
+    before_refresh = @connection.updated_at
+    Agents::Config.stub(:internal_url, "https://house.example.test") do
+      publish do |yaml|
+        entry = YAML.safe_load(yaml)["services"].first
+        assert_equal "refresh_broker", entry["credential_strategy"]
+        assert_not_includes yaml, "rotated-cache-token"
+        @connection.replace_credential_payload_without_reconciliation!(
+          "access_token" => "rotated-cache-token", "refresh_token" => "synthetic-refresh"
+        )
+      end
+    end
+    assert_operator @connection.updated_at, :>, before_refresh
+    assert_no_enqueued_jobs only: AccountAgentCredentialsRefreshJob
+    assert_equal "provisioned", @access.reload.provisioning_status
+    assert_equal @connection.credential_revision, @access.provisioned_revision
+  end
+
   test "a stopped or missing runtime uses the existing recreate fallback" do
     sandbox = Minitest::Mock.new
     sandbox.expect(:refresh_service_manifest!, false) { |yaml:| yaml.present? }

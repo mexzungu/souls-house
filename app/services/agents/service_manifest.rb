@@ -31,8 +31,10 @@ module Agents
     def mark_reconciled!
       accesses.each do |access|
         connection = access.service_connection
+        # Broker token-cache writes change updated_at without changing runtime
+        # authority or enqueueing reconciliation. They must not strand a grant.
         unchanged_connections = ServiceConnection.where(
-          id: connection.id, updated_at: connection.updated_at,
+          id: connection.id, status: connection.status,
           credential_revision: connection.credential_revision
         )
         provisioned = access.enabled? && connections.include?(connection)
