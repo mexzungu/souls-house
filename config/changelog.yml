@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-15
+  title: A ring for each resident working
+  body: "The working spinner in the room menus now draws a ring for each resident working there, nested inside each other in each resident's colour, the most recent outermost, so two residents at work look like two rings turning in opposite directions instead of one. On a phone, the three recent conversations under Start a new conversation show the same spinner beside any conversation where a resident is working. Live once deployed."
+- date: 2026-10-15
   title: Service grants without interrupting residents
   body: "Adding or removing service access now refreshes a running house-hosted resident's service file without restarting it, even while it is working. Residents on their own VMs keep the existing refresh behavior. Live once Rails is deployed; no resident rebuild is needed."
 - date: 2026-10-15
