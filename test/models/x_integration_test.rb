@@ -147,6 +147,75 @@ class XIntegrationTest < ActiveSupport::TestCase
     assert_not_requested :post, "https://api.x.com/2/oauth2/token"
   end
 
+  {
+    "replacing the app" => ->(integration) { integration.set_own_app!(client_id: "app-b", client_secret: "secret-b") },
+    "removing the app" => ->(integration) { integration.remove_own_app! }
+  }.each do |change, act|
+    test "#{change} while an OAuth exchange is in flight discards the old app's tokens" do
+      integration = XIntegration.create!(account: @account, client_id: "app-a", client_secret: "secret-a")
+      generation = integration.app_generation
+      stub_request(:post, "https://api.x.com/2/oauth2/token")
+        .with(headers: { "Authorization" => "Basic #{Base64.strict_encode64("app-a:secret-a")}" })
+        .to_return do
+          act.call(XIntegration.find(integration.id))
+          { status: 200, body: { access_token: "a-token", refresh_token: "a-refresh", expires_in: 7200 }.to_json }
+        end
+
+      assert_raises(XApi::StaleApp) do
+        integration.exchange_code!(code: "c", redirect_uri: "https://example.test/cb", code_verifier: "v", app_generation: generation)
+      end
+
+      integration.reload
+      assert_not integration.connected?
+      assert_nil integration.access_token
+      assert_not_requested :get, "https://api.x.com/2/users/me"
+    end
+  end
+
+  test "an exchange started under an earlier app generation never reaches X" do
+    integration = XIntegration.create!(account: @account, client_id: "app-a", client_secret: "secret-a")
+    started_under = integration.app_generation
+    integration.set_own_app!(client_id: "app-b", client_secret: "secret-b")
+
+    assert_raises(XApi::StaleApp) do
+      integration.exchange_code!(code: "c", redirect_uri: "https://example.test/cb", code_verifier: "v", app_generation: started_under)
+    end
+    assert_raises(XApi::StaleApp) do
+      integration.exchange_code!(code: "c", redirect_uri: "https://example.test/cb", code_verifier: "v", app_generation: nil)
+    end
+    assert_not_requested :post, "https://api.x.com/2/oauth2/token"
+  end
+
+  test "an exchange for the current app connects and records the handle" do
+    integration = XIntegration.create!(account: @account, client_id: "app-a", client_secret: "secret-a")
+    stub_request(:post, "https://api.x.com/2/oauth2/token")
+      .to_return(status: 200, body: { access_token: "a-token", refresh_token: "a-refresh", expires_in: 7200 }.to_json)
+    stub_request(:get, "https://api.x.com/2/users/me")
+      .to_return(status: 200, body: { data: { username: "handle_a" } }.to_json)
+
+    integration.exchange_code!(code: "c", redirect_uri: "https://example.test/cb", code_verifier: "v", app_generation: integration.app_generation)
+
+    integration.reload
+    assert integration.connected?
+    assert_equal "handle_a", integration.x_username
+  end
+
+  test "every change of app or connection moves the generation on" do
+    integration = XIntegration.create!(account: @account, client_id: "a", client_secret: "s", access_token: "t", refresh_token: "r")
+
+    generations = [ integration.app_generation ]
+    integration.set_own_app!(client_id: "a", client_secret: "s")
+    generations << integration.reload.app_generation
+    integration.set_own_app!(client_id: "b", client_secret: "s")
+    generations << integration.reload.app_generation
+    integration.disconnect!
+    generations << integration.reload.app_generation
+    integration.remove_own_app!
+    generations << integration.reload.app_generation
+
+    assert_equal [ 0, 0, 1, 2, 3 ], generations
+  end
+
   private
 
   def with_house_x_app(&block)

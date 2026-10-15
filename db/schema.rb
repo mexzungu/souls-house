@@ -2437,6 +2437,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_15_180000) do
   create_table "x_integrations", force: :cascade do |t|
     t.text "access_token"
     t.bigint "account_id", null: false
+    t.integer "app_generation", default: 0, null: false
     t.string "client_id"
     t.text "client_secret"
     t.datetime "created_at", null: false

@@ -56,7 +56,7 @@ describe('X posting page', () => {
     expect(screen.queryByLabelText('Client secret')).not.toBeInTheDocument();
   });
 
-  it('says when the house app is in use and asks for nothing', () => {
+  it('says when the house app is in use and does not ask for an app', () => {
     render(XIntegration, {
       account_id: 'acct',
       integration: { ...base, app_source: 'house', house_app_allowed: true },
@@ -66,6 +66,19 @@ describe('X posting page', () => {
     expect(screen.getByText(/posts through the house X app/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Client ID')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Connect with X/ })).toBeInTheDocument();
+  });
+
+  it('lets an admin of a house-app account switch to its own app', async () => {
+    render(XIntegration, {
+      account_id: 'acct',
+      integration: { ...base, app_source: 'house', house_app_allowed: true },
+      can_manage: true,
+    });
+
+    await fireEvent.click(screen.getByRole('button', { name: /own X app instead/ }));
+
+    expect(screen.getByLabelText('Client ID')).toBeInTheDocument();
+    expect(screen.getByLabelText('Client secret')).toBeInTheDocument();
   });
 
   it('shows ordinary members no X app form', () => {

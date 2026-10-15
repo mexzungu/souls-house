@@ -82,6 +82,70 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
     assert_requested stub, times: 1
   end
 
+  test "removing the app waits for a send in progress, and a later send uses nothing of the old app" do
+    sending = Queue.new
+    release = Queue.new
+    WebMock.reset!
+    stub = stub_request(:post, "https://api.x.com/2/tweets").to_return do
+      sending << true
+      release.pop(timeout: 20)
+      { status: 201, body: { data: { id: "778" } }.to_json, headers: { "Content-Type" => "application/json" } }
+    end
+
+    sender = Thread.new { ActiveRecord::Base.connection_pool.with_connection { post!("In flight", key: "in-flight") } }
+    assert sending.pop(timeout: 20), "the send never started"
+
+    removed = Queue.new
+    remover = Thread.new do
+      ActiveRecord::Base.connection_pool.with_connection do
+        XIntegration.find(@integration.id).remove_own_app!
+        removed << :removed
+      end
+    end
+
+    sleep 0.5
+    assert remover.alive?, "removing the app should wait for the send in progress"
+    assert removed.empty?
+    release << true
+    sender.join(20)
+    remover.join(20)
+
+    assert_equal :removed, removed.pop(timeout: 1)
+    assert_equal "posted", @integration.tweet_logs.find_by!(idempotency_key: "in-flight").status
+    assert_requested stub, times: 1
+
+    @integration.reload
+    assert_not @integration.connected?
+    assert_not @integration.own_app?
+    assert_equal "posting_disabled", post!("After removal", key: "after")
+    assert_requested stub, times: 1
+  end
+
+  test "a send in progress does not hold up another post's reservation" do
+    sending = Queue.new
+    release = Queue.new
+    WebMock.reset!
+    ids = Queue.new
+    %w[801 802].each { |id| ids << id }
+    stub = stub_request(:post, "https://api.x.com/2/tweets").to_return do
+      sending << true
+      release.pop(timeout: 20)
+      { status: 201, body: { data: { id: ids.pop } }.to_json, headers: { "Content-Type" => "application/json" } }
+    end
+
+    first = Thread.new { ActiveRecord::Base.connection_pool.with_connection { post!("First", key: "first") } }
+    assert sending.pop(timeout: 20), "the first send never started"
+    second = Thread.new { ActiveRecord::Base.connection_pool.with_connection { post!("Second", key: "second") } }
+
+    assert sending.pop(timeout: 20), "the second post should reserve and send while the first is in flight"
+    2.times { release << true }
+    first.join(20)
+    second.join(20)
+
+    assert_equal %w[posted posted], @integration.tweet_logs.order(:id).pluck(:status)
+    assert_requested stub, times: 2
+  end
+
   private
 
   def post!(text, key:)

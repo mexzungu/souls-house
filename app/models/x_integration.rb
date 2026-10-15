@@ -42,23 +42,30 @@ class XIntegration < ApplicationRecord
 
   def app_available? = app_source.present?
 
+  # Changing or removing the app takes the integration's row lock, so it
+  # waits for a send in progress (XPoster holds the row in share mode while
+  # sending) and for a token refresh. Bumping app_generation makes any OAuth
+  # exchange or refresh begun under the old app discard its tokens.
   def set_own_app!(client_id:, client_secret:)
     client_id = client_id.to_s.strip
     client_secret = client_secret.to_s.strip
     raise ArgumentError, "Both the client id and the client secret are needed" if client_id.blank? || client_secret.blank?
-    return if client_id == self.client_id && client_secret == self.client_secret
 
-    update!(client_id:, client_secret:, **disconnected_attributes)
+    with_lock do
+      next if client_id == self.client_id && client_secret == self.client_secret
+
+      update!(client_id:, client_secret:, **disconnected_attributes)
+    end
   end
 
   def remove_own_app!
-    update!(client_id: nil, client_secret: nil, **disconnected_attributes)
+    with_lock { update!(client_id: nil, client_secret: nil, **disconnected_attributes) }
   end
 
   private
 
   def disconnected_attributes
-    { access_token: nil, refresh_token: nil, token_expires_at: nil, x_username: nil, enabled: false }
+    { access_token: nil, refresh_token: nil, token_expires_at: nil, x_username: nil, enabled: false, app_generation: app_generation + 1 }
   end
 
   def x_credentials(key)

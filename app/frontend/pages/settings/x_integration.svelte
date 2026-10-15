@@ -128,6 +128,8 @@
             {/if}
           </div>
         </form>
+      {:else}
+        <Button variant="outline" onclick={() => (editingApp = true)}>Use the account's own X app instead</Button>
       {/if}
     {/if}
   </section>

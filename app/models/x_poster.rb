@@ -27,6 +27,7 @@ class XPoster
   Result = Struct.new(:log, :replayed, keyword_init: true)
 
   MAX_KEY_LENGTH = 200
+  RESERVATION_LOCK_SPACE = 7_316
   TWEET_ID_PATTERN = /\A\d{1,25}\z/
 
   # Errors raised before any byte of the request is sent: the post cannot
@@ -48,8 +49,7 @@ class XPoster
     log, replayed = reserve!(text:, idempotency_key:, reply_to:)
     return Result.new(log:, replayed: true) if replayed
 
-    access_token = refreshed_access_token(log)
-    send_exclusively!(log, access_token) if access_token
+    send_exclusively!(log) if token_ready?(log)
     Result.new(log: log.reload, replayed: false)
   end
 
@@ -79,7 +79,13 @@ class XPoster
     digest = Digest::SHA256.hexdigest({ text:, reply_to: }.to_json)
 
     XIntegration.transaction do
-      integration.lock!
+      # Serialises reservations for one account (idempotency, the enabled
+      # switch) without taking the integration's row lock, which in-flight
+      # sends hold in share mode; a reservation never waits for a send.
+      XIntegration.connection.execute(
+        XIntegration.sanitize_sql_array([ "SELECT pg_advisory_xact_lock(?, ?)", RESERVATION_LOCK_SPACE, integration.id ])
+      )
+      integration.reload
 
       existing = TweetLog.find_by(agent:, idempotency_key:)
       if existing
@@ -103,40 +109,62 @@ class XPoster
     end
   end
 
-  # Last check before sending, under the post's own row lock: if the post is
-  # no longer pending (someone resolved a stale reservation), nothing is
-  # sent. Touching it restarts the quiet period a resolver must wait out, so
-  # a resolution cannot race this sender. Then the token is refreshed under
-  # the integration's lock, so two posts never spend one rotating refresh
-  # token twice. Returns nil when nothing should be sent.
-  def refreshed_access_token(log)
-    integration = log.x_integration
+  # Under the post's own row lock: if the post is no longer pending (someone
+  # resolved a stale reservation), nothing is sent. Touching it restarts the
+  # quiet period a resolver must wait out. A stale token is refreshed under
+  # the integration's exclusive lock, so two posts never spend one rotating
+  # refresh token twice. Returns false when nothing should be sent.
+  def token_ready?(log)
     XIntegration.transaction do
       log.lock!
-      return nil unless log.status == "pending"
+      return false unless log.status == "pending"
 
       log.touch
-      integration.lock!
-      raise XApi::Error, "The X connection or its app changed before sending" unless integration.connected? && integration.app_available?
+      integration = log.x_integration.reload
+      unless integration.token_fresh?
+        integration.lock!
+        raise XApi::Error, "The X connection or its app changed before sending" unless integration.connected? && integration.app_available?
 
-      integration.refresh_tokens!
-      integration.access_token
+        integration.refresh_tokens!
+      end
     end
+    true
   rescue XApi::Error, ArgumentError, JSON::ParserError, *CONNECT_ERRORS, Net::ReadTimeout => e
     finish!(log, status: "failed", failure_reason: "token_refresh_failed", error_message: e.message.truncate(500))
-    nil
+    false
   end
 
   # The post's own row lock is held from the final pending check through the
   # send and the recording of X's answer. A resolver takes the same lock, so
   # it either resolves first (and this sends nothing) or waits and then sees
-  # the recorded outcome. Only this post's row is held, never the account's
-  # integration row, for at most one send (about 70 seconds with no retries).
-  def send_exclusively!(log, access_token)
+  # the recorded outcome.
+  #
+  # The integration row is held in share mode for the same span, and the
+  # bearer token is read under it. Changing or removing the app, disconnecting
+  # and switching posting off all update that row, so they wait for a send in
+  # progress, and a send that starts after them sees the cleared token and
+  # sends nothing. Other sends share the lock and run alongside; a token
+  # refresh (exclusive) waits for them. At most one send (about 70 seconds)
+  # is ever waited for.
+  def send_exclusively!(log)
     TweetLog.transaction do
       log.lock!
-      deliver!(log, access_token) if log.status == "pending"
+      next unless log.status == "pending"
+
+      integration = XIntegration.lock("FOR SHARE").find(log.x_integration_id)
+      reason = unsendable_reason(integration)
+      next finish!(log, status: "failed", failure_reason: reason, error_message: "Nothing was sent: #{reason.tr("_", " ")}") if reason
+
+      deliver!(log, integration.access_token)
     end
+  end
+
+  def unsendable_reason(integration)
+    return "disconnected" unless integration.connected? && integration.access_token.present?
+    return "posting_disabled" unless integration.enabled?
+    return "no_x_app" unless integration.app_available?
+
+    nil
   end
 
   def deliver!(log, access_token)

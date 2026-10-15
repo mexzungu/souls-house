@@ -6,6 +6,9 @@ class XIntegrationsOwnAppCredentials < ActiveRecord::Migration[8.1]
   def change
     add_column :x_integrations, :client_id, :string
     add_column :x_integrations, :client_secret, :text
+    # Bumped whenever the app or the connection changes; an OAuth exchange
+    # or refresh begun under an older generation discards its tokens.
+    add_column :x_integrations, :app_generation, :integer, null: false, default: 0
     remove_column :x_integrations, :daily_post_limit, :integer, null: false, default: 20
   end
 

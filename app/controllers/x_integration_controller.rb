@@ -29,6 +29,9 @@ class XIntegrationController < ApplicationController
       redirect_to x_page_path, alert: "Add this account's X app before connecting"
       return
     end
+    # The authorisation is for the app as it is now; the callback's tokens
+    # are kept only if the app hasn't changed (or been removed) meanwhile.
+    session[:x_oauth_app_generation] = integration.app_generation
 
     redirect_to integration.authorization_url(state: state, redirect_uri: x_redirect_uri, code_challenge: code_challenge),
                 allow_other_host: true
@@ -44,6 +47,7 @@ class XIntegrationController < ApplicationController
     expires_at = session.delete(:x_oauth_state_expires_at)
     code_verifier = session.delete(:x_oauth_code_verifier)
     session.delete(:x_oauth_account_id)
+    app_generation = session.delete(:x_oauth_app_generation)
 
     unless expected_state == params[:state] && Time.current.to_i < expires_at.to_i
       redirect_to x_page_path, alert: "Invalid or expired authorization"
@@ -55,7 +59,7 @@ class XIntegrationController < ApplicationController
       return
     end
 
-    @integration.exchange_code!(code: params[:code], redirect_uri: x_redirect_uri, code_verifier: code_verifier)
+    @integration.exchange_code!(code: params[:code], redirect_uri: x_redirect_uri, code_verifier: code_verifier, app_generation: app_generation)
 
     redirect_to x_page_path, notice: "X/Twitter connected successfully"
   rescue XApi::Error => e

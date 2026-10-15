@@ -1,4 +1,5 @@
 require "test_helper"
+require "webmock/minitest"
 
 class XIntegrationControllerTest < ActionDispatch::IntegrationTest
 
@@ -80,6 +81,23 @@ class XIntegrationControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to x_integration_path(account_id: @account.to_param)
     assert_match "client secret", flash[:alert]
     assert_not @account.reload.x_integration&.own_app?
+  end
+
+  test "a callback after the app was replaced keeps no tokens, even with a valid state" do
+    @account.create_x_integration!(enabled: false, client_id: "app-a", client_secret: "secret-a")
+    sign_in(@owner)
+    post x_integration_path(account_id: @account.to_param)
+    state = Rack::Utils.parse_query(URI(response.location).query)["state"]
+
+    put app_x_integration_path(account_id: @account.to_param), params: { x_app: { client_id: "app-b", client_secret: "secret-b" } }
+    get callback_x_integration_path(state:, code: "code-for-a")
+
+    assert_redirected_to x_integration_path(account_id: @account.to_param)
+    assert_match "changed", flash[:alert]
+    integration = @account.reload.x_integration
+    assert_equal "app-b", integration.client_id
+    assert_not integration.connected?
+    assert_not_requested :post, "https://api.x.com/2/oauth2/token"
   end
 
   test "an ordinary member cannot set or remove the account's X app" do
