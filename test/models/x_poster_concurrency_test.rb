@@ -117,7 +117,7 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
     @integration.reload
     assert_not @integration.connected?
     assert_not @integration.own_app?
-    assert_equal "posting_disabled", post!("After removal", key: "after")
+    assert_equal "not_connected", post!("After removal", key: "after")
     assert_requested stub, times: 1
   end
 
