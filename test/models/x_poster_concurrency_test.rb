@@ -11,7 +11,7 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
     @agent = agents(:research_assistant)
     XIntegration.where(account_id: @agent.account_id).destroy_all
     @integration = XIntegration.create!(
-      account: @agent.account, enabled: true, daily_post_limit: 2, x_username: "househandle",
+      account: @agent.account, enabled: true, x_username: "househandle", client_id: "own-cid", client_secret: "own-secret",
       access_token: "live-token", refresh_token: "refresh-1", token_expires_at: 2.hours.from_now
     )
     @ids = (1..100).to_a
@@ -28,18 +28,7 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
     @integration&.destroy
   end
 
-  test "simultaneous posts cannot overshoot the daily ceiling" do
-    outcomes = race(6) { |i| post!("Post #{i}", key: "key-#{i}") }
-
-    assert_equal 2, outcomes.count { |outcome| outcome == "posted" }
-    assert_equal 4, outcomes.count { |outcome| outcome == "daily_limit_reached" }
-    assert_requested @stub, times: 2
-    assert_equal 2, @integration.tweet_logs.count
-  end
-
   test "simultaneous posts with one key send exactly once" do
-    @integration.update!(daily_post_limit: 20)
-
     outcomes = race(5) { post!("Same post", key: "one-key") }
 
     assert_equal [ "posted" ], outcomes.uniq.compact - [ "pending" ]
@@ -57,7 +46,6 @@ class XPosterConcurrencyTest < ActiveSupport::TestCase
   end
 
   test "a resolver waits for a send in progress and then sees its outcome; the post is sent once" do
-    @integration.update!(daily_post_limit: 20)
     sending = Queue.new
     release = Queue.new
     WebMock.reset!

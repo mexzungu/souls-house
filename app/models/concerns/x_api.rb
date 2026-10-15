@@ -68,11 +68,6 @@ module XApi
 
   private
 
-  def x_credentials(key)
-    Rails.application.credentials.dig(:x, key) ||
-      raise(ArgumentError, "X #{key} not configured in credentials")
-  end
-
   def save_tokens!(response)
     raise Error, "Token exchange failed: #{response.code}" unless response.is_a?(Net::HTTPSuccess)
 

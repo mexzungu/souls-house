@@ -3,9 +3,11 @@
 # The account comes only from the resident (agent.account), never from a
 # request parameter. Every post needs an idempotency key: a repeated key
 # returns the stored outcome and never posts again. The enabled switch and the
-# daily ceiling are checked under a row lock on the integration, and the
-# pending row is written inside that lock, so concurrent requests cannot
-# overshoot. A post whose fate we cannot know (timeout after sending, broken
+# account's X app are checked under a row lock on the integration, and the
+# pending row is written inside that lock, so switching posting off stops
+# every post that has not reserved yet. There is no house ceiling on posts:
+# the house app is only for accounts with a site admin in them, and every
+# other account pays X through its own app. A post whose fate we cannot know (timeout after sending, broken
 # connection, 5xx, unreadable 2xx) is stored as outcome_unknown and is never
 # retried automatically; someone has to resolve it.
 class XPoster
@@ -89,10 +91,8 @@ class XPoster
 
       raise Refused.new("not_connected", "This account has no connected X handle", :forbidden) unless integration.connected?
       raise Refused.new("posting_disabled", "Posting to X is turned off for this account", :forbidden) unless integration.enabled?
-
-      used = integration.tweet_logs.counting_toward_limit.where(created_at: 24.hours.ago..).count
-      if used >= integration.daily_post_limit
-        raise Refused.new("daily_limit_reached", "This account has used its #{integration.daily_post_limit} X posts for the last 24 hours", :too_many_requests)
+      unless integration.app_available?
+        raise Refused.new("no_x_app", "This account has no X app to post through; an account admin adds one on the X posting page", :forbidden)
       end
 
       log = integration.tweet_logs.create!(
@@ -117,6 +117,8 @@ class XPoster
 
       log.touch
       integration.lock!
+      raise XApi::Error, "The X connection or its app changed before sending" unless integration.connected? && integration.app_available?
+
       integration.refresh_tokens!
       integration.access_token
     end

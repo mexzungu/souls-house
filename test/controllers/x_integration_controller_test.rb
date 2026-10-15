@@ -17,13 +17,80 @@ class XIntegrationControllerTest < ActionDispatch::IntegrationTest
     props = inertia_props["props"]
     assert_equal @account.to_param, props["account_id"]
     assert props["can_manage"]
-    assert_equal 20, props.dig("integration", "daily_post_limit")
+    assert_nil props.dig("integration", "app_source")
+    assert_not props.dig("integration", "house_app_allowed")
+    assert_not props["integration"].key?("daily_post_limit")
+
+    @account.create_x_integration!(enabled: false, client_id: "own-cid", client_secret: "own-secret")
+    post x_integration_path(account_id: @account.to_param)
+    assert_response :redirect
+    assert_match %r{\Ahttps://x\.com/i/oauth2/authorize\?.*client_id=own-cid}, response.location
+    assert_not @account.reload.x_integration.enabled?
+  end
+
+  test "an account without a site admin cannot connect through the house app" do
+    sign_in(@owner)
 
     with_x_credentials do
       post x_integration_path(account_id: @account.to_param)
     end
-    assert_response :redirect
-    assert_not @account.reload.x_integration.enabled?
+
+    assert_redirected_to x_integration_path(account_id: @account.to_param)
+    assert_equal "Add this account's X app before connecting", flash[:alert]
+  end
+
+  test "an account with a site admin connects through the house app" do
+    @account.memberships.create!(user: users(:site_admin_user), role: "member", confirmed_at: Time.current)
+    sign_in(@owner)
+
+    with_x_credentials do
+      get x_integration_path(account_id: @account.to_param)
+      assert_equal "house", inertia_props.dig("props", "integration", "app_source")
+
+      post x_integration_path(account_id: @account.to_param)
+    end
+
+    assert_match %r{client_id=cid}, response.location
+  end
+
+  test "an admin saves the account's own X app; the secret never comes back to the page" do
+    sign_in(@owner)
+
+    put app_x_integration_path(account_id: @account.to_param), params: { x_app: { client_id: "own-cid", client_secret: "own-secret" } }
+
+    assert_redirected_to x_integration_path(account_id: @account.to_param)
+    integration = @account.reload.x_integration
+    assert_equal "own-cid", integration.client_id
+    assert_equal "own-secret", integration.client_secret
+
+    get x_integration_path(account_id: @account.to_param)
+    assert_equal "own", inertia_props.dig("props", "integration", "app_source")
+    assert_equal "own-cid", inertia_props.dig("props", "integration", "own_client_id")
+    assert_not_includes response.body, "own-secret"
+
+    delete app_x_integration_path(account_id: @account.to_param)
+    assert_not integration.reload.own_app?
+  end
+
+  test "an incomplete X app is refused with a message" do
+    sign_in(@owner)
+
+    put app_x_integration_path(account_id: @account.to_param), params: { x_app: { client_id: "own-cid", client_secret: "" } }
+
+    assert_redirected_to x_integration_path(account_id: @account.to_param)
+    assert_match "client secret", flash[:alert]
+    assert_not @account.reload.x_integration&.own_app?
+  end
+
+  test "an ordinary member cannot set or remove the account's X app" do
+    integration = @account.create_x_integration!(enabled: false, client_id: "own-cid", client_secret: "own-secret")
+    sign_in(@member)
+
+    put app_x_integration_path(account_id: @account.to_param), params: { x_app: { client_id: "theirs", client_secret: "theirs" } }
+    delete app_x_integration_path(account_id: @account.to_param)
+
+    assert_equal "own-cid", integration.reload.client_id
+    assert integration.own_app?
   end
 
   test "an ordinary member can see the page but cannot switch posting on" do

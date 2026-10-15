@@ -10,7 +10,7 @@ class XPosterTest < ActiveSupport::TestCase
   setup do
     @agent = agents(:research_assistant)
     @integration = XIntegration.create!(
-      account: @agent.account, enabled: true, x_username: "househandle",
+      account: @agent.account, enabled: true, x_username: "househandle", client_id: "own-cid", client_secret: "own-secret",
       access_token: "live-token", refresh_token: "refresh-1", token_expires_at: 2.hours.from_now
     )
   end
@@ -81,19 +81,24 @@ class XPosterTest < ActiveSupport::TestCase
     assert_not_requested :post, TWEETS_URL
   end
 
-  test "the daily ceiling counts posted, pending and unknown posts but not definite failures" do
-    @integration.update!(daily_post_limit: 3)
-    create_log(status: "posted", tweet_id: "1")
-    create_log(status: "outcome_unknown")
-    create_log(status: "failed")
-    create_log(status: "posted", tweet_id: "2", created_at: 25.hours.ago)
-    stub_x_post(id: "1005")
+  test "an account with no X app of its own and no site admin is refused before reserving" do
+    @integration.update_columns(client_id: nil, client_secret: nil)
+    assert_not @agent.account.includes_site_admin?
 
-    post!("Third", key: "k3")
-    error = assert_raises(XPoster::Refused) { post!("Fourth", key: "k4") }
+    error = assert_raises(XPoster::Refused) { post!("No app", key: "k1") }
 
-    assert_equal "daily_limit_reached", error.code
-    assert_equal :too_many_requests, error.http_status
+    assert_equal "no_x_app", error.code
+    assert_equal :forbidden, error.http_status
+    assert_equal 0, @integration.tweet_logs.count
+    assert_not_requested :post, TWEETS_URL
+  end
+
+  test "there is no daily ceiling" do
+    stub = stub_x_post(id: "1005")
+    25.times { |i| create_log(status: "posted", tweet_id: (5000 + i).to_s) }
+
+    assert_equal "posted", post!("Twenty-sixth today", key: "k26").log.status
+    assert_requested stub, times: 1
   end
 
   test "over-length text by X's weighted count is refused before reserving" do
@@ -226,7 +231,7 @@ class XPosterTest < ActiveSupport::TestCase
 
     assert_equal "failed", log.status
     assert_equal "unreachable", log.failure_reason
-    assert_equal 0, @integration.tweet_logs.counting_toward_limit.count
+    assert_not_requested :post, TWEETS_URL
   end
 
   test "X's 401, 403 and 429 become clear failure reasons" do
