@@ -35,7 +35,7 @@ const mira = { id: 'mira', name: 'Mira', colour: 'violet' };
 const lume = { id: 'lume', name: 'Lume', colour: 'orange' };
 const working = { rooms: { devRm: [mira, lume] }, all: [mira, lume] };
 
-test('the switcher spins beside a room where residents are working, in the newest colour', async ({ mount, page }) => {
+test('the switcher spins beside a room where residents are working, a ring for each', async ({ mount, page }) => {
   const component = await mount(RoomsHarness, { props: { account, rooms, current_room: 'lifeRm', waiting: { devRm: 1 }, working } });
   await component.getByTestId('room-switcher').click();
   const dev = page.getByRole('option', { name: /Dev/ });
@@ -46,8 +46,12 @@ test('the switcher spins beside a room where residents are working, in the newes
   await expect(dev).toContainText('1');
   await expect(page.getByRole('option', { name: /Life/ }).getByTestId('room-working')).toHaveCount(0);
   await expect(page.getByRole('option', { name: /All chats/ }).getByTestId('room-working')).toBeVisible();
-  const colour = await spinner.evaluate((el) => getComputedStyle(el).borderTopColor);
-  expect(colour).not.toBe('rgba(0, 0, 0, 0)');
+  const rings = spinner.getByTestId('room-working-ring');
+  await expect(rings).toHaveCount(2);
+  const colours = await rings.evaluateAll((els) => els.map((el) => getComputedStyle(el).borderTopColor));
+  expect(colours[0]).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colours[1]).not.toBe('rgba(0, 0, 0, 0)');
+  expect(colours[0]).not.toBe(colours[1]);
   await page.screenshot({ path: 'tmp/rooms-switcher-working.png' });
 });
 
