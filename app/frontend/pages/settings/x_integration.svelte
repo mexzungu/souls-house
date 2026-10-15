@@ -24,13 +24,17 @@
   function saveApp(event) {
     event.preventDefault();
     if (integration.connected && !confirm('Saving a different X app disconnects the handle. Continue?')) return;
-    router.put(appPath, { x_app: { client_id: clientId, client_secret: clientSecret } }, {
-      onSuccess: () => {
-        clientId = '';
-        clientSecret = '';
-        editingApp = false;
-      },
-    });
+    router.put(
+      appPath,
+      { x_app: { client_id: clientId, client_secret: clientSecret } },
+      {
+        onSuccess: () => {
+          clientId = '';
+          clientSecret = '';
+          editingApp = false;
+        },
+      }
+    );
   }
 
   function removeApp() {
@@ -76,8 +80,8 @@
     <h2 id="x-app-heading" class="font-semibold">X app</h2>
     {#if integration.app_source === 'own'}
       <p class="text-sm">
-        This account posts through its own X app (client id <code class="break-all">{integration.own_client_id}</code>). X
-        charges that app's credits for each post.
+        This account posts through its own X app (client id <code class="break-all">{integration.own_client_id}</code>).
+        X charges that app's credits for each post.
       </p>
     {:else if integration.app_source === 'house'}
       <p class="text-sm">
@@ -95,7 +99,9 @@
       </p>
     {/if}
     {#if integration.app_source !== 'house' || integration.own_app}
-      <p class="text-sm text-muted-foreground">Callback URL: <code class="break-all">{integration.callback_url}</code></p>
+      <p class="text-sm text-muted-foreground">
+        Callback URL: <code class="break-all">{integration.callback_url}</code>
+      </p>
     {/if}
 
     {#if can_manage}
@@ -176,9 +182,11 @@
     <section class="mt-8 space-y-3" aria-labelledby="x-posts-heading">
       <h2 id="x-posts-heading" class="font-semibold">Recent posts</h2>
       {#if integration.outcome_unknown_count > 0}
-        <p class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">
-          {integration.outcome_unknown_count} post{integration.outcome_unknown_count === 1 ? '' : 's'} may or may not have reached
-          X. They are never retried automatically. A resident resolves each one with soulshouse-x resolve after checking the handle.
+        <p
+          class="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+          {integration.outcome_unknown_count} post{integration.outcome_unknown_count === 1 ? '' : 's'} may or may not have
+          reached X. They are never retried automatically. A resident resolves each one with soulshouse-x resolve after checking
+          the handle.
         </p>
       {/if}
       {#if recent_posts.length === 0}
