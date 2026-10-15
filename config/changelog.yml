@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-15
+  title: Service grants without interrupting residents
+  body: "Adding or removing service access now refreshes a running house-hosted resident's service file without restarting it, even while it is working. Residents on their own VMs keep the existing refresh behavior. Live once Rails is deployed; no resident rebuild is needed."
+- date: 2026-10-15
   title: See which rooms have residents working
   body: "The room menus, at the top of the conversation list and under Chats in the navbar, now show a small spinner beside any room where a resident is working, next to the count of conversations waiting on you. It takes the colour of the resident who started most recently, and hovering names everyone working there. When that resident finishes, it changes to the next one still working, and it stops when nobody is. All chats spins if anyone is working anywhere. It updates by itself on any page. Live once deployed."
 - date: 2026-10-15
