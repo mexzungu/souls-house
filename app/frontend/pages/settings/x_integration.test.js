@@ -20,7 +20,7 @@ const base = {
   house_app_allowed: false,
   own_app: false,
   own_client_id: null,
-  callback_url: 'https://souls.house/x_integration/callback',
+  callback_url: 'https://house.example.test/x_integration/callback',
   outcome_unknown_count: 0,
 };
 
@@ -29,7 +29,7 @@ describe('X posting page', () => {
     render(XIntegration, { account_id: 'acct', integration: base, can_manage: true });
 
     expect(screen.getByText(/this account needs its own X app/)).toBeInTheDocument();
-    expect(screen.getByText('https://souls.house/x_integration/callback')).toBeInTheDocument();
+    expect(screen.getByText('https://house.example.test/x_integration/callback')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Connect with X/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/posts in any 24 hours/)).not.toBeInTheDocument();
 
