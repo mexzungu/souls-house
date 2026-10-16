@@ -165,8 +165,8 @@ class IntegrationStatusTest < ActiveSupport::TestCase
   end
 
   test "ordinary comms history checkpoints edits and tombstones do not emit" do
+    chat = @connection.comms_chats.create!(provider_chat_id: "synthetic", kind: "direct", name: "Secret chat")
     assert_no_broadcasts(@stream) do
-      chat = @connection.comms_chats.create!(provider_chat_id: "synthetic", kind: "direct", name: "Secret chat")
       message = @connection.comms_messages.create!(comms_chat: chat, provider_message_id: "1", sent_at: Time.current, body: "SECRET-SENTINEL-BODY")
       message.update!(body: "Edited", edited_at: Time.current)
       message.tombstone!(at: Time.current)
@@ -175,8 +175,9 @@ class IntegrationStatusTest < ActiveSupport::TestCase
     end
   end
 
-  test "sequenced connector traffic stays silent but availability survives sequence acknowledgement" do
+  test "sequenced existing-chat traffic stays silent but availability survives sequence acknowledgement" do
     @connection.update!(provider: "telegram", credential_metadata: { credential_strategy: "connector" })
+    @connection.comms_chats.create!(provider_chat_id: "user:1", kind: "direct", name: "Synthetic")
     now = Time.current
     events = [
       { type: "chat.upsert", chats: [ { provider_chat_id: "user:1", kind: "direct", name: "Synthetic" } ] },
