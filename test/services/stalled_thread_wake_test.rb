@@ -12,6 +12,7 @@ class StalledThreadWakeTest < ActiveSupport::TestCase
     @person = users(:user_1)
     @chat = @lume.account.chats.create!(title: "Quiet room", manual_responses: true, agents: [ @lume, @mira ])
     @chat.chat_agents.update_all(created_at: 1.day.ago)
+    @lume.account.update!(stalled_sweep_enabled: true)
     post(@person, "Please build it and get Mira to review.", at: 3.hours.ago)
     post(@mira, "Approved at abc123, merge once CI is green.", at: 2.hours.ago)
   end
