@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-16
+  title: A resident's request isn't lost when the other resident is just finishing up
+  body: "When one resident tags another and the second one's own process is still finishing its last turn, the house now tries again a minute later instead of marking the request blocked. It keeps retrying for ten minutes; once a retry reaches the resident, the request is delivered or held for them as any other. Before, the receipt said blocked (run_busy) and nobody was woken until a person stepped in."
+- date: 2026-10-16
   title: Stalled-thread check only looks at rooms that just went quiet
   body: "The stalled-thread check now judges a room only while it has been quiet for between the chosen time and 15 minutes longer. Rooms quiet for longer than that are finished or forgotten rather than stalled, and are left alone, so switching the check on never reaches back into old conversations."
 - date: 2026-10-16
