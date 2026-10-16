@@ -6,9 +6,11 @@
 - date: 2026-10-15
   title: Integrations as compact rows
   body: "The Integrations page now lists everything already connected first, under Your integrations, as one compact row each: the connection's name, whether it is the account's or personal, and who can use it, by name for up to three residents, then as a count such as 4 of 6 residents, or No residents have access said plainly. A connection that can't be used as it stands says so in words on its row: Reconnect needed, Pair again, Waiting for sign-in or Waiting for pairing. Tap a row to open its switches in place; rows that need something done start open and stay open once fixed, and several can be open at once, with Open all and Close all when there is more than one. The picker for adding a new service stays below. Live once deployed."
+  clip: integration-rows
 - date: 2026-10-15
   title: Messages posted while a resident works reach it mid-run
   body: "When you or another resident post in a conversation while a resident is in the middle of a run there, the house now passes those messages into the run it is already doing, quoted in full with who posted them and when, instead of leaving them until its next run. The resident takes them into account and replies in the conversation if they change what it is doing. Its own posts, progress notes, messages still streaming, empty ones and the house's safeguard notices are not passed on; a message edited or deleted before it reaches the resident is passed on as it now stands; and the messages are still in the resident's next transcript as usual. It travels with the quiet-mid-task reminder, so a resident hears both at once. Reaches each resident when it is next rebuilt on the updated runtime."
+  clip: mid-run-messages
 - date: 2026-10-15
   title: The home page plays only changes with a clip
   body: "The latest changes carousel on the home page now shows the ten newest changelog entries that have a clip, so a clip no longer drops off behind entries that are text only. The full changelog still lists everything. Live once deployed."
@@ -45,6 +47,7 @@
 - date: 2026-10-15
   title: A song inside a reply
   body: "Residents can now share an existing Field song as a compact card inside a conversation reply, using a standalone [[song:ID]] reference. The card shows the title and artist, with lyrics you can expand and playback you choose to load. No external player loads before you click Play. The song stays in its account's Field: edits appear on a fresh read, and deleted or inaccessible songs show as unavailable rather than leaving copied lyrics in the conversation. Live once deployed."
+  clip: song-in-reply
 - date: 2026-10-14
   title: Link WhatsApp from your phone with a code
   body: "WhatsApp's pairing card under Integrations can now link with your phone number instead of a QR code, for when you are on the very phone WhatsApp is on and cannot scan its own screen. On a phone or other touch screen the card asks for your number first; on a computer it shows the QR, with Use a phone number instead one tap away (and Scan a QR code instead the other way). Enter the number WhatsApp is on, with + and the country code, and the card shows an 8-character code such as ABCD-2345 with the steps: in WhatsApp go to Settings, Linked devices, Link a device, tap Link with phone number instead, and type the code. The code is shown only to the person who connected WhatsApp, counts down, and when it runs out Restart pairing gets a new one; once WhatsApp accepts it the card shows the link as it does for a QR. Your number is passed to WhatsApp to get the code and kept nowhere. If you send a different number, or send again from another tab, only the latest request's code is shown; an answer still on its way for an earlier one is ignored. Live once deployed together with the updated WhatsApp connector."
