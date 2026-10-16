@@ -39,18 +39,27 @@ class FieldSongOfferConcurrencyTest < ActiveSupport::TestCase
           offer.save!(title: "Second title", artist: "Second artist", by: @user)
         end
       end
-      backend_pid = Timeout.timeout(10) { started.pop }
-      blocked = Timeout.timeout(10) do
-        loop do
-          # Lock state changes outside this connection. A cached initial zero
-          # can otherwise make the poll time out even while PostgreSQL blocks.
-          waiting = ActiveRecord::Base.uncached do
-            ActiveRecord::Base.connection.select_value("SELECT cardinality(pg_blocking_pids(#{backend_pid}))").to_i.positive?
-          end
-          break true if waiting
-          break false unless second.alive?
-          Thread.pass
+      # Not Timeout: on a stall, say where the second thread is stuck. It has
+      # stalled here on CI (2026-10-16, #399) without raising, then finished
+      # once the first save was released, so it waits on something the first
+      # holds, and the backtrace and pool state should name it.
+      backend_pid = started.pop(timeout: 10) or
+        flunk "the second thread never reached its first query (status #{second.status.inspect}, " \
+              "pool #{ActiveRecord::Base.connection_pool.stat.inspect}):\n#{Array(second.backtrace).first(25).join("\n")}"
+      # Uncached: every test runs inside the executor, which turns the query
+      # cache on for this thread, so a cached poll would replay its first
+      # answer for the whole wait. When the first poll ran before the second
+      # thread reached the lock, that answer was "not blocked" forever (master
+      # reds on 2026-10-15 and 16).
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 10
+      blocked = loop do
+        waiting = ActiveRecord::Base.uncached do
+          ActiveRecord::Base.connection.select_value("SELECT cardinality(pg_blocking_pids(#{backend_pid}))").to_i.positive?
         end
+        break true if waiting
+        break false unless second.alive?
+        flunk "the second save was still running after 10 s without waiting on any lock" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+        sleep 0.02
       end
       assert blocked, "the second save must actually wait on the first transaction's account row lock"
     ensure
