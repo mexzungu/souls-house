@@ -170,6 +170,30 @@ class Api::V1::CompanionOperationsTest < ActionDispatch::IntegrationTest
     assert_response :gone
   end
 
+  test "empty write input dispatches and is consumed only once" do
+    enroll_mutation_fixture
+    post "/api/v1/companion_devices/#{@device.to_param}/operations",
+      params: { operation: "write", arguments: { volume: "fixture-volume", path: "empty-fixture", input_size: 0 } },
+      headers: bearer(@key.raw_token), as: :json
+    assert_response :accepted
+    id = response.parsed_body.fetch("id")
+    input_path = "/api/v1/companion_devices/#{@device.to_param}/operations/#{id}/input"
+    headers = bearer(@key.raw_token).merge("CONTENT_TYPE" => "application/octet-stream")
+    put input_path, params: "", headers: headers
+    assert_response :created
+    operation = CompanionOperation.find(id)
+    assert_equal "dispatched", operation.state
+    assert_equal "", operation.input.data
+    put input_path, params: "", headers: headers
+    assert_response :conflict
+    device_headers = bearer(@credential).merge("X-Companion-Epoch" => "epoch", "X-Companion-Revision" => "1")
+    get "/api/v1/companion/operations/#{id}/input", headers: device_headers
+    assert_response :success
+    assert_equal "", response.body
+    get "/api/v1/companion/operations/#{id}/input", headers: device_headers
+    assert_response :gone
+  end
+
   test "execute result is HTTP bounded rather than the inline JSON limit" do
     enroll_mutation_fixture(execute: true)
     input = '{"argv":["/usr/bin/true"],"cwd":"/"}'

@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-16
+  title: Companion empty-file writes
+  body: "Authorized Companion write operations now accept zero-byte inputs, so residents can create empty files. Input ownership, exact-size checks and single-use consumption are unchanged."
+- date: 2026-10-16
   title: Companion empty-result receipts
   body: "Companion operations can report a refusal without sending file contents, and empty files can be read successfully. Empty raw result uploads no longer fail with a server error."
 - date: 2026-10-16
