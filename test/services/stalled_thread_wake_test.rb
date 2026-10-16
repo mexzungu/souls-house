@@ -208,7 +208,7 @@ class StalledThreadWakeTest < ActiveSupport::TestCase
   end
 
   test "nothing happens if the room moved on before the wake" do
-    StalledThreadSweeper.new(now: 1.hour.from_now, interval: 10.minutes, wake: false, decide: answers(lume: 0.9)).call
+    StalledThreadSweeper.new(now: 1.hour.from_now, interval: 10.minutes, window: 1.day, wake: false, decide: answers(lume: 0.9)).call
     post(@person, "Never mind, I merged it.", at: 1.second.from_now)
     assert_no_difference(-> { AgentRuntimeInteraction.count }) { StalledThreadWake.new(StalledThreadSweep.sole).call }
   end
@@ -220,8 +220,9 @@ class StalledThreadWakeTest < ActiveSupport::TestCase
       trigger_bearer_token: "tr_valid", health_state: "healthy", consecutive_health_failures: 0)
   end
 
+  # A wide window: these tests are about waking, not about which rooms are recent enough.
   def sweeper(decide:, wake: true)
-    StalledThreadSweeper.new(now: 1.hour.from_now, interval: 10.minutes, wake: wake, decide: decide)
+    StalledThreadSweeper.new(now: 1.hour.from_now, interval: 10.minutes, window: 1.day, wake: wake, decide: decide)
   end
 
   def sweep(lume: 0.1, mira: 0.1, wake: true)

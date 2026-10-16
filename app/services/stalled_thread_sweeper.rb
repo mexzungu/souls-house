@@ -10,18 +10,22 @@
 #
 # A room is a candidate when it is active and respondable, has residents, its
 # account has opted in and is enabled, its last message (StalledThreadSnapshot's
-# definition) is older than the interval, and that state has no verdict yet.
+# definition) is older than the interval but no older than the interval plus
+# WINDOW, and that state has no verdict yet. A room quiet for longer than that
+# is finished or forgotten rather than stalled, and is left alone; with the
+# five-minute tick each quiet state gets about three chances to be judged.
 # Candidates are ordered most recently quiet first, and each tick resumes the
 # list where the previous one stopped (Setting#stalled_sweep_cursor), wrapping
 # round. Rooms with a run going are skipped without a row and don't use the
-# per-tick verdict budget; a room quiet for days is still judged, once, as the
-# backlog drains.
+# per-tick verdict budget.
 class StalledThreadSweeper
 
   INTERVALS = [ 0, 10, 30, 60 ].freeze
   PER_TICK = 20
   # Bounds the cheap checks (busy rooms) a tick may make before giving up.
   MAX_CHECKS_PER_TICK = 200
+  # How long past the interval a quiet room stays a candidate.
+  WINDOW = 15.minutes
   PROMPT_VERSION = "v3".freeze
 
   def self.interval
@@ -34,9 +38,10 @@ class StalledThreadSweeper
   end
 
   def initialize(now: Time.current, interval: self.class.interval, decide: UtilityInference.method(:decide),
-    wake: StalledThreadWake.enabled?)
+    wake: StalledThreadWake.enabled?, window: WINDOW)
     @now = now
     @interval = interval
+    @window = window
     @decide = decide
     @wake = wake
   end
@@ -71,7 +76,8 @@ class StalledThreadSweeper
       .where(id: ChatAgent.select(:chat_id))
       .includes(:account, :agents).to_a
     lasts = StalledThreadSnapshot.last_messages(chats.map(&:id))
-    quiet = lasts.values.select { |message| message.created_at <= @now - @interval }
+    oldest = @now - @interval - @window
+    quiet = lasts.values.select { |message| message.created_at.between?(oldest, @now - @interval) }
     judged = StalledThreadSweep.where(message_id: quiet.map(&:id)).pluck(:message_id).to_set
     by_id = chats.index_by(&:id)
     quiet.reject { |message| judged.include?(message.id) }
