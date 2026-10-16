@@ -10,7 +10,7 @@ A new provider **sits alongside** what exists. It does not replace it, change it
 
 ## The parts of an integration
 
-Every integration has the same three parts. Copy the closest existing one. For a key-only service, `twitterapi_io` and `pipedrive_token` are the smallest.
+Every integration has the same three parts. Copy the closest existing one. For a key-only service, `twitterapi_io` and `pipedrive` are the smallest.
 
 1. **A catalog entry** in `app/models/services/catalog.rb` (`Services::Definition.register`). It gives the stable `key` (`snake_case`, never renamed later), `name`, `management_scopes` (`account_managed` for anything that spends the account's money), `connection_method` (`credentials` for a pasted key), `credential_strategy` (`static` for a key that doesn't refresh), `api_origins`, `documentation` links, `credential_fields` (the form, with `type: "password"` for secrets and `help` text saying where to find the key), `runtime_notes` (what a resident granted the key needs to know: how to send it, what each call costs, what not to do) and `adapter_class`. Use `requires_env` if the service can't work without host configuration.
 2. **An adapter** in `app/models/services/<name>_adapter.rb`. `connection_attributes(credentials:, user:)` checks the credential against the provider **with a call that costs nothing** (a balance or account-info endpoint) and returns the connection attributes. `revoke(connection)` says what disconnecting does. Follow `Services::TwitterApiIoAdapter`:
