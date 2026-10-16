@@ -1,4 +1,4 @@
-import { render } from '@testing-library/svelte';
+import { render, screen } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { writable } from 'svelte/store';
 import { expect, test, vi } from 'vitest';
@@ -28,7 +28,7 @@ test('navbar watches all confirmed accounts, keeps stable subscriptions and remo
   const accountCalls = () => subscribe.mock.calls.filter(([model]) => model === 'Account');
   expect(accountCalls()).toEqual([
     ['Account', 'two', ['accounts', 'expired_subscriptions']],
-    ['Account', 'one', ['accounts', 'expired_subscriptions']],
+    ['Account', 'one', ['accounts', 'expired_subscriptions', 'account', 'is_account_admin']],
   ]);
   expect(subscribe).toHaveBeenCalledWith('ReplyAttention', 'me', [
     'reply_attention',
@@ -39,22 +39,55 @@ test('navbar watches all confirmed accounts, keeps stable subscriptions and remo
     model === 'Account' ? [subscribe.mock.results[index].value] : []
   );
   page.set({
-    props: { ...props, account: props.accounts[0], accounts: [...props.accounts].reverse() },
+    props: { ...props, account: { ...props.account, name: 'Renamed' }, accounts: [...props.accounts].reverse() },
   });
   await tick();
+  expect(screen.getByRole('link', { name: 'Renamed' })).toHaveAttribute('href', '/');
   expect(accountCalls()).toHaveLength(2);
   for (const unsubscribe of initialAccountUnsubscribers) expect(unsubscribe).not.toHaveBeenCalled();
+
+  page.set({ props: { ...props, account: props.accounts[0] } });
+  await tick();
+  for (const unsubscribe of initialAccountUnsubscribers) expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(accountCalls().slice(-2)).toEqual([
+    ['Account', 'two', ['accounts', 'expired_subscriptions', 'account', 'is_account_admin']],
+    ['Account', 'one', ['accounts', 'expired_subscriptions']],
+  ]);
 
   page.set({ props: { ...props, accounts: [props.accounts[1]] } });
   await tick();
   for (const unsubscribe of initialAccountUnsubscribers) expect(unsubscribe).toHaveBeenCalledOnce();
-  expect(accountCalls().at(-1)).toEqual(['Account', 'one', ['accounts', 'expired_subscriptions']]);
+  expect(accountCalls().at(-1)).toEqual([
+    'Account',
+    'one',
+    ['accounts', 'expired_subscriptions', 'account', 'is_account_admin'],
+  ]);
   const lastAccountIndex = subscribe.mock.calls.findLastIndex(([model]) => model === 'Account');
   const last = subscribe.mock.results[lastAccountIndex].value;
   page.set({ props: {} });
   await tick();
   expect(last).toHaveBeenCalledOnce();
   component.unmount();
+});
+
+test('navbar does not create a current-account channel when it is absent from confirmed accounts', async () => {
+  page.set({
+    props: {
+      user: { id: 'me' },
+      account: { id: 'not-listed', name: 'Not listed' },
+      accounts: [{ id: 'other', name: 'Other' }],
+    },
+  });
+  render(Navbar);
+  await tick();
+  expect(subscribe.mock.calls.filter(([model]) => model === 'Account')).toEqual([
+    ['Account', 'other', ['accounts', 'expired_subscriptions']],
+  ]);
+  expect(subscribe).toHaveBeenCalledWith('ReplyAttention', 'me', [
+    'reply_attention',
+    'accounts',
+    'expired_subscriptions',
+  ]);
 });
 
 test('room navigation watches only the active account, even empty, without resubscribing on reload', async () => {

@@ -23,6 +23,9 @@
   title: Background refreshes avoid external status checks
   body: "Resident health refreshes no longer inspect export runtime state, and navigation updates no longer refetch GitHub repositories. Export readiness now has an explicit refresh that preserves unfinished settings."
 - date: 2026-10-16
+  title: Open account settings stay current
+  body: "Account names, logo colours, membership options and resident handoff limits now follow changes across open settings pages and the navbar. Refreshes keep unfinished settings, invitations and visual-tag edits; untouched name and handoff inputs follow the current saved values."
+- date: 2026-10-16
   title: Provider connection status stays fresh
   body: "Persisted provider connection changes now update open resident and model-key panels without losing unfinished credentials or interrupting an active sign-in. Status-only reloads no longer regenerate unrelated Telegram links."
 - date: 2026-10-16
