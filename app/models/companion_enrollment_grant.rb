@@ -61,6 +61,22 @@ class CompanionEnrollmentGrant < ApplicationRecord
     raise InvalidPolicy, "Invalid companion policy"
   end
 
+  def authority_warnings
+    residents = policy.fetch("residents")
+    warnings = []
+    if residents.any? { |resident| resident.fetch("volumes").any? { |volume| volume["access"] == "write" } }
+      warnings << "Write access to a volume containing the service user's home must be treated as deferred " \
+        "arbitrary code execution as that user (for example, by modifying .bashrc or other startup files), " \
+        "even without an execute grant."
+    end
+    if residents.any? { |resident| resident["execute"] }
+      warnings << "Execute grants allow arbitrary code execution with the service user's OS authority. " \
+        "Executed programs can rewrite state.json, including the local ceiling. The companion is not a " \
+        "sandbox, and the local ceiling is not an enforceable limit against an execute-granted actor."
+    end
+    warnings
+  end
+
   def issue_token!(agent)
     with_lock do
       return unless agent && agent.id == minting_agent_id && agent.account_id == account_id &&

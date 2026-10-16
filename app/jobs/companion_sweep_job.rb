@@ -11,6 +11,7 @@ class CompanionSweepJob < ApplicationJob
     CompanionEnrollmentGrant.where(enrollment_retry_until: ..now).where.not(enrollment_response: nil)
       .update_all(enrollment_response: nil)
     CompanionOperationBody.where(expires_at: ..now).delete_all
+    CompanionOperationInput.where(expires_at: ..now).delete_all
   end
 
 end

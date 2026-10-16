@@ -5,6 +5,16 @@ class CompanionOperation < ApplicationRecord
   class Refused < StandardError; end
 
   READ_KINDS = %w[drives list stat search read].freeze
+  WRITE_KINDS = %w[mkdir write copy move rename trash].freeze
+  ARGUMENT_KEYS = {
+    "mkdir" => %w[volume path],
+    "write" => %w[volume path mode input_size],
+    "copy" => %w[source_volume source_path volume path],
+    "move" => %w[source_volume source_path volume path],
+    "rename" => %w[volume path destination],
+    "trash" => %w[volume path quarantine],
+    "execute" => %w[input_size timeout_seconds]
+  }.freeze
   ACTIVE_STATES = %w[pending dispatched].freeze
   MAX_BODY = 8.megabytes
   MAX_INLINE = 64.kilobytes
@@ -13,11 +23,22 @@ class CompanionOperation < ApplicationRecord
   belongs_to :companion_device
   belongs_to :agent
   has_one :body, class_name: "CompanionOperationBody", dependent: :destroy
+  has_one :input, class_name: "CompanionOperationInput", dependent: :destroy
 
   def self.start!(device:, agent:, kind:, arguments:)
-    raise Refused, "Unsupported read operation" unless READ_KINDS.include?(kind)
+    raise Refused, "Unsupported operation" unless READ_KINDS.include?(kind) || ARGUMENT_KEYS.key?(kind)
     raise Refused, "Invalid arguments" unless arguments.is_a?(Hash) && arguments.to_json.bytesize <= 8.kilobytes
-    raise Refused, "Unexpected arguments" unless (arguments.keys - %w[volume path offset limit pattern cursor]).empty?
+    keys = ARGUMENT_KEYS.fetch(kind, %w[volume path offset limit pattern cursor])
+    raise Refused, "Unexpected arguments" unless (arguments.keys - keys).empty?
+    if %w[write execute].include?(kind)
+      size = arguments["input_size"]
+      raise Refused, "Invalid input size" unless size.is_a?(Integer) && size.between?(0, MAX_BODY)
+    end
+    if kind == "write"
+      raise Refused, "Invalid write mode" unless %w[create overwrite append].include?(arguments.fetch("mode", "create"))
+    end
+    timeout = kind == "execute" ? arguments.fetch("timeout_seconds", 30) : 30
+    raise Refused, "Invalid timeout" unless timeout.is_a?(Integer) && timeout.between?(1, 300)
 
     device.with_lock do
       where(companion_device: device, state: ACTIVE_STATES).where(deadline: ..Time.current).update_all(state: "timed_out", outcome: "deadline")
@@ -26,7 +47,7 @@ class CompanionOperation < ApplicationRecord
       raise Refused, "Device busy" if where(companion_device: device, state: ACTIVE_STATES).count >= 4
 
       create!(companion_device: device, agent: agent, kind: kind, arguments: arguments,
-        connection_epoch: device.connection_epoch, grant_revision: device.grant_revision, deadline: 30.seconds.from_now)
+        connection_epoch: device.connection_epoch, grant_revision: device.grant_revision, deadline: timeout.seconds.from_now)
     end
   end
 
@@ -36,8 +57,48 @@ class CompanionOperation < ApplicationRecord
     resident = device.policy.fetch("residents", []).find { |r| r["id"] == agent.obfuscated_id }
     return false unless resident
     return true if kind == "drives"
+    return resident["execute"] == true if kind == "execute"
 
-    resident.fetch("volumes", []).any? { |g| g["volume"] == arguments["volume"] && %w[read write].include?(g["access"]) }
+    grants = resident.fetch("volumes", [])
+    allowed = ->(volume, write) do
+      grants.any? { |g| g["volume"] == volume && (write ? g["access"] == "write" : %w[read write].include?(g["access"])) }
+    end
+    return false unless allowed.call(arguments["volume"], WRITE_KINDS.include?(kind))
+    return allowed.call(arguments["source_volume"], kind == "move") if %w[copy move].include?(kind)
+
+    true
+  end
+
+  def input_required?
+    kind.in?(%w[write execute])
+  end
+
+  # The upload is actor/device/operation-bound; never place file bytes, argv or
+  # stdin in the long-lived arguments/audit row or on the Cable envelope.
+  def attach_input!(data)
+    companion_device.with_lock do
+      with_lock do
+        raise Refused, "Input unavailable" unless state == "pending" && input_required? && deliverable?
+        raise Refused, "Input already supplied" if input
+        raise Refused, "Invalid input size" unless data.is_a?(String) && data.bytesize == arguments["input_size"] && data.bytesize <= MAX_BODY
+
+        create_input!(data: data.b, expires_at: [ deadline, 10.minutes.from_now ].min)
+      end
+    end
+  end
+
+  def take_input!(epoch:, revision:)
+    companion_device.with_lock do
+      with_lock do
+        return unless state == "dispatched" && epoch == connection_epoch && revision == grant_revision && deliverable?
+
+        saved = input
+        return unless saved
+        data = saved.expires_at.future? ? saved.data : nil
+        saved.destroy!
+        data
+      end
+    end
   end
 
   # The row exists before any broadcast. Reconnect never replays it.
@@ -45,6 +106,7 @@ class CompanionOperation < ApplicationRecord
     companion_device.with_lock do
       with_lock do
         return false unless state == "pending" && deliverable?
+        return false if input_required? && (!input || input.expires_at <= Time.current)
 
         update!(state: "dispatched")
         CompanionChannel.broadcast_to(companion_device, envelope)
@@ -56,7 +118,8 @@ class CompanionOperation < ApplicationRecord
   def envelope
     { type: "request", request_id: obfuscated_id, device_id: companion_device.obfuscated_id,
       resident_id: agent.obfuscated_id, grant_revision: grant_revision, connection_epoch: connection_epoch,
-      deadline: deadline.iso8601(6), operation: kind, arguments: arguments, policy: companion_device.policy }
+      deadline: deadline.iso8601(6), operation: kind, arguments: arguments, input_required: input_required?,
+      policy: companion_device.policy }
   end
 
   def deliverable?

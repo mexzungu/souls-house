@@ -34,6 +34,21 @@ module Api
         send_data saved[0], type: saved[1], disposition: "attachment", filename: "companion-result"
       end
 
+      def input
+        return head :unsupported_media_type unless request.media_type == "application/octet-stream"
+        return head :content_too_large if request.content_length.to_i > CompanionOperation::MAX_BODY
+
+        data = request.body.read(CompanionOperation::MAX_BODY + 1)
+        return head :content_too_large if data.bytesize > CompanionOperation::MAX_BODY
+
+        operation = find_operation
+        operation.attach_input!(data)
+        operation.dispatch!
+        head :created
+      rescue CompanionOperation::Refused
+        head :conflict
+      end
+
       private
 
       def require_resident
