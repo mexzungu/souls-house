@@ -2,7 +2,7 @@ require "test_helper"
 require "support/app_oauth_test_helper"
 
 # Issue #94, PR A: the auth spike. Every case goes through Doorkeeper's real
-# /oauth/authorize, /oauth/token and /oauth/revoke paths on the pinned 5.9.7,
+# /oauth/authorize, /oauth/token and /oauth/revoke paths on the pinned Doorkeeper,
 # not helpers. The truly concurrent cases live in oauth_concurrency_test.rb.
 class Api::App::V1::OauthFlowTest < ActionDispatch::IntegrationTest
 
