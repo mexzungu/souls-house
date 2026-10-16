@@ -124,6 +124,10 @@
           <time class="text-muted-foreground/70" datetime={message.created_at}>· {formatTime(message.created_at)}</time
           ></span>
         <span>{message.content}</span>
+        {#if /^\/(?![\/\\])/.test(message.notice_link?.path ?? '')}
+          <a class="ml-1 underline hover:text-foreground" href={message.notice_link.path}
+            >{message.notice_link.label}</a>
+        {/if}
       </p>
     </div>
   {:else}
@@ -156,6 +160,7 @@
                   {/if}
                   <AssistantMessageSection
                     message={section}
+                    {accountId}
                     streamingThinking={sectionThinking[section.id] ||
                       (section.id === message.id ? streamingThinking : '')}
                     {isGroupChat}

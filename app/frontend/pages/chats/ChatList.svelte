@@ -10,8 +10,10 @@
 
   const updateSync = createDynamicSync();
   $effect(() => {
-    updateSync({ [`Account:${accountId}`]: ['chats', 'visual_tags'] });
+    updateSync({ [`Account:${accountId}`]: ['chats', 'visual_tags', 'rooms', 'current_room'] });
   });
+
+  const hasRooms = $derived(($page.props.rooms || []).length > 0);
 
   // Check if user can see deleted chats
   const canSeeDeleted = $derived($page.props.is_account_admin || $page.props.user?.site_admin);
@@ -48,6 +50,8 @@
               md:relative md:translate-x-0 md:z-auto
               {isOpen ? 'translate-x-0' : '-translate-x-full'}">
   <ChatSidebarHeader
+    {accountId}
+    {hasRooms}
     {canSeeDeleted}
     {showDeleted}
     onCreate={createNewChat}

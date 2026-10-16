@@ -1,5 +1,19 @@
 class ExternalAgentResponseRequest
 
+  # How a transcript names a message's author. Shared with the mid-run
+  # messages a running resident is shown (AgentRuntimeInteraction).
+  def self.speaker_for(message)
+    if message.agent
+      message.agent.name
+    elsif message.user
+      message.user.email_address
+    elsif message.role == "system"
+      "souls.house (platform)"
+    else
+      message.role
+    end
+  end
+
   TRANSCRIPT_MESSAGE_LIMIT = 30
   TRANSCRIPT_BYTE_BUDGET = 80_000
   TRANSCRIPT_SEPARATOR = "\n\n"
@@ -213,8 +227,14 @@ class ExternalAgentResponseRequest
     @interaction&.follow_through_of
   end
 
+  # The stalled-thread sweep that woke this run, when one did.
+  def stalled_sweep_source
+    @interaction&.stalled_thread_sweep
+  end
+
   def trigger_intro_text
     return FollowThroughCheck.new(follow_through_source).nudge_text if follow_through_source
+    return stalled_sweep_source.nudge_text if stalled_sweep_source
     if rhythm_invitation
       return "A scheduled rhythm has opened conversation #{chat.to_param}. Its opening was saved by the creator earlier; they have not necessarily just typed a message or pressed the agent button."
     end
@@ -226,7 +246,7 @@ class ExternalAgentResponseRequest
   end
 
   def confirmation_text
-    return "No person pressed anything for this run. It continues work you had already taken on, under whatever authorisation you had then; it adds none." if follow_through_source
+    return "No person pressed anything for this run. It continues work you had already taken on, under whatever authorisation you had then; it adds none." if follow_through_source || stalled_sweep_source
     return "This is the creator's standing invitation, not a fresh instruction or an expansion of permissions. No separate confirmation is needed merely to reply; nothing to bring forward is a valid outcome." if rhythm_invitation
 
     if recent_human_message?
@@ -238,6 +258,7 @@ class ExternalAgentResponseRequest
 
   def response_expectation_text
     return "Close the gap the check found: finish the step, or say in the room what is blocking it, or confirm in one line that it already happened. Do not post just to acknowledge this nudge." if follow_through_source
+    return "If the room shows a step that is yours, take it or say what blocks it. If it doesn't, stay quiet or say so in one line. Do not post just to acknowledge this wake." if stalled_sweep_source
     return "Decide whether there is anything worth bringing forward from this invitation. A reply may be useful; quiet is also valid. Do not manufacture a finding to justify the rhythm." if rhythm_invitation
 
     if recent_human_message?
@@ -285,11 +306,19 @@ class ExternalAgentResponseRequest
     <<~TEXT.strip
       Conversation metadata:
       - id: #{chat.to_param}
-      - title: #{chat.title_or_default}
+      - title: #{chat.title_or_default}#{room_line}
       - agents: #{agents.any? ? agents.join(", ") : "_none recorded_"}
       - humans_seen_in_transcript: #{humans.any? ? humans.join(", ") : "_none in stored messages_"}
       #{account_line}
     TEXT
+  end
+
+  # The room is a hint about what the conversation is for, not an instruction.
+  # Only residents at home see it, and only once the account has rooms.
+  def room_line
+    return "" unless chat.account_id == agent.account_id && chat.account.rooms.exists?
+
+    "\n- room: #{chat.room&.name || Room::MAIN}"
   end
 
   # Say plainly when the resident is a guest in the room's account, so context
@@ -342,15 +371,7 @@ class ExternalAgentResponseRequest
   def format_transcript_line(message)
     return format_safeguard_transcript_line(message) if message.safeguard_labelled?
 
-    speaker = if message.agent
-      message.agent.name
-    elsif message.user
-      message.user.email_address
-    elsif message.role == "system"
-      "souls.house (platform)"
-    else
-      message.role
-    end
+    speaker = self.class.speaker_for(message)
 
     # IDs distinguish stored turns from ordinary "Name:" addresses in a body
     # and let residents verify attribution through the conversation API.

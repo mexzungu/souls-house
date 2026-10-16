@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/experimental-ct-svelte';
 import RecordingPage from '../../app/frontend/pages/field/recordings/show.svelte';
 import FieldPage from '../../app/frontend/pages/field/index.svelte';
 import VoicesPage from '../../app/frontend/pages/field/voices.svelte';
+import RecordingViewer from '../../app/frontend/lib/components/field/RecordingViewer.svelte';
 
 // Recordings in the Field (spec §7). Names here are made up.
 const account = { id: 'acct1', name: 'Wren House' };
@@ -46,6 +47,7 @@ const recording = {
   audio_url: '/rails/active_storage/blobs/x/board-call.m4a',
   words,
   language_code: 'eng',
+  transcript_revision: 'rev1',
   ready_at: '2026-10-08T07:04:00Z',
 };
 
@@ -156,6 +158,60 @@ test('a transcript brought with its audio shows turns, times only where given, a
   await page.screenshot({ path: 'tmp/field-recording-supplied.png', fullPage: true });
 });
 
+test('an unnamed speaker can be dismissed as noise or kept anonymous, switched, and undone', async ({ mount, page }) => {
+  const sent = [];
+  await page.route('**/accounts/acct1/field/recordings/r1/speakers/*', async (route) => {
+    sent.push({ url: route.request().url(), method: route.request().method(), body: route.request().postDataJSON() });
+    await route.fulfill({ json: {} });
+  });
+  const props = { recording, voices: [], members_without_voice: [], my_voice_id: null, show_you_hint: false, account };
+  let component = await mount(RecordingPage, { props: { ...props, speakers } });
+
+  const cards = page.getByTestId('speaker-card');
+  await expect(cards.nth(0).getByTestId('speaker-dismiss')).toHaveCount(0);
+  await cards.nth(1).getByTestId('speaker-dismiss').click();
+  await page.getByTestId('speaker-ignore').click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0].method).toBe('PATCH');
+  expect(sent[0].url).toContain('/speakers/s2');
+  expect(sent[0].body).toEqual({ speaker: { ignore: true, ignore_as: 'noise' } });
+
+  await cards.nth(1).getByTestId('speaker-dismiss').click();
+  await page.getByTestId('speaker-anonymous').click();
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1].body).toEqual({ speaker: { ignore: true, ignore_as: 'anonymous' } });
+  await component.unmount();
+
+  const noise = { ...speakers[1], ignored: true, ignored_as: 'noise', suggestion: null };
+  component = await mount(RecordingPage, { props: { ...props, speakers: [speakers[0], noise] } });
+  let card = page.locator('[data-testid="speaker-card"][data-ignored="noise"]');
+  await expect(card).toContainText('Dismissed as noise');
+  await expect(card.getByTestId('speaker-dismiss')).toHaveCount(0);
+  await expect(card.getByTestId('speaker-chip')).toHaveCount(0);
+  await page.screenshot({ path: 'tmp/field-recording-ignored.png', fullPage: true });
+  await card.getByTestId('speaker-switch-dismissal').click();
+  await expect.poll(() => sent.length).toBe(3);
+  expect(sent[2].body).toEqual({ speaker: { ignore: true, ignore_as: 'anonymous' } });
+  await card.getByTestId('speaker-unignore').click();
+  await expect.poll(() => sent.length).toBe(4);
+  expect(sent[3].body).toEqual({ speaker: { unignore: true } });
+  await component.unmount();
+
+  const anonymous = { ...speakers[1], ignored: true, ignored_as: 'anonymous', suggestion: null };
+  component = await mount(RecordingPage, { props: { ...props, speakers: [speakers[0], anonymous] } });
+  card = page.locator('[data-testid="speaker-card"][data-ignored="anonymous"]');
+  await expect(card).toContainText('Staying anonymous');
+  await expect(card).not.toContainText('Dismissed as noise');
+  await expect(card.getByTestId('speaker-chip')).toHaveCount(0);
+  await page.screenshot({ path: 'tmp/field-recording-anonymous.png', fullPage: true });
+  await card.getByTestId('speaker-switch-dismissal').click();
+  await expect.poll(() => sent.length).toBe(5);
+  expect(sent[4].body).toEqual({ speaker: { ignore: true, ignore_as: 'noise' } });
+  await card.getByTestId('speaker-unignore').click();
+  await expect.poll(() => sent.length).toBe(6);
+  expect(sent[5].body).toEqual({ speaker: { unignore: true } });
+});
+
 test('the "is one of these you?" hint shows when asked for', async ({ mount, page }) => {
   const component = await mount(RecordingPage, {
     props: {
@@ -170,6 +226,140 @@ test('the "is one of these you?" hint shows when asked for', async ({ mount, pag
   });
   await expect(component).toContainText('Is one of these you?');
   await page.screenshot({ path: 'tmp/field-recording-hint.png', fullPage: true });
+});
+
+test('with more than ten people to choose from, the speaker picker can be filtered', async ({ mount, page }) => {
+  const names = ['Priya', 'Tomás', 'Ines', 'Jo', 'Kwame', 'Lena', 'Marta', 'Noor', 'Oskar', 'Pau', 'Rosa'];
+  await mount(RecordingPage, {
+    props: {
+      recording,
+      speakers,
+      voices: [{ id: 'v1', name: 'Sam' }, ...names.map((name, i) => ({ id: `p${i}`, name }))],
+      members_without_voice: [],
+      my_voice_id: 'v1',
+      show_you_hint: false,
+      account,
+    },
+  });
+
+  await page.getByTestId('speaker-chip').filter({ hasText: "Who's this?" }).click();
+  const filter = page.getByTestId('speaker-filter');
+  const choices = page.getByTestId('speaker-choices');
+  await expect(choices).toContainText('Rosa');
+  await filter.fill('tomas');
+  await expect(choices).toContainText('Tomás');
+  await expect(choices).not.toContainText('Rosa');
+  await expect(page.getByTestId('speaker-choice-me')).toHaveCount(0);
+  await page.screenshot({ path: 'tmp/field-speaker-filter.png' });
+  await filter.fill('Zed');
+  await expect(page.getByTestId('speaker-filter-empty')).toBeVisible();
+  await expect(page.getByText('Add someone new')).toBeVisible();
+});
+
+test('a short speaker list has no filter box', async ({ mount, page }) => {
+  await mount(RecordingPage, {
+    props: {
+      recording,
+      speakers,
+      voices: [
+        { id: 'v1', name: 'Sam' },
+        { id: 'v2', name: 'Priya' },
+      ],
+      members_without_voice: [],
+      my_voice_id: 'v1',
+      show_you_hint: false,
+      account,
+    },
+  });
+
+  await page.getByTestId('speaker-chip').filter({ hasText: "Who's this?" }).click();
+  await expect(page.getByTestId('speaker-choices')).toContainText('Priya');
+  await expect(page.getByTestId('speaker-filter')).toHaveCount(0);
+});
+
+test('one voice heard as two speakers shows as one card, with its parts', async ({ mount, page }) => {
+  const twice = [
+    ...speakers.map(({ suggestion, ...speaker }) => speaker),
+    {
+      id: 's3',
+      label: 'speaker_2',
+      position: 2,
+      default_name: 'Speaker 3',
+      name: 'Sam',
+      named: true,
+      voice_id: 'v1',
+      naming_source: 'human',
+      talk_ms: 600_000,
+      clip_start_ms: 6400,
+      clip_end_ms: 7000,
+    },
+  ];
+  const component = await mount(RecordingPage, {
+    props: {
+      recording: { ...recording, words: [...words, { s: 7100, e: 7600, t: 'Agreed.', k: 'w', spk: 'speaker_2' }] },
+      speakers: twice,
+      voices: [{ id: 'v1', name: 'Sam' }],
+      members_without_voice: [],
+      my_voice_id: null,
+      account,
+    },
+  });
+
+  await expect(page.getByTestId('speaker-card')).toHaveCount(2);
+  const sam = page.getByTestId('speaker-card').first();
+  await expect(sam).toContainText('Sam');
+  await expect(sam).toContainText('30 m');
+  await sam.getByTestId('speaker-parts-toggle').click();
+  await expect(sam.getByTestId('speaker-parts')).toContainText('Speaker 1');
+  await expect(sam.getByTestId('speaker-parts')).toContainText('Speaker 3');
+  await expect(sam.getByTestId('speaker-part-unlink')).toHaveCount(2);
+  await expect(sam.getByTestId('speaker-part-unlink').first()).toHaveText('Not Sam');
+  await expect(component).toContainText('(laughter) Agreed.');
+  await page.screenshot({ path: 'tmp/field-recording-merged-voice.png', fullPage: true });
+});
+
+test('a merged card keeps a voice sample waiting on a part that does not stand for it', async ({ mount, page }) => {
+  const part = (id, label, position, extra) => ({
+    id,
+    label,
+    position,
+    default_name: `Speaker ${position + 1}`,
+    name: 'Sam',
+    named: true,
+    voice_id: 'v1',
+    naming_source: 'human',
+    can_remember: true,
+    remembered: false,
+    remembering: false,
+    pending_enrolment: null,
+    ...extra,
+  });
+  await mount(RecordingPage, {
+    props: {
+      recording,
+      speakers: [
+        part('s1', 'speaker_0', 0, {
+          talk_ms: 60_000,
+          pending_enrolment: { id: 'e9', sample_ms: 12_000, sample_url: '/rails/active_storage/blobs/z/sample.wav' },
+        }),
+        part('s2', 'speaker_1', 1, { talk_ms: 600_000, clip_start_ms: 6400, clip_end_ms: 7000 }),
+      ],
+      voices: [{ id: 'v1', name: 'Sam' }],
+      members_without_voice: [],
+      my_voice_id: null,
+      recognition_enabled: true,
+      account,
+    },
+  });
+
+  const sam = page.getByTestId('speaker-card');
+  await expect(sam).toHaveCount(1);
+  const own = sam.getByTestId('speaker-part-enrolment');
+  await expect(own).toContainText('From Speaker 1');
+  await expect(own.getByTestId('voice-preview')).toContainText('12 s of clear speech');
+  await expect(own.getByRole('button', { name: 'Use it' })).toBeVisible();
+  await expect(own.getByRole('button', { name: 'Not them' })).toBeVisible();
+  await expect(sam.getByTestId('remember-voice')).toHaveCount(1);
 });
 
 const fieldProps = (recordings) => ({
@@ -503,13 +693,238 @@ test('a seek by the listener ends the clip, so playback carries on past its end'
   expect((await state(audio)).paused).toBe(false);
 });
 
-test('clicking a turn while a clip plays ends the clip too', async ({ mount, page }) => {
+test('listening to a line while a clip plays ends the clip too', async ({ mount, page }) => {
   const { audio } = await mountPlayer(mount, page);
   await hearSpeaker2(page).click();
   await expect.poll(() => state(audio).then((s) => s.t)).toBeGreaterThan(3.2);
-  await page.getByTestId('transcript').getByText('venue?').click();
+  await page.getByRole('button', { name: 'Listen to this line' }).nth(1).click();
   await expect.poll(() => state(audio).then((s) => s.t), { timeout: 10_000 }).toBeGreaterThan(7);
   expect((await state(audio)).paused).toBe(false);
+});
+
+// Correcting a line by hand: with a mouse, clicking a line edits it in place
+// and a speaker button beside it plays it; on touch, tapping offers Edit and
+// Listen, and pressing and holding edits straight away.
+
+async function captureLinePatches(page) {
+  const sent = [];
+  await page.route('**/accounts/acct1/field/recordings/r1/line', async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  return sent;
+}
+
+test('with a mouse, clicking a line edits it in place and Enter saves it', async ({ mount, page }) => {
+  const sent = await captureLinePatches(page);
+  await mountPlayer(mount, page);
+  const line = page.getByTestId('transcript-line').nth(1);
+  await line.hover();
+  await expect(page.getByRole('button', { name: 'Listen to this line' }).nth(1)).toBeVisible();
+  await line.click();
+
+  const editor = page.getByTestId('line-editor');
+  await expect(editor).toHaveValue('Shall we start with the venue?');
+  await page.screenshot({ path: 'tmp/field-line-edit-desktop.png' });
+  await editor.fill('Shall we start with the venue, Dan?');
+  await editor.press('Enter');
+
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toEqual({
+    line: {
+      first: 2,
+      last: 7,
+      text: 'Shall we start with the venue, Dan?',
+      was: 'Shall we start with the venue?',
+      revision: 'rev1',
+    },
+  });
+  await expect(editor).toHaveCount(0);
+});
+
+test('Escape leaves a line as it was, and an unchanged line sends nothing', async ({ mount, page }) => {
+  const sent = await captureLinePatches(page);
+  await mountPlayer(mount, page);
+  await page.getByTestId('transcript-line').first().click();
+  await page.getByTestId('line-editor').fill('Mourning everyone.');
+  await page.getByTestId('line-editor').press('Escape');
+  await expect(page.getByTestId('line-editor')).toHaveCount(0);
+  await page.getByTestId('transcript-line').first().click();
+  await page.getByTestId('line-save').click();
+  await expect(page.getByTestId('line-editor')).toHaveCount(0);
+  expect(sent).toEqual([]);
+});
+
+test('while a save is in flight, the editor stays on that line: no switching, no cancel', async ({ mount, page }) => {
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  await page.route('**/accounts/acct1/field/recordings/r1/line', async (route) => {
+    await held;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await mountPlayer(mount, page);
+  const lines = page.getByTestId('transcript-line');
+  await lines.nth(1).click();
+  await page.getByTestId('line-editor').fill('Shall we start with the venue, Dan?');
+  await page.getByTestId('line-editor').press('Enter');
+  await expect(page.getByTestId('line-save')).toHaveText('Saving…');
+
+  await lines.first().click();
+  await page.getByTestId('line-editor').press('Escape');
+  await expect(page.getByTestId('line-editor')).toHaveValue('Shall we start with the venue, Dan?');
+
+  release();
+  await expect(page.getByTestId('line-editor')).toHaveCount(0);
+  await lines.first().click();
+  await expect(page.getByTestId('line-editor')).toHaveValue('Morning everyone.');
+});
+
+test('a refused save keeps the text and says why', async ({ mount, page }) => {
+  await page.route('**/accounts/acct1/field/recordings/r1/line', (route) =>
+    route.fulfill({
+      status: 422,
+      contentType: 'application/json',
+      body: JSON.stringify({ props: { errors: { line: 'The transcript changed while you were editing.' } } }),
+    })
+  );
+  await mountPlayer(mount, page);
+  await page.getByTestId('transcript-line').nth(1).click();
+  await page.getByTestId('line-editor').fill('Shall we start with the venue, Dan?');
+  await page.getByTestId('line-save').click();
+  await expect(page.getByTestId('line-error')).toHaveText('The transcript changed while you were editing.');
+  await expect(page.getByTestId('line-editor')).toHaveValue('Shall we start with the venue, Dan?');
+});
+
+test('a failed request keeps the text too', async ({ mount, page }) => {
+  await page.route('**/accounts/acct1/field/recordings/r1/line', (route) => route.fulfill({ status: 500, body: '' }));
+  await mountPlayer(mount, page);
+  await page.getByTestId('transcript-line').nth(1).click();
+  await page.getByTestId('line-editor').fill('Shall we start with the venue, Dan?');
+  await page.getByTestId('line-editor').press('Enter');
+  await expect(page.getByTestId('line-error')).toBeVisible();
+  await expect(page.getByTestId('line-editor')).toHaveValue('Shall we start with the venue, Dan?');
+});
+
+// Giving a line to the right person: the speaker's name over a line opens
+// "Who said this?" with the other people in the recording and "Someone new".
+
+async function captureSpeakerPatches(page, reply = null) {
+  const sent = [];
+  await page.route('**/accounts/acct1/field/recordings/r1/line_speaker', async (route) => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill(reply || { status: 200, contentType: 'application/json', body: '{}' });
+  });
+  return sent;
+}
+
+test("with a mouse, a line's speaker shows a caret on hover and gives the line to someone else", async ({
+  mount,
+  page,
+}) => {
+  const sent = await captureSpeakerPatches(page);
+  await mountPlayer(mount, page);
+  const speaker = page.getByTestId('line-speaker').nth(1);
+  await expect(speaker).toHaveText('Speaker 2');
+  await speaker.hover();
+  await speaker.click();
+
+  const menu = page.getByTestId('line-speaker-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem')).toHaveText(['Sam', 'Someone new']);
+  await expect(page.getByTestId('line-editor')).toHaveCount(0);
+  await page.screenshot({ path: 'tmp/field-line-speaker-desktop.png' });
+
+  await menu.getByRole('menuitem', { name: 'Sam' }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toEqual({
+    line: { first: 2, last: 7, was: 'Shall we start with the venue?', revision: 'rev1', speaker: 's1' },
+  });
+  await expect(menu).toHaveCount(0);
+});
+
+test('Escape or a click elsewhere closes the speaker menu and sends nothing', async ({ mount, page }) => {
+  const sent = await captureSpeakerPatches(page);
+  await mountPlayer(mount, page);
+  await page.getByTestId('line-speaker').first().click();
+  await expect(page.getByTestId('line-speaker-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('line-speaker-menu')).toHaveCount(0);
+  await page.getByTestId('line-speaker').first().click();
+  await page.getByRole('heading', { name: recording.title }).click();
+  await expect(page.getByTestId('line-speaker-menu')).toHaveCount(0);
+  expect(sent).toEqual([]);
+});
+
+test("opening another line's speaker menu closes the first", async ({ mount, page }) => {
+  await mountPlayer(mount, page);
+  // The open menu lies over the lines below it, so go to the line above.
+  await page.getByTestId('line-speaker').nth(1).click();
+  await page.getByTestId('line-speaker').first().click();
+  await expect(page.getByTestId('line-speaker-menu')).toHaveCount(1);
+  await expect(page.getByTestId('line-speaker-menu').getByRole('menuitem').first()).toHaveText('Speaker 2');
+});
+
+test('a refused move says why', async ({ mount, page }) => {
+  await captureSpeakerPatches(page, {
+    status: 422,
+    contentType: 'application/json',
+    body: JSON.stringify({ props: { errors: { line_speaker: 'The transcript changed since the page loaded.' } } }),
+  });
+  await mountPlayer(mount, page);
+  await page.getByTestId('line-speaker').first().click();
+  await page.getByTestId('line-speaker-new').click();
+  await expect(page.getByTestId('line-speaker-error')).toBeVisible();
+});
+
+test.describe('on a phone', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('tapping a line offers Edit and Listen', async ({ mount, page }) => {
+    const sent = await captureLinePatches(page);
+    const { audio } = await mountPlayer(mount, page);
+    await page.getByTestId('transcript-line').nth(1).tap();
+
+    const menu = page.getByTestId('line-menu');
+    await expect(menu).toBeVisible();
+    await expect(page.getByTestId('line-editor')).toHaveCount(0);
+    await page.screenshot({ path: 'tmp/field-line-menu-mobile.png' });
+
+    await menu.getByRole('button', { name: 'Listen' }).tap();
+    await expect(menu).toHaveCount(0);
+    await expect.poll(() => state(audio).then((s) => s.t)).toBeGreaterThan(3);
+
+    await page.getByTestId('transcript-line').nth(1).tap();
+    await page.getByTestId('line-menu').getByRole('button', { name: 'Edit' }).tap();
+    await page.getByTestId('line-editor').fill('Shall we start with the venue, Dan?');
+    await page.getByTestId('line-save').tap();
+    await expect.poll(() => sent.length).toBe(1);
+  });
+
+  test("tapping a line's speaker offers the others and someone new", async ({ mount, page }) => {
+    const sent = await captureSpeakerPatches(page);
+    await mountPlayer(mount, page);
+    await page.getByTestId('line-speaker').first().tap();
+
+    const menu = page.getByTestId('line-speaker-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('menuitem')).toHaveText(['Speaker 2', 'Someone new']);
+    await expect(page.getByTestId('line-menu')).toHaveCount(0);
+    await page.screenshot({ path: 'tmp/field-line-speaker-mobile.png' });
+
+    await page.getByTestId('line-speaker-new').tap();
+    await expect.poll(() => sent.length).toBe(1);
+    expect(sent[0].line).toMatchObject({ first: 0, last: 1, was: 'Morning everyone.', speaker: 'new' });
+  });
+
+  test('pressing and holding a line edits it straight away', async ({ mount, page }) => {
+    await mountPlayer(mount, page);
+    await page
+      .getByTestId('transcript-line')
+      .first()
+      .dispatchEvent('pointerdown', { pointerType: 'touch', isPrimary: true });
+    await expect(page.getByTestId('line-editor')).toHaveValue('Morning everyone.', { timeout: 2000 });
+    await expect(page.getByTestId('line-menu')).toHaveCount(0);
+  });
 });
 
 // Slice C: recognition and "remember this voice" (spec §9). Behind two gates.
@@ -713,4 +1128,100 @@ test('the Voices page, house gate off: no switch, but a remembered voice can sti
   await expect(page.getByTestId('voices-forget-all')).toBeVisible();
   await expect(page.getByTestId('voice-meaning-backups')).toHaveCount(0);
   await page.screenshot({ path: 'tmp/field-voices-house-off.png', fullPage: true });
+});
+
+// Writing a summary again: a refresh button beside the summary, shown on
+// hover with a mouse and on tap on a phone.
+
+const summarised = {
+  ...recording,
+  summary_long: 'A father and his daughter talk through her feeling lost.',
+  summary_pending: false,
+  resummarize_url: '/accounts/acct1/field/recordings/r1/resummarize',
+};
+
+async function captureResummaries(page) {
+  const sent = [];
+  await page.route('**/accounts/acct1/field/recordings/r1/resummarize', async (route) => {
+    sent.push(route.request().method());
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  return sent;
+}
+
+test('with a mouse, the refresh button shows on hover and asks for a new summary', async ({ mount, page }) => {
+  const sent = await captureResummaries(page);
+  await mount(RecordingViewer, { props: { recording: summarised } });
+  const button = page.getByTestId('summary-refresh');
+  await expect(button).toHaveCSS('opacity', '0');
+  await page.getByTestId('field-recording-summary').hover();
+  await expect(button).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: 'tmp/field-summary-refresh-desktop.png' });
+  await button.click();
+  await expect.poll(() => sent).toEqual(['POST']);
+});
+
+test('while a new summary is being written, the old one stays and the page says so', async ({ mount, page }) => {
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_pending: true } } });
+  await expect(page.getByTestId('field-recording-summary')).toHaveText(summarised.summary_long);
+  await expect(page.getByTestId('summary-pending')).toHaveText('Writing a new summary…');
+  await expect(page.getByTestId('summary-refresh')).toBeDisabled();
+});
+
+test('a stale summary stays visible with manual refresh available during the delayed wait', async ({ mount, page }) => {
+  const sent = await captureResummaries(page);
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_freshness: 'stale' } } });
+  await expect(page.getByTestId('field-recording-summary')).toHaveText(summarised.summary_long);
+  await expect(page.getByTestId('summary-stale')).toHaveText('Summary is out of date.');
+  await expect(page.getByTestId('summary-pending')).toHaveCount(0);
+  await expect(page.getByTestId('summary-refresh')).toBeVisible();
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+  await page.screenshot({ path: 'tmp/field-summary-stale.png' });
+  await page.getByTestId('summary-refresh').click();
+  await expect.poll(() => sent).toEqual(['POST']);
+});
+
+test('an older untracked summary says its source is unknown', async ({ mount, page }) => {
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_freshness: 'unknown' } } });
+  await expect(page.getByTestId('summary-unknown')).toContainText("source wasn't tracked");
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+});
+
+test('with no way to redo it, there is no button', async ({ mount, page }) => {
+  await mount(RecordingViewer, { props: { recording: { ...summarised, resummarize_url: null } } });
+  await expect(page.getByTestId('field-recording-summary')).toBeVisible();
+  await expect(page.getByTestId('summary-refresh')).toHaveCount(0);
+});
+
+test('after every attempt failed, the page says so and offers the button again', async ({ mount, page }) => {
+  await mount(RecordingViewer, { props: { recording: { ...summarised, summary_failed: true } } });
+  await expect(page.getByTestId('summary-failed')).toBeVisible();
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+  await expect(page.getByTestId('summary-refresh')).toHaveCSS('opacity', '1');
+});
+
+test('a request that fails without an answer says so rather than going quiet', async ({ mount, page }) => {
+  await page.route('**/accounts/acct1/field/recordings/r1/resummarize', (route) =>
+    route.fulfill({ status: 500, body: '' })
+  );
+  await mount(RecordingViewer, { props: { recording: summarised } });
+  await page.getByTestId('field-recording-summary').hover();
+  await page.getByTestId('summary-refresh').click();
+  await expect(page.getByTestId('summary-error')).toBeVisible();
+  await expect(page.getByTestId('summary-refresh')).toBeEnabled();
+});
+
+test.describe('summaries on a phone', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('tapping the summary shows the refresh button', async ({ mount, page }) => {
+    const sent = await captureResummaries(page);
+    await mount(RecordingViewer, { props: { recording: summarised } });
+    await expect(page.getByTestId('summary-refresh')).toHaveCount(0);
+    await page.getByTestId('field-recording-summary').tap();
+    await expect(page.getByTestId('summary-refresh')).toBeVisible();
+    await page.screenshot({ path: 'tmp/field-summary-refresh-mobile.png' });
+    await page.getByTestId('summary-refresh').tap();
+    await expect.poll(() => sent).toEqual(['POST']);
+  });
 });

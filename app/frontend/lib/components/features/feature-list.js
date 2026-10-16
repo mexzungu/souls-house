@@ -20,6 +20,8 @@ import {
   Bug,
   ShareNetwork,
   Globe,
+  GlobeHemisphereWest,
+  Cloud,
   HardDrives,
   DropboxLogo,
   Circle,
@@ -183,6 +185,13 @@ export const relationalFeatures = [
 
 export const technicalFeatures = [
   {
+    key: 'companion-foundation',
+    title: 'An explicitly enrolled companion',
+    description:
+      'API-only Linux read/write and explicit full-user execution grants, intersected with a separate local ceiling. Requires a compatible companion binary, reviewed installation and verified user-cgroup setup; no computer is connected by default. Directory moves are refused.',
+    icon: TerminalWindow,
+  },
+  {
     key: 'computer',
     title: 'A computer of their own',
     description:
@@ -251,7 +260,7 @@ export const technicalFeatures = [
     key: 'whatsapp',
     title: 'WhatsApp (coming)',
     description:
-      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. Read-only: nothing is sent. Waiting on the connector service; it is not available to connect yet.',
+      'Your own WhatsApp, read by the residents you switch on, the same way Gmail is. You link it by scanning a QR code on the integrations page, and disconnecting removes the linked device. Read-only: nothing is sent. Available once the house runs its WhatsApp connector, which is not deployed yet.',
     icon: WhatsappLogo,
   },
   {
@@ -370,10 +379,31 @@ export const moreFeatures = [
     icon: Bug,
   },
   {
+    key: 'porkbun',
+    title: 'Porkbun',
+    description:
+      'Let a resident set up DNS records, redirects and nameservers on your Porkbun domains. Connect from the web or the souls command line.',
+    icon: GlobeHemisphereWest,
+  },
+  {
+    key: 'cloudflare',
+    title: 'Cloudflare',
+    description:
+      'Let a resident manage DNS records and redirects on your Cloudflare zones, with an API token you scope yourself.',
+    icon: Cloud,
+  },
+  {
     key: 'subagents',
     title: 'Sub-agents',
     description: 'Give a resident standing permission to hand bounded work to helper agents, on the models you allow.',
     icon: UsersThree,
+  },
+  {
+    key: 'quiet-turn-status',
+    title: 'A quiet turn stays visible',
+    description:
+      'With narration sharing on, the working card shows elapsed time since a resident reply or run start after two minutes. Runtime contact is a separate fact, never a claim of task progress. The new indicator is hidden when sharing is off.',
+    icon: Heartbeat,
   },
   {
     key: 'youtube',
@@ -391,8 +421,36 @@ export const moreFeatures = [
     key: 'field',
     title: 'The Field',
     description:
-      'Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have, and old files and notes can be imported with the date they are from. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model.',
+      "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model. Correcting a transcript or its speakers schedules a check 30 minutes later, refreshing the summary only if it is still out of date; you can also refresh it yourself.",
     icon: ChalkboardSimple,
+  },
+  {
+    key: 'conversation-song-cards',
+    title: 'Songs in conversation',
+    description:
+      'Residents can offer a Field song or a supported outside song link as a compact card in a reply. Outside offers stay out of your collection until you choose Add to Field; an already saved recording opens its existing entry. Expand lyrics on Field songs or press Play to load a player; no external player loads before you choose to listen.',
+    icon: ChalkboardSimple,
+  },
+  {
+    key: 'field-swarm-search',
+    title: 'Field swarm search',
+    description:
+      'For deeper research, a resident can send one question to every item under a tag, optionally narrowed by a regular expression, and a small model reads each one: relevant or not, a short extract, and quotes the house checks against the item. A test feature, off unless a site admin turns it on for the account, and the house records what every search costs.',
+    icon: Funnel,
+  },
+  {
+    key: 'field-tweets',
+    title: 'Tweet streams',
+    description:
+      "Follow one public X account into the Field: its own posts, and its replies and quote-posts if you like, from the moment you start. Tweets can be tagged and searched like everything else and residents can read them. Up to 50 a day, paid with the account's own TwitterAPI.io integration (or the house's key, for accounts it is given to); the Field says when collection is behind or has missed a stretch.",
+    icon: XLogo,
+  },
+  {
+    key: 'twitterapi-io',
+    title: 'TwitterAPI.io',
+    description:
+      "Connect your own TwitterAPI.io key under Integrations to pay for the account's tweet streams from your own credit. The key is checked with a free call, kept encrypted, and never shown again.",
+    icon: XLogo,
   },
   {
     key: 'device-streams',
@@ -412,6 +470,20 @@ export const moreFeatures = [
     description:
       "If a resident's run ends on a promise it didn't keep, the house wakes them once to finish it or say what's in the way. A second miss comes to you instead.",
     icon: ArrowsClockwise,
+  },
+  {
+    key: 'stalled-threads',
+    title: 'Stalled threads, noticed',
+    description:
+      "For accounts that opt in, the house looks at rooms that have gone quiet and judges whose move it is: a resident's, a person's, or nobody's. For now it only keeps a log for the site admin; it posts nothing and wakes nobody.",
+    icon: Eye,
+  },
+  {
+    key: 'failed-runs',
+    title: 'Failed runs are said out loud',
+    description:
+      "If a resident's runs keep failing, the room hears it from the house after the second failure, with a plain reason and how long it has been going on, and the resident's card shows the streak. Logs stay out of the room.",
+    icon: Bug,
   },
   {
     key: 'handoffs',
@@ -449,6 +521,13 @@ export const moreFeatures = [
     title: 'Visual tags',
     description: 'Give conversations an icon and a colour so the sidebar reads at a glance.',
     icon: Tag,
+  },
+  {
+    key: 'rooms',
+    title: 'Rooms for different parts of life',
+    description:
+      'Give development, personal conversations, or anything else a room of its own, so one never buries another.',
+    icon: DoorOpen,
   },
   {
     key: 'colour-themes',

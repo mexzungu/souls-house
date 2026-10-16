@@ -118,6 +118,34 @@ class Agent < ApplicationRecord
   after_update :create_model_change_notice, if: :saved_change_to_model_id?
   after_update_commit :enqueue_model_change_orientation, if: :saved_change_to_model_id?
   after_create_commit :apply_default_service_accesses
+  after_save :refresh_integration_presentation, if: -> {
+    (saved_changes.keys & %w[id account_id name active github_resident_import_id]).any?
+  }
+  after_destroy :refresh_integration_presentation
+  after_save :refresh_guest_directory, if: -> {
+    (saved_changes.keys & %w[id account_id name colour icon active runtime]).any?
+  }
+  # The join uses delete_all, so the snapshot must precede association callbacks.
+  before_destroy :snapshot_guest_directory, prepend: true
+  after_destroy -> { GuestDirectory.refresh!(@guest_directory_account_ids) },
+    unless: -> { destroyed_by_association&.active_record == Account }
+
+  def snapshot_guest_directory
+    @guest_directory_account_ids = [ account_id, *guest_memberships.pluck(:account_id) ]
+  end
+
+  def refresh_guest_directory
+    GuestDirectory.refresh!([ account_id, account_id_before_last_save, *guest_memberships.pluck(:account_id) ])
+  end
+  private :snapshot_guest_directory, :refresh_guest_directory
+
+  def refresh_integration_presentation
+    account_ids = [ account_id, account_id_before_last_save ].compact.uniq
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(account_ids)
+    end
+  end
+  private :refresh_integration_presentation
   broadcasts_to :account
 
   encrypts :trigger_bearer_token
@@ -200,6 +228,13 @@ class Agent < ApplicationRecord
   def provisioning? = runtime == "provisioning"
 
   def external? = runtime == "external"
+
+  # Sharing screens offer live residents. A retired one (a discarded VM, a
+  # resident switched off) stays listed only while it still holds the grant,
+  # so the switch that takes it away is still there.
+  def offered_for_sharing?(granted:)
+    active? || granted
+  end
 
   def offline? = runtime == "offline"
 

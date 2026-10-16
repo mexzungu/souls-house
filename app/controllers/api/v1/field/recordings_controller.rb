@@ -28,7 +28,7 @@ module Api
         # words, speaker ids), so they need the Field enabled, like the page.
         # A resident's plain read is unchanged.
         require_api_feature_enabled :agents, unless: -> { current_api_agent && !action_name.to_sym.in?(HUMAN_ACTIONS) }
-        before_action :set_recording, only: %i[show audio update destroy retry]
+        before_action :set_recording, only: %i[show audio update destroy retry lines correct_line]
 
         # tag=life (repeatable) keeps recordings carrying every one of those tags.
         def index
@@ -60,9 +60,10 @@ module Api
         # the call safe to repeat: the same key returns the recording it made
         # (as it is: tags sent with a repeat are not applied; use .../tags).
         # tags: [...] tags a new recording as it arrives.
+        # notes: the meeting's notes (Markdown, up to 100,000 characters).
         def create
           account = human_request_account!
-          attributes = params.permit(:upload_id, :title, :note, :expected_speakers, :source_path, :recorded_at,
+          attributes = params.permit(:upload_id, :title, :note, :notes, :expected_speakers, :source_path, :recorded_at,
             :import_key, :language_code)
           tags = FieldTag.normalize_list(FieldTag.list_param(params, :tags) || [])
           if tags.size > FieldTag::MAX_PER_ITEM
@@ -108,11 +109,11 @@ module Api
 
         # recorded_at: an ISO 8601 date or time (FieldDate), or empty to go
         # back to ordering by the upload time. For recordings brought in
-        # before they carried a date.
+        # before they carried a date. notes: Markdown, or empty to clear.
         def update
-          attributes = params.permit(:title, :note)
+          attributes = params.permit(:title, :note, :notes)
           attributes[:recorded_at] = FieldDate.parse_or_clear(params[:recorded_at], param: "recorded_at") if params.key?(:recorded_at)
-          return render json: { error: "Provide title, note or recorded_at" }, status: :unprocessable_entity if attributes.empty?
+          return render json: { error: "Provide title, note, notes or recorded_at" }, status: :unprocessable_entity if attributes.empty?
 
           if @recording.update(attributes)
             render json: { recording: person_json(@recording) }
@@ -126,6 +127,74 @@ module Api
         def destroy
           @recording.discard_and_settle!
           head :no_content
+        end
+
+        # GET /api/v1/field/recordings/:id/lines. The transcript as numbered
+        # lines (the page's turns, or a supplied transcript's turns) with the
+        # revision a correction must quote. No timings, for residents too.
+        def lines
+          return render_no_transcript unless @recording.ready?
+
+          render json: lines_json(@recording)
+        end
+
+        # PATCH /api/v1/field/recordings/:id/lines/:line with text, was (the
+        # line as read) and revision. The same correction as the page
+        # (FieldRecording::LineCorrection): words that survive keep their
+        # timings, and search and residents read the new text. A transcript
+        # that changed since `revision`, or a line that no longer reads `was`,
+        # is 409 with the current revision; nothing is written.
+        def correct_line
+          return render_no_transcript unless @recording.ready?
+
+          return reassign_line if params.key?(:speaker) && !params.key?(:text)
+
+          fields = %w[text was revision].index_with { |key| params[key] }
+          fields.each do |key, value|
+            unless value.is_a?(String) && value.present?
+              return render json: { error: "#{key} is required, as a string" }, status: :unprocessable_entity
+            end
+          end
+          @recording.correct_line_number!(params[:line], text: fields["text"], was: fields["was"],
+                                                         revision: fields["revision"])
+          json = lines_json(@recording.reload)
+          render json: json.merge(line: json[:lines].find { |entry| entry[:line] == params[:line].to_i })
+        rescue FieldRecording::LineCorrection::Stale
+          @recording.reload
+          render json: { error: "The transcript has changed, or that line no longer reads as `was`. Read the lines again and retry.",
+                         revision: (@recording.transcript_revision if @recording.ready?) },
+                 status: :conflict
+        rescue FieldRecording::LineCorrection::Invalid => e
+          render json: { error: e.message }, status: :unprocessable_entity
+        end
+
+        # The same PATCH with speaker (a speaker id from the recording, or
+        # "new") instead of text: the line was heard as the wrong person.
+        # Only the speaker moves; the line's words stay as they are.
+        def reassign_line
+          fields = %w[speaker was revision].index_with { |key| params[key] }
+          fields.each do |key, value|
+            unless value.is_a?(String) && value.present?
+              return render json: { error: "#{key} is required, as a string" }, status: :unprocessable_entity
+            end
+          end
+          to = if fields["speaker"] == "new"
+            :new
+          else
+            @recording.speakers.find_by(id: FieldRecordingSpeaker.decode_id(fields["speaker"]))
+          end
+          return render json: { error: "No such speaker in this recording." }, status: :unprocessable_entity unless to
+
+          number = @recording.reassign_line_number!(params[:line], to:, was: fields["was"], revision: fields["revision"])
+          json = lines_json(@recording.reload)
+          render json: json.merge(line: json[:lines].find { |entry| entry[:line] == number })
+        rescue FieldRecording::LineCorrection::Stale
+          @recording.reload
+          render json: { error: "The transcript has changed, or that line no longer reads as `was`. Read the lines again and retry.",
+                         revision: (@recording.transcript_revision if @recording.ready?) },
+                 status: :conflict
+        rescue FieldRecording::LineCorrection::Invalid => e
+          render json: { error: e.message }, status: :unprocessable_entity
         end
 
         # Tries a failed or rejected recording again as a new recording, the
@@ -187,7 +256,7 @@ module Api
         end
 
         def recording_attributes(attributes, supplied:)
-          permitted = %i[title note source_path import_key]
+          permitted = %i[title note notes source_path import_key]
           permitted << (supplied ? :language_code : :expected_speakers)
           values = attributes.slice(*permitted).to_h.symbolize_keys
           values[:recorded_at] = recorded_at(attributes[:recorded_at]) if attributes[:recorded_at].present?
@@ -210,13 +279,28 @@ module Api
           end
         end
 
+        def lines_json(recording)
+          { id: recording.to_param, revision: recording.transcript_revision,
+            lines: recording.transcript_lines.map { |entry| entry.except(:locator) } }
+        end
+
+        def render_no_transcript
+          render json: { error: "This recording has no transcript yet." }, status: :conflict
+        end
+
+        # The list leaves notes out (up to 100 kB each); has_notes says
+        # whether reading the recording will find any.
         def summary_json(recording)
           {
             id: recording.to_param,
             title: recording.title,
             note: recording.note,
+            has_notes: recording.notes.present?,
             summary_short: recording.summary_short,
             summary_long: recording.summary_long,
+            summary_freshness: recording.summary_freshness,
+            summary_pending: recording.summary_pending?,
+            summary_failed: recording.summary_failed?,
             status: recording.status,
             duration_ms: recording.duration_ms,
             language_code: recording.language_code,
@@ -233,9 +317,15 @@ module Api
 
         def resident_json(recording)
           summary_json(recording).merge(
+            notes: recording.notes,
             transcript_text: (recording.transcript_text if recording.ready?),
-            speakers: recording.speakers.includes(:field_voice).map do |speaker|
-              { label: speaker.default_name, name: speaker.display_name, talk_ms: speaker.known_talk_ms }
+            # One entry per person: diarized speakers a human linked to the
+            # same voice are one speaker here, with the labels they were
+            # heard as in diarized_as.
+            speakers: FieldRecordingSpeaker.grouped(recording.speakers.includes(:field_voice)).map do |group|
+              talk = group.map(&:known_talk_ms)
+              { label: group.first.default_name, name: group.first.display_name,
+                talk_ms: (talk.sum if talk.all?), diarized_as: group.map(&:default_name) }
             end
           )
         end
@@ -245,6 +335,7 @@ module Api
         # speaker's label).
         def person_json(recording)
           summary_json(recording).merge(
+            notes: recording.notes,
             failure_reason: recording.failure_reason,
             expected_speakers: recording.expected_speakers,
             filename: recording.filename,

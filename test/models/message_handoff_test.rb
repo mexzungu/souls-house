@@ -28,6 +28,27 @@ class MessageHandoffTest < ActiveSupport::TestCase
                  message.handoff_receipts.map { |r| r.stringify_keys.slice("recipient_name", "state") }
   end
 
+  test "a person in the account with the resident's name does not stop the handoff" do
+    @user.profile.update!(first_name: "Mira", last_name: "Login")
+    message = post_as_lume("@Mira, ready for review")
+    assert_equal [ @mira, "tag" ], [ message.handoffs.sole.recipient_agent, message.handoffs.sole.source ]
+  end
+
+  test "a tag two residents in the room share wakes neither and the room is told" do
+    other = agents(:other_account_agent)
+    other.update!(name: "Mira")
+    GuestMembership.create!(account: @account, agent: other, added_by: @user)
+    @chat.agents << other
+    message = nil
+    assert_difference -> { @chat.messages.where(role: "system").count }, 1 do
+      message = post_as_lume("@Mira, ready for review")
+    end
+    assert_empty message.handoffs
+    notice = @chat.messages.where(role: "system").last
+    assert_match(/matches 2 residents here \(Mira and Mira\), so it woke none of them/, notice.content)
+    assert_operator notice.id, :>, message.id
+  end
+
   test "a tag in a quote, a code block, inline code or an escape rings no one" do
     [
       "> @Mira said this earlier",
@@ -138,6 +159,37 @@ class MessageHandoffTest < ActiveSupport::TestCase
     later.finish_execution!("completed")
     MessageHandoff.sync!(chat: @chat, agent: @mira)
     assert_equal [ "delivered", nil ], [ handoff.reload.status, handoff.reason ]
+  end
+
+  test "a woken run refused as already running knocks again later instead of blocking, until the request expires" do
+    handoff = post_as_lume("@Mira, approved at abc123, please merge").handoffs.sole
+    live { handoff.dispatch! }
+    run = handoff.reload.runtime_interaction
+    run.update_columns(transport_status: 409, runtime_status: "already_running")
+    run.finish_execution!("busy")
+
+    assert_enqueued_with(job: MessageHandoffJob, args: [ handoff ]) do
+      MessageHandoff.sync!(chat: @chat, agent: @mira)
+    end
+    assert_equal [ "pending", nil, nil, "queued" ], [ handoff.reload.status, handoff.reason, handoff.runtime_interaction, handoff.receipt_state ]
+
+    live { handoff.dispatch! }
+    retried = handoff.reload.runtime_interaction
+    assert_equal "triggered", handoff.status
+    assert_not_equal run, retried
+
+    retried.update_columns(last_included_message_id: handoff.message_id, transport_status: 200, runtime_status: "ok")
+    retried.finish_execution!("completed")
+    MessageHandoff.sync!(chat: @chat, agent: @mira)
+    assert_equal "delivered", handoff.reload.status
+
+    late = post_as_lume("@Mira, one more").handoffs.sole
+    live { late.dispatch! }
+    late.reload.runtime_interaction.finish_execution!("busy")
+    MessageHandoff.sync!(chat: @chat, agent: @mira)
+    late.update_columns(created_at: (MessageHandoff::EXPIRY + 1.minute).ago)
+    live { late.dispatch! }
+    assert_equal [ "blocked", "not_started_in_time" ], [ late.reload.status, late.reason ]
   end
 
   test "a message already read by the time the job runs is delivered without a wake" do

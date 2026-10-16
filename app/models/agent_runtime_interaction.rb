@@ -2,6 +2,7 @@ class AgentRuntimeInteraction < ApplicationRecord
 
   include LiveActivity
   include ResponseChain
+  include FailureReport
 
   SUPPORTED_TELEMETRY_SCHEMA_VERSION = 1
   LOCAL_USAGE_SCOPES = %w[invocation trigger].freeze
@@ -13,9 +14,14 @@ class AgentRuntimeInteraction < ApplicationRecord
   has_one :resident_turn, dependent: :destroy
   # A follow-through nudge points at the run it continues (FollowThroughCheck).
   belongs_to :follow_through_of, class_name: "AgentRuntimeInteraction", optional: true
+  belongs_to :stalled_thread_sweep, optional: true
   has_one :follow_through_nudge, class_name: "AgentRuntimeInteraction", foreign_key: :follow_through_of_id,
     inverse_of: :follow_through_of, dependent: :nullify
   after_commit :broadcast_agent_runtime_interactions_refresh, on: [ :create, :update, :destroy ]
+  after_save :broadcast_rhythm_activity_after_commit, if: -> {
+    saved_changes.keys.intersect?(%w[id execution_state agent_id message_dispatch_id])
+  }
+  after_destroy :broadcast_rhythm_activity_after_commit
   after_update_commit :enqueue_follow_through_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
   after_update_commit :enqueue_pending_wake_release, if: -> { saved_change_to_finished_at? && finished_at.present? && trigger_kind == "conversation" }
   after_update_commit :enqueue_oom_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
@@ -32,6 +38,10 @@ class AgentRuntimeInteraction < ApplicationRecord
   scope :recent, -> { order(created_at: :desc) }
   scope :timeline_order, -> { order(Arel.sql("COALESCE(finished_at, started_at, created_at) ASC"), :id) }
   scope :active, -> { where(finished_at: nil).where("run_id IS NOT NULL OR started_at >= ?", ACTIVE_WINDOW.ago) }
+  # Shown as working: the sidebar's avatar rings and the room switchers' spinners.
+  scope :working, -> {
+    active.where("agent_runtime_interactions.execution_state IS NULL OR agent_runtime_interactions.execution_state NOT IN (?)", TERMINAL_STATES)
+  }
 
   def self.record_trigger!(agent:, chat:, trigger_kind:, conversation_id:, requested_by:, session_id:, endpoint_url:, request_text:, last_included_message_id: nil, provider_auth_mode: "api_key", provider: nil, model: nil)
     interaction = agent.with_lock do
@@ -188,6 +198,50 @@ class AgentRuntimeInteraction < ApplicationRecord
       finished_at: Time.current,
       duration_ms: elapsed_ms
     )
+  end
+
+  # When this run's resident last posted something visible in this run's
+  # conversation. The runtime's silence clock reads it from the activity ack:
+  # what the people in the room have actually seen, not tool activity or stdout.
+  # Another resident's reply, a discarded or still-streaming row, a progress row,
+  # an empty placeholder and unreclaimed safeguard-labelled house speech don't
+  # count. A genuine attachment-only post and reclaimed speech do. This is the
+  # one definition: the activity ack and the activity card both read it.
+  def last_resident_post_at
+    return unless chat_id
+
+    posts = Message.kept.where(chat_id:, agent_id:, role: "assistant", progress_message: false, streaming: false)
+      .without_safeguard_label
+      .where(created_at: created_at..)
+    with_attachments = ActiveStorage::Attachment.where(record_type: "Message", name: "attachments").select(:record_id)
+    posts.where("messages.content ~ '[^[:space:]]'")
+      .or(posts.where(id: with_attachments))
+      .maximum(:created_at)
+  end
+
+  MID_RUN_MESSAGE_LIMIT = 10
+  MID_RUN_MESSAGE_CHARS = 1_500
+
+  # What has been posted in this run's conversation since the transcript this
+  # run was shown, so the runtime can put it into the running turn. It reads
+  # past `last_included_message_id` and never moves it: the transcript cursor
+  # still advances only when a run's transcript is built, so a message seen
+  # here mid-run is in the next run's transcript as well. Kept, finished rows
+  # only; not this resident's own posts, not progress rows, not
+  # safeguard-labelled speech (the next transcript labels that properly),
+  # not empty placeholders. The newest few, oldest first, each text bounded.
+  def messages_since_transcript
+    return [] unless chat_id && last_included_message_id && trigger_kind == "conversation" && finished_at.nil?
+
+    scope = Message.kept.where(chat_id:, progress_message: false, streaming: false)
+      .where("messages.id > ?", last_included_message_id)
+      .where("messages.agent_id IS DISTINCT FROM ?", agent_id)
+      .without_safeguard_label
+    with_attachments = ActiveStorage::Attachment.where(record_type: "Message", name: "attachments").select(:record_id)
+    scope.where("messages.content ~ '[^[:space:]]'").or(scope.where(id: with_attachments))
+      .includes(:user, :agent, attachments_attachments: :blob)
+      .order(id: :desc).limit(MID_RUN_MESSAGE_LIMIT).to_a.reverse
+      .map { |message| mid_run_message_json(message) }
   end
 
   def ran_out_of_memory?
@@ -447,6 +501,31 @@ class AgentRuntimeInteraction < ApplicationRecord
 
   private
 
+  def broadcast_rhythm_activity_after_commit
+    # The occurrence renders the dispatch's run list and execution states,
+    # not token usage, transport results, leases or telemetry snapshots.
+    dispatch_ids = [ message_dispatch_id ]
+    dispatch_ids << message_dispatch_id_before_last_save if !destroyed? && saved_change_to_message_dispatch_id?
+    dispatch_ids = dispatch_ids.compact.uniq
+    return if dispatch_ids.empty?
+
+    ActiveRecord.after_all_transactions_commit do
+      accounts = MessageDispatch.where(id: dispatch_ids).filter_map(&:rhythm_activity_account)
+      accounts.uniq(&:id).each { |account| RhythmActivity.broadcast_for(account) }
+    end
+  end
+
+  def mid_run_message_json(message)
+    author = ExternalAgentResponseRequest.speaker_for(message)
+    text = message.content.to_s.strip
+    truncated = text.length > MID_RUN_MESSAGE_CHARS
+    {
+      id: message.obfuscated_id, author:, author_type: message.agent ? "agent" : (message.user ? "human" : "platform"),
+      posted_at: message.created_at.iso8601(3), text: truncated ? text[0, MID_RUN_MESSAGE_CHARS] : text,
+      truncated:, attachments: message.attachments.size
+    }
+  end
+
   def interaction_summary
     parts = [ trigger_kind.to_s.humanize ]
     parts << session_outcome.to_s.humanize if session_outcome.present?
@@ -539,6 +618,7 @@ class AgentRuntimeInteraction < ApplicationRecord
         "Chat:#{chat.obfuscated_id}",
         { action: "refresh", prop: "runtime_interactions" }
       )
+      RoomActivity.refresh_for(chat.account)
     end
 
     broadcast_linked_message_refresh if previous_changes.key?("finished_at")

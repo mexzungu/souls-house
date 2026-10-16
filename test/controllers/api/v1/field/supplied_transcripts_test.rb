@@ -52,6 +52,22 @@ class Api::V1::Field::SuppliedTranscriptsTest < ActionDispatch::IntegrationTest
     assert_equal "media/recordings/transcripts/2026-10-04_2045_anna.md", recording.source_path
   end
 
+  test "a person corrects a line of a supplied transcript through the API" do
+    import(transcript_text: TEXT)
+    recording = @account.field_recordings.find(response.parsed_body.dig("recording", "id"))
+
+    get lines_api_v1_field_recording_path(recording), headers: @headers
+    body = response.parsed_body
+    assert_equal [ [ 2, "Daniel", "[cutlery clinking]" ], [ 3, "Anna", "How am I feeling?" ], [ 4, "Daniel", "Mm-hmm." ] ],
+      body["lines"].drop(1).map { |line| line.values_at("line", "speaker", "text") }
+
+    patch line_api_v1_field_recording_path(recording, line: 3), headers: @headers,
+      params: { text: "How are we feeling?", was: "How am I feeling?", revision: body["revision"] }, as: :json
+    assert_response :success
+    assert_includes recording.reload.transcript_text, "[00:21] Anna: How are we feeling?"
+    assert_equal "How are we feeling?", recording.transcript_turns[2]["t"]
+  end
+
   test "the probe only learns the length of a supplied recording" do
     import(transcript_text: TEXT)
     recording = @account.field_recordings.find(response.parsed_body.dig("recording", "id"))

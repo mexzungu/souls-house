@@ -47,6 +47,28 @@ class Admin::SettingsControllerTest < ActionDispatch::IntegrationTest
     assert_equal 3, Setting.instance.reload.vm_resident_limit
   end
 
+  test "a site admin turns on scanned-page transcription with a ceiling; the moment is stamped" do
+    sign_in @admin
+    get admin_settings_path
+    assert_equal false, inertia_shared_props.fetch("field_ocr").fetch("enabled")
+
+    patch admin_settings_path, params: { setting: { field_ocr_enabled: true, field_ocr_daily_usd_ceiling: "2.5" } }
+    assert_redirected_to admin_settings_path
+    setting = Setting.instance.reload
+    assert setting.field_ocr_enabled
+    assert_in_delta Time.current, setting.field_ocr_enabled_at, 5.seconds
+    assert_equal BigDecimal("2.5"), setting.field_ocr_daily_usd_ceiling
+
+    patch admin_settings_path, params: { setting: { field_ocr_daily_usd_ceiling: "-1" } }
+    assert_equal BigDecimal("2.5"), Setting.instance.reload.field_ocr_daily_usd_ceiling
+  end
+
+  test "non-admins cannot turn on scanned-page transcription" do
+    sign_in @user
+    patch admin_settings_path, params: { setting: { field_ocr_enabled: true } }
+    assert_not Setting.instance.reload.field_ocr_enabled
+  end
+
   test "non-admins cannot switch new residents onto their own server" do
     sign_in @user
     patch admin_settings_path, params: { setting: { new_residents_on_vm: true } }
@@ -91,6 +113,28 @@ class Admin::SettingsControllerTest < ActionDispatch::IntegrationTest
     assert listed[lume.to_param]["follow_through"]
     assert_equal lume.name, listed[lume.to_param]["name"]
     assert_not listed[other.to_param]["follow_through"]
+  end
+
+  test "admin sets the stalled-thread interval and picks the accounts it may read" do
+    mine = accounts(:personal_account)
+    other = accounts(:team_account)
+    other.update_columns(stalled_sweep_enabled: true)
+    sign_in @admin
+
+    patch admin_settings_path, params: {
+      setting: { stalled_sweep_minutes: 30, stalled_sweep_account_ids: [ "", mine.to_param ] }
+    }
+
+    assert_redirected_to admin_settings_path
+    assert_equal 30, Setting.instance.reload.stalled_sweep_minutes
+    assert mine.reload.stalled_sweep_enabled?
+    assert_not other.reload.stalled_sweep_enabled?, "an account left out of the list is switched off"
+    audit = AuditLog.where(action: "update_settings").last
+    assert_equal [ [ mine.to_param ], [ other.to_param ] ], audit.data.values_at("stalled_sweep_on", "stalled_sweep_off")
+
+    patch admin_settings_path, params: { setting: { stalled_sweep_minutes: 7 } }
+    assert_equal 30, Setting.instance.reload.stalled_sweep_minutes
+    assert mine.reload.stalled_sweep_enabled?, "a failed save or other settings leave the accounts alone"
   end
 
   test "saving other settings leaves the picked residents alone" do

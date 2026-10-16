@@ -18,6 +18,7 @@
   import MobileNavMenu from '$lib/components/navigation/MobileNavMenu.svelte';
   import SiteAdminMenu from '$lib/components/navigation/SiteAdminMenu.svelte';
   import UserAccountMenu from '$lib/components/navigation/UserAccountMenu.svelte';
+  import ChatRoomsNavMenu from '$lib/components/navigation/ChatRoomsNavMenu.svelte';
   import * as logging from '$lib/logging';
   import { DEFAULT_SITE_NAME } from '$lib/branding';
   import { clearLocalDrafts } from '$lib/conversation-draft';
@@ -26,7 +27,38 @@
   const updateAttentionSync = createDynamicSync();
   $effect(() => {
     const id = $page.props?.user?.id;
-    updateAttentionSync(id ? { [`ReplyAttention:${id}`]: 'reply_attention' } : {});
+    const accountId = $page.props?.account?.id;
+    const subs = {};
+    // Membership changes already invalidate this private stream. Refresh the
+    // subscription set too, including newly confirmed or removed accounts.
+    if (id) subs[`ReplyAttention:${id}`] = ['reply_attention', 'accounts', 'expired_subscriptions'];
+    // The room switchers' working spinners, here so they update on any page.
+    if (accountId) subs[`RoomActivity:${accountId}`] = 'room_activity';
+    updateAttentionSync(subs);
+  });
+
+  const updateSubscriptionSync = createDynamicSync();
+  $effect(() => {
+    const subs = {};
+    if ($page.props?.user?.id) {
+      // Subscribe even when an account has no expiries yet. The summary spans
+      // every confirmed account, not only the account currently being viewed.
+      for (const account of $page.props?.accounts || []) {
+        subs[`Account:${account.id}`] = ['accounts', 'expired_subscriptions'];
+      }
+    }
+    updateSubscriptionSync(subs);
+  });
+
+  const updateRoomNavigationSync = createDynamicSync();
+  $effect(() => {
+    const accountId = $page.props?.account?.id;
+    const subs = {};
+    // Watch even an empty account: its first room turns Chats into a menu.
+    if ($page.props?.user?.id && accountId) {
+      subs[`RoomNavigation:${accountId}`] = ['rooms', 'current_room'];
+    }
+    updateRoomNavigationSync(subs);
   });
 
   function handleLogout(event) {
@@ -157,7 +189,9 @@
       <div class="hidden md:flex items-center">
         <!-- Remount Inertia links when their account-scoped href changes so the click handler cannot retain the previous URL. -->
         {#each links as link (`${link.label}:${link.href}`)}
-          {#if link.show}
+          {#if link.show && link.label === 'Chats' && $page.props?.rooms?.length && currentAccount?.id}
+            <ChatRoomsNavMenu accountId={currentAccount.id} label={link.label} />
+          {:else if link.show}
             <Link
               href={link.href}
               class={cn(buttonVariants({ variant: 'ghost' }), 'rounded-full text-muted-foreground')}>{link.label}</Link>
@@ -208,6 +242,7 @@
       {/if}
       <UserAccountMenu
         replyAttention={$page.props?.reply_attention || {}}
+        expiredSubscriptions={$page.props?.expired_subscriptions || {}}
         allowAccountCreation={siteSettings?.allow_account_creation !== false}
         {currentUser}
         {currentAccount}

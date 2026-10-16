@@ -21,7 +21,9 @@
 # - delivered: a run of the recipient's that read the transcript included
 #   this message (the same cursor PendingWake#unseen_messages? reads). A run
 #   that started before the message and never re-read has not delivered it;
-# - blocked, with a reason: it will not be delivered by this request.
+# - blocked, with a reason: it will not be delivered by this request. A woken
+#   run refused as already running is not a reason: the request is knocked
+#   again (BUSY_RETRY) until it expires.
 #
 # Delivered wins: a request blocked or held whose message a later run reads
 # becomes delivered. Silence after delivered is the recipient's choice.
@@ -38,6 +40,11 @@ class MessageHandoff < ApplicationRecord
   # A request whose job never ran (a lost enqueue) is recorded, not retried,
   # as for a human's mention (MessageDispatch::EXPIRY, consultation BjAPDe).
   EXPIRY = 10.minutes
+  # A woken run the recipient's runtime refused as already running (its last
+  # turn not yet let go, e.g. still journalling after its reply) is not an
+  # answer: the request goes back to pending and knocks again after this,
+  # until EXPIRY gives up on it as not_started_in_time.
+  BUSY_RETRY = 1.minute
   LOOP_CAP_REASON = "loop_cap".freeze
   # The account set its cap to 0.
   HANDOFFS_OFF_REASON = "handoffs_off".freeze
@@ -61,28 +68,34 @@ class MessageHandoff < ApplicationRecord
 
   # The residents a resident's message hands off to, in a stable order:
   # tagged ones, then any named in recipient_agent_ids. Never the author.
-  def self.recipient_ids_for(message, explicit_ids: [])
-    users = message.chat.account.users.joins(:memberships)
-      .where(memberships: { account_id: message.chat.account_id }).merge(Membership.confirmed)
-      .distinct.includes(:profile).to_a
-    tagged = DirectReplyMentions.agent_ids(message: message, users: users)
-    sources = tagged.index_with { "tag" }
+  def self.recipient_ids_for(message, explicit_ids: [], tags: tags_for(message))
+    sources = tags.ids.index_with { "tag" }
     explicit_ids.each { |id| sources[id] ||= "field" }
     sources.except(message.agent_id)
   end
+
+  def self.tags_for(message)
+    users = message.chat.account.users.joins(:memberships)
+      .where(memberships: { account_id: message.chat.account_id }).merge(Membership.confirmed)
+      .distinct.includes(:profile).to_a
+    DirectReplyMentions.agent_tags(message: message, users: users)
+  end
+  private_class_method :tags_for
 
   # Written in the transaction that saves the message, which holds the chat
   # row lock (Message#record_chat_message_time), so the loop count is
   # serialized with every other post in the room. Returns the rows written.
   def self.accept!(message:, explicit_ids: [])
     chat = message.chat
-    recipients = recipient_ids_for(message, explicit_ids: explicit_ids)
+    tags = tags_for(message)
+    announce_ambiguous_tags!(chat, message, tags.ambiguous_ids) if tags.ambiguous_ids.any?
+    recipients = recipient_ids_for(message, explicit_ids: explicit_ids, tags: tags)
     return [] if recipients.empty?
 
     chat.lock!
     cap = chat.account.resident_handoff_cap
-    counted = since_last_human_message(chat)
-      .where("reason IS NULL OR reason NOT IN (?)", [ LOOP_CAP_REASON, HANDOFFS_OFF_REASON ]).count
+    # Stalled-thread sweeper wakes share this budget (StalledThreadWake).
+    counted = counted_since_last_human_message(chat) + StalledThreadWake.wakes_in_chain(chat).count
     capped = []
     handoffs = recipients.map do |recipient_id, source|
       handoff = new(message: message, chat: chat, requester_agent_id: message.agent_id,
@@ -102,11 +115,29 @@ class MessageHandoff < ApplicationRecord
     handoffs
   end
 
+  # Handoffs since the last person's message that used the loop budget.
+  def self.counted_since_last_human_message(chat)
+    since_last_human_message(chat).where("reason IS NULL OR reason NOT IN (?)", [ LOOP_CAP_REASON, HANDOFFS_OFF_REASON ]).count
+  end
+
   # Handoffs written since the room's last message from a person.
   def self.since_last_human_message(chat)
     last_human_id = chat.messages.where(role: "user").where.not(user_id: nil).maximum(:id)
     scope = where(chat: chat)
     last_human_id ? scope.where("message_id > ?", last_human_id) : scope
+  end
+
+  # A tag that two or more residents here answer to wakes neither, and the
+  # room is told so instead of the tag failing silently.
+  def self.announce_ambiguous_tags!(chat, message, groups)
+    groups.each do |ids|
+      names = chat.agents.where(id: ids).order(:id).pluck(:name)
+      chat.messages.create!(
+        role: "system",
+        content: "#{message.author_name}'s tag matches #{names.size} residents here (#{names.to_sentence}), " \
+          "so it woke none of them. Tag one by a name only they have, or name them in recipient_agent_ids."
+      )
+    end
   end
 
   # Said once per run of resident handoffs, in the room, as the house.
@@ -182,7 +213,10 @@ class MessageHandoff < ApplicationRecord
       end
     when "triggered"
       run = runtime_interaction
-      block!(run.execution_state.presence ? "run_#{run.execution_state}" : "run_ended") if run&.finished_at
+      return unless run&.finished_at
+      return retry_after_busy! if run.execution_state == "busy"
+
+      block!(run.execution_state.presence ? "run_#{run.execution_state}" : "run_ended")
     end
   end
 
@@ -268,6 +302,12 @@ class MessageHandoff < ApplicationRecord
 
   def deliver!
     update!(status: "delivered", reason: nil, delivered_at: Time.current)
+  end
+
+  def retry_after_busy!
+    update!(status: "pending", runtime_interaction: nil)
+    handoff = self
+    ActiveRecord.after_all_transactions_commit { MessageHandoffJob.set(wait: BUSY_RETRY).perform_later(handoff) }
   end
 
   def block!(reason)

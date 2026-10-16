@@ -21,6 +21,9 @@ class Chat < ApplicationRecord
   belongs_to :account
   belongs_to :visual_tag, optional: true
   validate :visual_tag_belongs_to_account
+  # No room means Main (see Room).
+  belongs_to :room, optional: true
+  validate :room_belongs_to_account
   belongs_to :active_whiteboard, class_name: "Whiteboard", optional: true
 
   has_many :chat_agents, dependent: :destroy
@@ -37,6 +40,7 @@ class Chat < ApplicationRecord
                   :participants_json, :archived_at, :discarded_at, :archived, :discarded, :respondable, :summary do |hash, options|
     hash["visual_tag"] = visual_tag&.as_json
     hash.delete("visual_tag_id")
+    hash["room_id"] = room_id && Room.encode_id(room_id)
     # For sidebar format, only include attributes used by the chat list UI.
     if options&.dig(:as) == :sidebar_json
       hash.slice!(
@@ -51,6 +55,7 @@ class Chat < ApplicationRecord
         "manual_responses",
         "participants_json",
         "visual_tag",
+        "room_id",
         "archived",
         "discarded"
       )
@@ -78,6 +83,21 @@ class Chat < ApplicationRecord
 
   broadcasts_to :account
 
+  before_destroy :capture_rhythm_activity_account, prepend: true
+  after_update :refresh_rhythm_metadata, if: -> { saved_change_to_title? || saved_change_to_discarded_at? }
+  after_destroy_commit -> { RhythmActivity.broadcast_for(@rhythm_activity_account) }
+
+  def capture_rhythm_activity_account
+    @rhythm_activity_account = account if rhythm_run?
+  end
+
+  def refresh_rhythm_metadata
+    return unless rhythm_run?
+
+    activity_account = account
+    ActiveRecord.after_all_transactions_commit { RhythmActivity.broadcast_for(activity_account) }
+  end
+
   # Historical model references and string-only selections are both supported.
   validate :model_must_be_present
 
@@ -85,8 +105,15 @@ class Chat < ApplicationRecord
   after_initialize :configure_defaults
 
   after_create_commit -> { GenerateTitleJob.perform_later(self) }, unless: :title?
-  after_update_commit :refresh_reply_attention, if: :saved_change_to_discarded_at?
+  # A room move changes which room's "waiting on you" count a flag belongs to.
+  after_update_commit :refresh_reply_attention, if: -> { saved_change_to_discarded_at? || saved_change_to_room_id? }
+  # ...and which room a working resident's spinner turns in. A rhythm run's
+  # update may also be a listing change (a person's reply, or one discarded,
+  # touches it; Chat::QuietRhythmRun), and only listed conversations spin.
+  after_update_commit :refresh_room_activity, if: -> { saved_change_to_discarded_at? || saved_change_to_room_id? || rhythm_run? }
 
+  # nil is Main; :all is every room.
+  scope :in_room, ->(room) { room == :all ? all : where(room_id: room&.id) }
   scope :latest, -> { order(Arel.sql("COALESCE(chats.last_message_at, chats.created_at) DESC"), id: :desc) }
   # Pinned conversations lead; chain before `latest` so each group keeps recency order.
   scope :pinned_first, -> { left_joins(:visual_tag).order(Arel.sql("visual_tags.pinned IS TRUE DESC")) }
@@ -96,6 +123,10 @@ class Chat < ApplicationRecord
 
   def activity_at
     last_message_at || created_at
+  end
+
+  def refresh_room_activity
+    RoomActivity.refresh_for(account) if agent_runtime_interactions.working.exists?
   end
 
   def refresh_reply_attention
@@ -200,9 +231,8 @@ class Chat < ApplicationRecord
   # Run state must not be cached with chat content or touch/reorder the chat.
   def self.sidebar_json_for(chats)
     chats = chats.to_a
-    working = AgentRuntimeInteraction.active
+    working = AgentRuntimeInteraction.working
       .where(chat_id: chats.map(&:id))
-      .where("execution_state IS NULL OR execution_state NOT IN (?)", AgentRuntimeInteraction::TERMINAL_STATES)
       .distinct.pluck(:chat_id, :agent_id).group_by(&:first)
 
     cached_json_for(chats, as: :sidebar_json).zip(chats).map do |json, chat|
@@ -452,6 +482,10 @@ class Chat < ApplicationRecord
   end
 
   private
+
+  def room_belongs_to_account
+    errors.add(:room, "must belong to this account") if room && room.account_id != account_id
+  end
 
   def visual_tag_belongs_to_account
     if visual_tag && visual_tag.account_id != account_id
