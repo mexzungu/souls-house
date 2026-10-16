@@ -92,8 +92,9 @@ class CompanionDeviceTest < ActiveSupport::TestCase
     result = CompanionDevice.create_session!(@credential, "session-1")
     @device.update!(paused: true)
     assert_nil CompanionDevice.authenticate(result["device_credential"])
-    assert_raises(CompanionDevice::Paused) { CompanionDevice.create_session!(@credential, "session-1") }
-    assert_raises(CompanionDevice::Paused) { CompanionDevice.create_session!(result["device_credential"], "session-1") }
+    assert_equal result, CompanionDevice.create_session!(@credential, "session-1")
+    assert_equal result, CompanionDevice.create_session!(result["device_credential"], "session-1")
+    assert_raises(CompanionDevice::Paused) { CompanionDevice.create_session!(result["device_credential"], "different-request") }
     assert_nil CompanionCableTicket.redeem(result["cable_ticket"])
     @device.update!(paused: false)
     @account.update_columns(disabled_at: Time.current)

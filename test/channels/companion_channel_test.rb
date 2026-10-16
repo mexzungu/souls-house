@@ -51,7 +51,7 @@ class CompanionChannelTest < ActionCable::Channel::TestCase
       subscribe
     end
     assert subscription.confirmed?
-    assert_equal({ "device_id" => @device.obfuscated_id },
+    assert_equal({ "device_id" => @device.obfuscated_id, "level" => "info" },
       AuditLog.where(action: "companion.device.epoch_takeover").last.data)
   end
 

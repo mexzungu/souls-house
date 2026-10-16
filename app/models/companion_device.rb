@@ -84,16 +84,16 @@ class CompanionDevice < ApplicationRecord
         next nil
       end
       raise InvalidCredential unless current || device.session_request_id == request_id
-      raise Paused if device.paused?
-
       if recovering
         if device.session_request_id == request_id &&
             (current || previous)
           return JSON.parse(device.session_response)
         end
+        raise Paused if device.paused?
         raise RetryConflict if current
       end
       raise InvalidCredential unless current
+      raise Paused if device.paused?
       # Don't reuse a completed request ID for a fresh rotation.
       raise RetryConflict if device.session_request_id == request_id
 

@@ -27,20 +27,31 @@ class Api::V1::Companion::SessionsControllerTest < ActionDispatch::IntegrationTe
     assert_response :created
   end
 
-  test "paused recovery returns 423 but revocation and unknown credentials return 401" do
+  test "paused exact recovery preserves the lost response without authorizing Cable" do
     session_request(@credential)
     assert_response :created
     next_credential = response.parsed_body.fetch("device_credential")
+    saved = response.parsed_body
     @device.update!(paused: true)
     [ @credential, next_credential ].each do |credential|
       session_request(credential)
-      assert_response :locked
+      assert_response :created
+      assert_equal saved, response.parsed_body
+      assert_nil CompanionCableTicket.redeem(saved.fetch("cable_ticket"))
     end
+    session_request(next_credential, request_id: "different-request")
+    assert_response :locked
+    travel 61.seconds
+    @device.update!(paused: false)
+    session_request(next_credential, request_id: "after-resume")
+    assert_response :created
+    resumed_credential = response.parsed_body.fetch("device_credential")
+    assert_not AuditLog.where(action: "companion.device.stale_credential", auditable: @device).exists?
     session_request(CompanionDevice.generate_credential)
     assert_response :unauthorized
 
     @device.revoke!
-    session_request(next_credential)
+    session_request(resumed_credential)
     assert_response :unauthorized
   end
 

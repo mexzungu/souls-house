@@ -39,7 +39,9 @@ a currently stolen credential or an execute-granted actor. Use of the retained
 previous credential after its recovery window raises a safe audit event without
 automatic revocation. Only the immediately previous digest is retained, not a
 complete historical reuse ledger. Expired encrypted recovery records are swept.
-Paused sessions return HTTP 423 without rotating; revoked credentials return 401.
+Paused fresh sessions return HTTP 423 without rotating; exact lost-response
+recovery remains available during its original window, without authorizing
+Cable ticket redemption while paused. Revoked credentials return 401.
 
 ## Connection and operations
 
@@ -77,7 +79,9 @@ Owner/admin human API PATCH `/companion_devices/:id` with `control` equal to
 `pause`, `resume`, or `revoke` cancels active work on pause/revoke and emits a
 safe audit event. After commit, pause/revoke forcibly disconnect the device's
 Cable connections, with reconnect disabled. Paused devices cannot subscribe.
-Replacing an existing live epoch is separately audited. There is no remote
+Replacing an existing epoch is separately audited as informational: an
+unclean server restart can leave a stale epoch, so this alone is not evidence
+of a competing client. There is no remote
 widening or policy-edit endpoint in S1.
 
 ## Linux boundary and remaining gates
