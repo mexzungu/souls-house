@@ -211,6 +211,7 @@ COPY resident_memory_policy.py /usr/local/share/helixkit-agent/resident_memory_p
 COPY --chown=agent:agent runtime_activity.py /home/agent/runtime_activity.py
 COPY --chown=agent:agent command_preview_policy.json /home/agent/command_preview_policy.json
 COPY --chown=agent:agent command_preview.py /home/agent/command_preview.py
+COPY --chown=agent:agent silence_nudge.py /home/agent/silence_nudge.py
 COPY --chown=agent:agent memory_client.py /home/agent/memory_client.py
 COPY --chmod=0755 house-memory /usr/local/bin/house-memory
 COPY docs/runtime-instructions.md /usr/local/share/helixkit-agent/runtime-instructions.md
@@ -227,20 +228,24 @@ COPY docs/memory-guide.md /usr/local/share/helixkit-agent/memory-guide.md
 COPY docs/memory-quick-reference.md /usr/local/share/helixkit-agent/memory-quick-reference.md
 COPY soulshouse-post-message /usr/local/bin/soulshouse-post-message
 COPY --chmod=0755 soulshouse-stone /usr/local/bin/soulshouse-stone
+COPY --chmod=0755 soulshouse-model /usr/local/bin/soulshouse-model
 COPY soulshouse-send-telegram /usr/local/bin/soulshouse-send-telegram
 COPY soulshouse-append-journal /usr/local/bin/soulshouse-append-journal
 COPY soulshouse-usage /usr/local/bin/soulshouse-usage
 COPY soulshouse-youtube /usr/local/bin/soulshouse-youtube
 COPY soulshouse-x /usr/local/bin/soulshouse-x
 COPY soulshouse-gws /usr/local/bin/soulshouse-gws
+COPY soulshouse-comms /usr/local/bin/soulshouse-comms
 COPY soulshouse-tailnet /usr/local/bin/soulshouse-tailnet
 COPY antigravity-browser-open /usr/local/libexec/helixkit-antigravity-login/xdg-open
 # Imported Git homes use repo-scoped SSH deploy keys.
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
-COPY imported_home.py home_sync_loop.py /home/agent/
+COPY imported_home.py home_sync_loop.py standard_home_sync.py /home/agent/
+COPY github_import_approval.py github_import_credential.py /home/agent/
+COPY --chmod=0755 github-import-trust-setup /usr/local/bin/github-import-trust-setup
 COPY runtime_settings.py runtime_hooks.py /usr/local/share/helixkit-agent/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/soulshouse-post-message /usr/local/bin/soulshouse-send-telegram /usr/local/bin/soulshouse-append-journal /usr/local/bin/soulshouse-usage /usr/local/bin/soulshouse-youtube /usr/local/bin/soulshouse-x /usr/local/bin/soulshouse-gws /usr/local/bin/soulshouse-tailnet \
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/soulshouse-post-message /usr/local/bin/soulshouse-send-telegram /usr/local/bin/soulshouse-append-journal /usr/local/bin/soulshouse-usage /usr/local/bin/soulshouse-youtube /usr/local/bin/soulshouse-x /usr/local/bin/soulshouse-gws /usr/local/bin/soulshouse-comms /usr/local/bin/soulshouse-tailnet \
     /usr/local/libexec/helixkit-antigravity-login/xdg-open \
     && chmod 0644 /usr/local/share/helixkit-agent/*.md /usr/local/share/helixkit-agent/stop_journal_reflex.py
 

@@ -1,0 +1,231 @@
+# Cloud resident hosting: foundation
+
+Scope: [issue #140](https://github.com/swombat/souls-house/issues/140).
+The intended first topology is one Hetzner Cloud VM per resident, not a
+dedicated physical server per resident. Pooling is deferred.
+
+## Present boundary
+
+`AgentPlacement` records a resident's backend (`local` or `hetzner_cloud`),
+state, provider server ID, future runtime endpoint and generation. The database
+allows one placement per resident and one resident per non-null provider server
+ID. The owning account is the resident's account; this introduces no new
+cross-account interface.
+
+- **No record:** today's local runtime, unchanged. There is no backfill.
+- **Local, ready:** today's local runtime, explicitly recorded.
+- **Any other placement:** unavailable to today's runtime. No fallback to local
+  Docker or the old `Agent#endpoint_url`, even if the remote record says ready.
+- Nothing creates placements automatically or offers them in the UI.
+- No credentials belong in these records. The HTTPS endpoint is reserved
+  metadata, not yet an authorized network destination.
+
+`Agents::RuntimeLocation` reads the current persisted placement rather than a
+potentially cached missing association. `Agents::Resources` applies that guard
+before local Docker ownership checks, including the legacy production namespace.
+Provisioning/startup, endpoint resolution and backup environment construction
+also refuse unsupported placement.
+
+Queued turns recheck placement at admission and immediately before submission:
+their stored endpoint is not continuing permission to start work. Already
+admitted turns use the existing cancellation-tombstone path on refusal, retaining
+capacity until the old runtime confirms cancellation. Polling and containment of
+already accepted work remain possible at its original endpoint.
+
+This is **not fencing or a movement protocol**. A lookup and subsequent I/O are
+not atomic; existing operations may already be in flight. `generation` is only
+reserved metadata and is not yet enforced by any runner. Do not change a live
+resident's placement to move it. Do not delete a remote placement to “retry”:
+absence deliberately means legacy local. `retired` preserves an explicit
+unavailable record.
+
+## Integration still needed
+
+1. Explicit hosting entitlement and approved server/image/location allowlists.
+2. Durable procurement operations: reconcile unknown create outcomes before
+   retrying; record ownership and provider action completion.
+3. Bootstrap and a narrowly authenticated runner. Separate administrative
+   authority from the resident's environment; no resident Docker socket or
+   Hetzner project token.
+4. Remote runtime endpoint enrollment and dispatch/lifecycle integration.
+   HTTPS syntax validation is not host identity verification or an SSRF policy.
+5. Remote backups, verified restore, private provider-state exclusions and a
+   real single-writer cutover/fencing protocol.
+6. A disposable, bounded-spend live pilot with separately approved credentials.
+
+House-funded inference already has its own gateway and grant ledger; see
+[house-funded inference](house-funded-inference.md). Its token entitlement does
+not grant a VM or collect a paid hosting subscription.
+
+## Testing and rollback
+
+Use synthetic placement rows and mocked I/O, in the isolated Rails test
+environment. Test missing/explicit-local compatibility, remote/non-ready refusal,
+fresh lookup after a cached absence, unique database constraints and endpoint
+validation. No Hetzner key or running VM is needed.
+
+The migration is additive and creates no records. Existing residents require no
+restart. This code is not a production rollout or approval to buy capacity.
+Once real remote placements exist, reverting to code that ignores placements
+would be unsafe; rollback must preserve the refusal boundary. The foundation
+creates no such production placements.
+
+## Host runner enrollment (pilot telemetry, #192)
+
+A VM ordered for the pilot runs a small host runner
+(`host-runner/souls_house_runner.py`) that **dials out** to Rails. This is a
+deliberate, bounded deviation from the architecture page, which has Rails
+calling the runner over a private network. It covers enrollment and telemetry
+only; the transport for resident turns is still undecided.
+
+- **Boot.** Procurement renders cloud-init with `RunnerUserData.render` and
+  sends it in its single create request. The document installs Docker (daemon
+  and `docker-cli`, which Debian 13 packages separately),
+  `python3-cryptography` and nftables, embeds the runner source, and writes a
+  0600 config holding the one-time enrollment token. That token is the only
+  secret in it.
+- **Token.** `RunnerEnrollment.mint!` is called inside procurement's create
+  intent transaction. It stores only the SHA-256 digest and a 24-hour expiry.
+  There is no re-mint. A lost plaintext or an expired token means operator
+  review.
+- **Enrollment.** `POST /api/v1/host_runner/enrollment` is signed with the
+  key it asks Rails to pin, which proves possession. Until procurement calls
+  `confirm_provider_server!`, the answer is 202 and the token is not burned.
+  After that, the reported Hetzner server ID must match. A repeated request
+  with the same key is answered "already enrolled", which is how a lost reply
+  recovers. A different key is refused.
+- **Signing.** Ed25519 over `souls-house-runner-v1`, method, path, the body's
+  SHA-256, the runner ID, the timestamp and a nonce. The runner uses Debian's
+  `python3-cryptography` and Rails uses Ruby's OpenSSL. No crypto is
+  hand-written. Rails allows ±120 s of skew, caps bodies at 64 KB and rejects
+  reused nonces through a unique index.
+  `test/fixtures/files/runner_signature_vector.json` is produced by the Python
+  runner and verified by Rails, which pins the format in both languages.
+- **Heartbeats.** `POST /api/v1/host_runner/heartbeat` is signed with the
+  pinned key and stores a fixed list of host facts. Health is derived from
+  heartbeat age and lapses on its own.
+- **What it cannot do.** Without `"commands_enabled": true` in its config the
+  runner knows two actions, `report_facts` and `heartbeat`, and refuses
+  anything else locally. Enrollment and health never make a placement ready or
+  permit dispatch.
+- **Network.** Host input is dropped except loopback, established traffic,
+  ICMP and SSH. SSH exists for Daniel's offline break-glass key; Rails holds
+  only the public half or its Hetzner key ID. Rails stays root-equivalent over
+  the VM through the Hetzner project token (rebuild, rescue, user_data at
+  create). The firewall limits the network, not Rails.
+
+`RunnerEnrollment` is separate from procurement's states. Provisioned is not
+enrolled, enrolled is not healthy, and healthy is not runtime-ready.
+
+## Command channel (#238)
+
+The transport for resident turns stays **dial-out** (Mira's shape check on
+#238): Rails never calls the VM.
+
+- **Commands.** `RunnerCommand` rows belong to one enrollment, its placement
+  and the placement generation they were issued under. The payload is
+  encrypted at rest and dropped once the runner answers. Kinds:
+  `start_resident`, `stop_resident`, `submit_turn`, `turn_status`,
+  `cancel_turn`; the runner refuses anything else locally.
+- **Delivery.** `POST /api/v1/host_runner/commands/next` (signed like a
+  heartbeat) returns at most one command at once, the oldest queued, or one
+  delivered but unanswered for `REDELIVER_AFTER`. Commands from an older
+  generation are refused by Rails and by the runner.
+- **Answers.** `POST /api/v1/host_runner/commands/:id/result` accepts only a
+  delivered command of this enrollment. The first answer wins. Outcomes are
+  `done`, `failed`, `refused` or `unknown`; anything else is recorded as
+  `unknown`. `done` for `submit_turn` is the trigger's answer, not turn
+  completion.
+- **Restarts.** The runner writes an in-flight marker before running a command
+  and remembers every answer by command id. A redelivery is answered from
+  memory, and a command interrupted by a restart is answered `unknown` and
+  never run again. A turn in that state is reconciled by its dispatch id.
+- **What runs on the VM.** `docker create` comes from a fixed template that
+  mirrors `Agents::Sandbox#run_container!`: named volumes, a private bridge
+  network, no published ports, no host mounts, no Docker socket. Rails supplies
+  values, never flags. Images are pinned by image ID and fetched from the
+  house (see below). Resident env
+  keys are allowlisted (house inference only, no provider keys) and written to
+  a `0600` env file, never to argv. Turns are relayed to the resident's
+  trigger server on the private bridge.
+
+## Remote dispatch (#238 part 2)
+
+A resident on a VM is dispatchable only when its placement is `hetzner_cloud`
+and `ready`, asynchronous turns are on, and the placement has a live, healthy
+runner enrollment (`Agents::RemoteRuntime.dispatchable?`). Then:
+
+- `Agents::Endpoint.url_for` returns `runner://<enrollment id>`. The house
+  never calls that; the synchronous trigger path refuses it outright.
+- `ResidentTurn` admits the turn as it would a local one, and
+  `ResidentTurnPollJob` reconciles it unchanged through `RemoteTriggerClient`,
+  which turns `turn_status`, `submit_turn` and `cancel_turn` into
+  RunnerCommands. An unanswered command is reused, not duplicated. Anything but
+  the resident's own answer (runner failed, refused, unknown, or silent) comes
+  back as a 5xx and is retried; only the resident's trigger server can produce
+  the 404 that licenses a submission. A turn recorded against a replaced or
+  revoked runner is never sent to another one.
+- Health is the runner's heartbeat plus the last lifecycle command it carried
+  out being a successful `start_resident`. Cold-start and cleanup never touch
+  local Docker for a VM resident.
+- Starting and stopping are operator actions: `Agents::RemoteRuntime.start!`
+  (the resident's local image, pinned by image ID) and `stop!`. Only
+  house-inference residents with native homes can run on a VM; the
+  environment is the house's own values with the public origin.
+- A ready VM placement needs its `provider_server_id` but no
+  `runtime_endpoint`: nothing calls the VM.
+- VMs are ordered with the command channel off unless the credentials set
+  `hetzner_cloud.runner_commands: true`.
+
+## Resident images come from the house (#238 part 3)
+
+Resident images are built on the house host and pushed to no registry, so a
+VM gets its image from the house. `start_resident` pins the image by **image
+ID** (`sha256:<64 hex>`, the hash of the image config, which `docker load`
+reproduces exactly). The runner fetches it with a signed
+`GET /api/v1/host_runner/images/sha256:<id>`. Rails serves it only while this
+enrollment holds a delivered, unanswered `start_resident` naming exactly that
+ID in the placement's current generation, and streams `docker save` of that ID.
+The runner pipes it into `docker load`, refuses to run unless the image is then
+present under that exact ID, and skips the fetch when it already has it. No
+registry, no registry credential, nothing in cloud-init.
+
+Not in this slice: moving an existing resident's data (backup, restore,
+single-writer cutover), real residents, and console containment on a VM.
+
+## Deploys reach VM residents (ops/deploy)
+
+"Update Chaos" and "Rebuild residents" roll residents on their own VMs as
+well as those on the house host. The host worker builds and checks one stock
+image as before, then, after the host residents, rolls each active VM
+resident through its runner (`ops/deploy/roll-vm-resident.rb`):
+
+- **What it runs now.** The image ID in the runner's own answer to its latest
+  finished `start_resident`, not whatever the resident's tag on this host now
+  points to. That image is still on the host (built here, handed over by ID),
+  so its Chaos source label and version are read from it. The single-revision
+  and no-downgrade rules cover VM residents too.
+- **Restart.** Only between turns, under the turn gate: the resident's image
+  is set to the new tag and `begin_refresh!` queues its start pinned by the
+  built image ID. Turn admission stays held until the runner answers.
+  If the tag resolves to any other ID, nothing is sent and nothing changes.
+- **Healthy** only when the restart settles done and the runner confirmed the
+  exact new image ID. Every refresh (deploy or credentials) records the image
+  ID it sent, and `settle_refresh!` (the deploy's polling and the background
+  sweep alike) releases turns only for a done answer naming exactly that ID.
+  A done answer naming another image or none is a failed restart. Its
+  recovery is pinned to the recorded ID, never to whatever the tag says now. A failed start gets the refresh's one recovery. If that
+  fails too, or no answer comes within `vm_restart_wait_seconds` (default
+  3600, as the VM fetches the image first), the run fails, the stock alias
+  does not move, and turns stay held for an operator.
+- **Skipped**, so the run ends partial: a VM resident that is busy past
+  `idle_wait_seconds`, or not reachable (placement not ready, birth not
+  finished, runner silent, or no confirmed start).
+- Exception: if there is no host resident and every VM resident is
+  unreachable, no running revision is known, so the run fails (closed)
+  rather than ending partial.
+- Inactive VM residents (retired throwaways) are left alone. A custom
+  (development) runtime is never sent to a VM.
+
+Not covered: the runner program itself (`host-runner/`) still ships only with
+a VM's user_data, so a runner change reaches existing VMs only by rebuilding them.

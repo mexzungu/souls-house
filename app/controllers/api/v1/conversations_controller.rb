@@ -2,11 +2,23 @@ module Api
   module V1
     class ConversationsController < BaseController
 
+      include ApiConversationJson
+      include ApiHumanConversation
+
       wrap_parameters false
 
       PAGE_SIZE = 100
       SEARCH_PAGE_SIZE = 50
       TITLE_MAX_LENGTH = 255
+      MODEL_ID_MAX_LENGTH = 255
+      LIST_FILTERS = %w[active archived deleted].freeze
+      rescue_from RoomSelectorError do |error|
+        render json: { error: error.message, code: "invalid_room_selector" }, status: :unprocessable_entity
+      end
+
+      UPDATABLE_FIELDS = %w[title visual_tag_id room_id room model_id web_access].freeze
+      # The web's chats#update also changes these; a resident's key may not.
+      HUMAN_ONLY_FIELDS = %w[model_id web_access].freeze
 
       def search
         response.headers["Cache-Control"] = "no-store"
@@ -41,7 +53,10 @@ module Api
       end
 
       def index
-        chats = paginated_conversations.limit(PAGE_SIZE + 1).to_a
+        scope = listing_scope
+        return if performed?
+
+        chats = paginated_conversations(scope).limit(PAGE_SIZE + 1).to_a
         next_cursor = chats.length > PAGE_SIZE ? chats[PAGE_SIZE - 1].to_param : nil
         chats = chats.first(PAGE_SIZE)
 
@@ -64,7 +79,7 @@ module Api
             created_at: chat.created_at.iso8601,
             updated_at: chat.updated_at.iso8601,
             transcript: chat.transcript_for_api(after_message_id: resolved_after_message_id, since: params[:since])
-          }
+          }.merge(conversation_room_json(chat))
         }
       end
 
@@ -83,13 +98,14 @@ module Api
               group_chat: chat.group_chat?,
               agents: chat.agents.map { |a| { id: a.to_param, name: a.name } },
               created_at: chat.created_at.iso8601
-            }
+            }.merge(conversation_room_json(chat))
           }, status: :created
           return
         end
 
         chat_attrs = {
           account: @destination,
+          room: room_selector_given?(params) ? resolve_room_selector(@destination, params) : nil,
           model_id: params[:model_id] || "openrouter/auto",
           title: params[:title],
           manual_responses: true
@@ -109,7 +125,7 @@ module Api
             group_chat: chat.group_chat?,
             agents: chat.group_chat? ? chat.agents.map { |a| { id: a.to_param, name: a.name } } : [],
             created_at: chat.created_at.iso8601
-          }
+          }.merge(conversation_room_json(chat))
         }, status: :created
       rescue ActiveRecord::RecordInvalid => error
         # A guest that departed between the account check and the insert is
@@ -123,8 +139,30 @@ module Api
       def update
         chat = conversations_scope.kept.find(params[:id])
         changes = params.except(:controller, :action, :id, :account_id, :format).to_unsafe_h
-        unless changes.any? && (changes.keys - %w[title visual_tag_id]).empty?
-          render json: { error: "Provide top-level title and/or visual_tag_id; no other fields are accepted" }, status: :unprocessable_entity
+        unless changes.any? && (changes.keys - UPDATABLE_FIELDS).empty?
+          render json: { error: "Provide top-level #{UPDATABLE_FIELDS.to_sentence(last_word_connector: ", and/or ")}; no other fields are accepted" }, status: :unprocessable_entity
+          return
+        end
+        if (changes.keys & HUMAN_ONLY_FIELDS).any?
+          if current_api_agent
+            render json: { error: "model_id and web_access can only be changed with a person's API key" }, status: :forbidden
+            return
+          end
+          # As chats#update: the room's account must still be the person's,
+          # and chats must be switched on.
+          human_account!(chat.account)
+          require_chats_feature!
+          return if performed?
+        end
+        if changes.key?("model_id")
+          model_id = changes["model_id"]
+          unless model_id.is_a?(String) && model_id.strip.present? && model_id.length <= MODEL_ID_MAX_LENGTH && !model_id.include?("\0")
+            render json: { error: "model_id must be nonblank text of at most #{MODEL_ID_MAX_LENGTH} characters, without NUL" }, status: :unprocessable_entity
+            return
+          end
+        end
+        if changes.key?("web_access") && ![ true, false ].include?(changes["web_access"])
+          render json: { error: "web_access must be true or false" }, status: :unprocessable_entity
           return
         end
         if changes.key?("title")
@@ -134,6 +172,15 @@ module Api
             return
           end
           changes["title"] = title.strip
+        end
+        if room_selector_given?(changes)
+          unless rooms_visible_in?(chat.account)
+            render json: { error: "Only the account's own people and residents can move conversations between rooms" }, status: :forbidden
+            return
+          end
+          room = resolve_room_selector(chat.account, changes)
+          changes.delete("room_id")
+          changes["room"] = room
         end
         if changes.key?("visual_tag_id")
           tag_id = changes.delete("visual_tag_id")
@@ -183,11 +230,58 @@ module Api
       def conversations_scope
         return current_api_agent.chats if current_api_agent
 
-        current_api_account.chats
+        human_chats
       end
 
-      def paginated_conversations
-        scope = conversations_scope.kept.active.includes(:visual_tag).reorder(updated_at: :desc, id: :desc)
+      # active (default) is what the API has always listed. archived and
+      # deleted mirror the web sidebar (chats#index): archived rooms for any
+      # current member, deleted ones only where the person can manage the
+      # account. Both are person-only and need chats switched on.
+      def listing_scope
+        filter = params[:filter].presence || "active"
+        unless LIST_FILTERS.include?(filter)
+          render json: { error: "filter must be one of #{LIST_FILTERS.join(", ")}" }, status: :unprocessable_entity
+          return
+        end
+        return conversations_scope.kept.active if filter == "active"
+
+        require_human_actor!
+        require_chats_feature! unless performed?
+        return if performed?
+
+        scope = member_chats
+        return scope.kept.archived if filter == "archived"
+
+        if spans_accounts?
+          # An unnarrowed OAuth token: only the accounts the person may manage.
+          manageable = current_api_user.confirmed_accounts.select { |account| account.manageable_by?(current_api_user) }
+          return scope.discarded.where(account_id: manageable.map(&:id))
+        end
+        unless human_account!(current_api_account).manageable_by?(current_api_user)
+          render json: { error: "Only someone who can manage this account can list deleted conversations" }, status: :forbidden
+          return
+        end
+        scope.discarded
+      end
+
+      # An OAuth token without account_id reaches every enabled account the
+      # person belongs to; otherwise the request names one account.
+      def spans_accounts?
+        app_token_request? && params[:account_id].blank?
+      end
+
+      # human_chats, but only where the person is still a confirmed member of
+      # an enabled account: an account key whose person has left, or whose
+      # account is disabled, lists nothing (404).
+      def member_chats
+        return human_chats if spans_accounts?
+
+        human_account!(current_api_account)
+        human_chats
+      end
+
+      def paginated_conversations(listed)
+        scope = listed.includes(:visual_tag).reorder(updated_at: :desc, id: :desc)
         return scope if params[:cursor].blank?
 
         cursor = conversations_scope.find(params[:cursor])
@@ -204,8 +298,20 @@ module Api
         Message.decode_id(params[:after_message_id])
       end
 
+      # A resident at home may choose a room; otherwise, and always for a
+      # guest, the conversation lands in the account's resident default.
+      def room_for_resident_conversation
+        if room_selector_given?(params) && rooms_visible_in?(@destination)
+          resolve_room_selector(@destination, params)
+        else
+          @destination.resident_room
+        end
+      end
+
       def create_agent_scoped_conversation!(invited_agent_ids)
         agent_ids = ([ current_api_agent.id ] + invited_agent_ids).uniq
+        # The safeguard check is a network call: run it before the transaction.
+        safeguard_check = SafeguardConversationPost.check(agent: current_api_agent, content: params[:message])
 
         # In a guest account, the creator's own seat is admitted under the
         # membership lock (ChatAgent#agent_takes_part_in_account), like any seat.
@@ -215,17 +321,22 @@ module Api
             title: params[:title],
             manual_responses: true,
             initiated_by_agent: current_api_agent,
-            initiation_reason: params[:reason]
+            initiation_reason: params[:reason],
+            room: room_for_resident_conversation
           )
           chat.agent_ids = agent_ids
           chat.save!
 
           if params[:message].present?
-            chat.messages.create!(
+            opening = chat.messages.build(
               role: "assistant",
               agent: current_api_agent,
               content: params[:message]
             )
+            # An @Name tag of an invited resident hands off to them, as in any post.
+            opening.handoff_recipient_ids = []
+            SafeguardConversationPost.save(opening, check: safeguard_check) or
+              raise ActiveRecord::RecordInvalid, opening
           end
 
           chat
@@ -253,20 +364,6 @@ module Api
         end
 
         agents.pluck(:id)
-      end
-
-      def conversation_json(chat)
-        {
-          id: chat.to_param,
-          title: chat.title_or_default,
-          visual_tag: chat.visual_tag&.as_json,
-          summary: chat.summary,
-          summary_stale: chat.summary_stale?,
-          model: chat.model_label,
-          group_chat: chat.group_chat?,
-          message_count: chat.message_count,
-          updated_at: chat.updated_at.iso8601
-        }
       end
 
     end

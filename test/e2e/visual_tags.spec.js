@@ -26,7 +26,8 @@ for (const mobile of [false, true]) {
         const base = `/accounts/${setup.account_param}`;
         await page.goto(`${base}/interface`);
         await expect(page.getByRole('heading', { name: 'Visual tags', exact: true })).toBeVisible();
-        await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(9);
+        await expect(page.getByRole('button', { name: /^Edit / })).toHaveCount(10);
+        // The fixed Pin leads the palette; the other defaults follow alphabetically.
         const defaults = [
           'Building',
           'Care',
@@ -39,8 +40,15 @@ for (const mobile of [false, true]) {
           'Research',
         ];
         const palette = page.getByLabel('Visual tag palette', { exact: true });
-        await expect(palette.getByRole('button')).toHaveText(defaults.map((label) => `${label} (0)`));
+        await expect(palette.getByRole('button')).toHaveText(['Pin', ...defaults].map((label) => `${label} (0)`));
         await page.screenshot({ path: testInfo.outputPath('interface.png'), fullPage: true });
+        // The fixed Pin tag keeps its name and cannot be removed.
+        await page.getByRole('button', { name: 'Edit Pin', exact: true }).click();
+        const pinForm = page.getByRole('form', { name: 'Edit Pin', exact: true });
+        await expect(pinForm.getByLabel('Label', { exact: true })).toBeDisabled();
+        await expect(pinForm.getByRole('button', { name: 'Remove tag' })).toHaveCount(0);
+        await pinForm.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(pinForm).toHaveCount(0);
         await page.getByRole('button', { name: 'Add tag', exact: true }).click();
         const form = page.getByRole('form', { name: 'Add visual tag', exact: true });
         await form.getByLabel('Label', { exact: true }).fill('Experiments');
@@ -110,10 +118,11 @@ for (const mobile of [false, true]) {
           ? page.getByRole('navigation', { name: 'Recent conversations' })
           : page.locator('aside').first();
         await tagNav.getByRole('button', { name: 'Change visual tag: Experiments', exact: true }).first().click();
-        await expect(page.getByRole('menuitem')).toHaveText(['No tag', 'Experiments', ...defaults]);
+        await expect(page.getByRole('menuitem')).toHaveText(['No tag', 'Pin', 'Experiments', ...defaults]);
         await page.keyboard.press('Escape');
         await page.goto(`${base}/interface`);
         await expect(palette.getByRole('button')).toHaveText([
+          'Pin (0)',
           'Experiments (1)',
           ...defaults.map((label) => `${label} (0)`),
         ]);

@@ -8,6 +8,248 @@ module TestSupport
 
     PASSWORD = "password123"
 
+    def guest_directory_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "setup"
+        user = account.memberships.find_by!(role: "owner").user
+        home = Account.create!(name: "#{account.name} Guest home", account_type: :team)
+        home.add_user!(user, role: "owner", skip_confirmation: true)
+        visitor = create_agent!(home, "Live visitor", "teal")
+        spare = create_agent!(home, "Spare visitor", "slate")
+        return render json: { home: home.to_param, visitor: visitor.to_param, spare: spare.to_param }
+      end
+
+      home = Account.find_by!(name: "#{account.name} Guest home")
+      visitor = home.agents.find_by!(name: "Live visitor")
+      case params.fetch(:operation)
+      when "join"
+        account.guest_memberships.create!(agent: visitor, added_by: account.memberships.find_by!(role: "owner").user)
+      when "leave"
+        account.guest_memberships.find_by!(agent: visitor).destroy!
+      when "delete"
+        visitor.destroy!
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    def tweet_stream_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "enable", "enable_unfunded"
+        Setting.instance.update!(field_tweets_enabled: true, field_tweets_site_monthly_usd_ceiling: 10,
+          field_tweets_account_monthly_usd_ceiling: 1, field_tweets_daily_import_cap: 50,
+          field_tweets_poll_minutes: 15)
+        return head :ok if params[:operation] == "enable_unfunded"
+
+        create_synthetic_tweet_funding!(account)
+      when "fund"
+        create_synthetic_tweet_funding!(account)
+      when "unfund"
+        account.service_connections.connected.where(label: "Synthetic tweet funding").last!.update!(status: "revoked")
+      when "funding_bookkeeping"
+        account.service_connections.find_by!(label: "Synthetic tweet funding").update!(comms_event_seq: 7)
+      when "limits", "feature_off", "feature_on"
+        attributes = case params[:operation]
+        when "limits" then { field_tweets_daily_import_cap: 37, field_tweets_poll_minutes: 30 }
+        when "feature_off" then { field_tweets_enabled: false }
+        else { field_tweets_enabled: true }
+        end
+        Setting.instance.update!(attributes)
+        # The isolated browser server has no queue worker. Producer/job enqueue
+        # semantics are covered separately; execute the real fan-out job here.
+        FieldTweets::RefreshSettingsJob.perform_now
+      when "create"
+        account.create_field_tweet_source!(handle: "example", own_monthly_usd_limit: 5)
+      when "advance"
+        account.field_tweet_source.update!(checkpoint_at: Time.current, last_success_at: Time.current)
+      when "bookkeeping"
+        account.field_tweet_source.update!(window_cursor: "hidden-browser-cursor", failure_count: 2)
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    def create_synthetic_tweet_funding!(account)
+      connection = account.service_connections.new(provider: "twitterapi_io", management_scope: "account_managed",
+        credential_kind: "api_key", status: "connected", connected_by_user: account.users.first!,
+        label: "Synthetic tweet funding", credential_fingerprint: SecureRandom.hex(16))
+      connection.credential_payload_hash = { "api_key" => "synthetic-no-vendor-access" }
+      connection.save!
+    end
+    private :create_synthetic_tweet_funding!
+
+    def field_activity_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "arrive"
+        note = account.whiteboards.create!(name: "Live arrival", content: "Live note words")
+        account.field_songs.create!(title: "Live song", instrumental: true,
+          links: [ "https://example.invalid/live-song" ])
+        account.field_tweets.create!(provider_tweet_id: "987654321", author_handle: "example",
+          text: "Live tweet", posted_at: Time.current, fetched_at: Time.current,
+          url: "https://x.com/example/status/987654321")
+        render json: { note: note.to_param }
+      when "delete"
+        account.whiteboards.find(params.fetch(:note)).soft_delete!
+        head :ok
+      when "rename"
+        account.whiteboards.find(params.fetch(:note)).update!(
+          name: "Renamed live note", content: "Changed elsewhere")
+        head :ok
+      when "late"
+        account.whiteboards.create!(name: "Live late arrival", content: "Live late words")
+        head :ok
+      when "chat"
+        chat = account.chats.create!(title: "Unrelated Field test chat", model_id: "openrouter/auto")
+        chat.messages.create!(role: "assistant", agent: account.agents.first!, content: "Unrelated chat activity")
+        head :ok
+      else
+        head :unprocessable_entity
+      end
+    end
+
+    def room_navigation_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      room = if params[:operation] == "create"
+        account.rooms.create!(name: params.fetch(:name))
+      else
+        Room.resolve_for(account, params.fetch(:room))
+      end
+      case params[:operation]
+      when "rename" then room.update!(name: params.fetch(:name))
+      when "move" then room.move!(params.fetch(:direction).to_i)
+      when "delete" then room.destroy!
+      when "create" # The create above is itself the producer.
+      else return head :unprocessable_entity
+      end
+      render json: { id: room.to_param }
+    end
+
+    def expired_subscription_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "setup"
+        user = account.users.find_by!(email_address: params.fetch(:email))
+        other = Account.create!(name: "#{account.name} Other", account_type: :team)
+        other.add_user!(user, role: "member", skip_confirmation: true)
+        private_account = Account.create!(name: "#{account.name} Inaccessible", account_type: :team)
+        [ other, private_account ].each { |target| create_agent!(target, "#{target.name} Resident", "slate") }
+        render json: { other: other.to_param, hidden: private_account.to_param }
+        return
+      end
+
+      agent = account.agents.first!
+      case params.fetch(:operation)
+      when "expire"
+        agent.record_provider_connection!("anthropic", status: "connected")
+        agent.mark_provider_connection_status!("anthropic", "expired")
+      when "reconnect"
+        agent.record_provider_connection!("anthropic", status: "connected")
+      when "api_key"
+        agent.use_provider_auth_mode!("anthropic", "api_key")
+      when "retire"
+        agent.update!(runtime: "deprecated")
+      when "remove"
+        agent.destroy!
+      else
+        return head :unprocessable_entity
+      end
+      render json: { agent_name: agent.name }
+    end
+
+    # What the transcription endpoint returns besides the text: the recording, stored and signed.
+    # Browser tests stub transcription itself (no speech-to-text provider in test) but send a
+    # real signed id, so the composers keep their audio hold until the send has gone through.
+    def audio_blob
+      blob = ActiveStorage::Blob.create_and_upload!(
+        io: Rails.root.join("test/fixtures/files/test_audio.webm").open,
+        filename: "recording.webm",
+        content_type: "audio/webm"
+      )
+      render json: { signed_id: blob.signed_id }
+    end
+
+    def song_card_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      song = account.field_songs.create!(title: "Hallelujah", artist: "Jeff Buckley",
+        links: [ "https://youtu.be/y8AWFf7EAc4" ], lyrics: "A secret chord\nA second line",
+        added_by: account.users.first!)
+      gone = account.field_songs.create!(title: "Discarded secret",
+        links: [ "https://youtu.be/y8AWFf7EAc4" ], lyrics: "discarded words")
+      gone.discard!
+      chat = account.chats.create!(title: "Song card conversation", model_id: "openrouter/auto")
+      chat.messages.create!(role: "assistant", agent: account.agents.first!, content: <<~TEXT)
+        This is the version I meant.
+
+        [[song:#{song.to_param}]]
+
+        This one is no longer here:
+
+        [[song:#{gone.to_param}]]
+
+        Example, not a card: `[[song:#{song.to_param}]]`
+
+        ```text
+        [[song:#{song.to_param}]]
+        ```
+
+            [[song:#{song.to_param}]]
+      TEXT
+      if params[:outside_offers]
+        chat.messages.create!(role: "assistant", agent: account.agents.first!, content: <<~TEXT)
+          An offer, not an addition to your Field.
+
+          [[song:https://youtu.be/aqz-KE-bpKQ | Outside song | Example artist]]
+
+          [[song:https://music.apple.com/us/album/example/123 | Apple offer | Example artist]]
+
+          [[song:https://example.invalid/unsafe | Unsupported offer | Nobody]]
+
+          [[song:https://youtu.be/aqz-KE-bpKQ | | Example artist]]
+        TEXT
+      end
+      render json: {
+        chat_url: account_chat_path(account, chat),
+        song_url: account_field_song_path(account, song)
+      }
+    end
+
+    # A recording that never became ready (failed), carrying meeting notes:
+    # its notes must still be reachable from the Field viewer.
+    def field_recording_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      audio = ActiveStorage::Blob.create_and_upload!(io: file_fixture_audio, filename: "standup.mp3", content_type: "audio/mpeg")
+      recording = account.field_recordings.create!(title: params.fetch(:title, "Failed standup"), notes: params[:notes],
+        transcript_source: params[:speakers_ready] ? "supplied" : "vendor",
+        uploaded_by: account.users.first!, audio: audio)
+      if params[:speakers_ready]
+        # Synthetic supplied transcript: no transcriber, recognition or remote jobs.
+        recording.store_supplied_transcript!([
+          { "spk" => "speaker_0", "s" => nil, "t" => "A local speaker's first words." },
+          { "spk" => "speaker_1", "s" => nil, "t" => "Another local speaker replies." }
+        ])
+      else
+        recording.update_columns(status: "failed", failure_reason: "The transcriber couldn't read this file.")
+      end
+      render json: { recording_param: recording.to_param }
+    end
+
     def stone_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
@@ -85,6 +327,11 @@ module TestSupport
         create_agent!(account, "E2E Inactive Fork", "gray", active: false)
       ]
       agents.each { |agent| agent.update_columns(runtime: "deprecated") } if params[:deprecated]
+      if params[:subagent_settings]
+        account.update!(use_system_ai_credentials: false, openrouter_api_key: "test-only-router", openai_api_key: "test-only-openai")
+        agents.first.update!(model_id: "anthropic/claude-opus-5.5", provider_auth_modes: { "anthropic" => "oauth_account" },
+                             provider_connections: { "anthropic" => { "status" => "connected" } })
+      end
       if params[:missing_resident_credentials]
         account.update!(use_system_ai_credentials: false)
         agents.first.update!(health_state: "healthy", birth_committed_at: Time.current,
@@ -106,7 +353,7 @@ module TestSupport
       end
       if params[:busy_house_orientation]
         resident = agents.first
-        resident.update!(model_id: HouseInference::Offering::MODEL_ID, health_state: "healthy",
+        resident.update!(model_id: HouseInference::Offering::DEEPSEEK_MODEL_ID, health_state: "healthy",
           birth_committed_at: Time.current, orientation_requested_at: Time.current)
         grant = HouseInferenceGrant.create!(agent: resident, user: primary_user)
         grant.house_inference_calls.create!(month: HouseInference::Offering.month,
@@ -140,6 +387,11 @@ module TestSupport
           credential_metadata: { "repository" => "member/project" })
       end
 
+      telegram_fixtures(account, primary_user) if params[:telegram]
+      whatsapp = whatsapp_fixture(account, primary_user) if params[:whatsapp]
+
+      github_imports = github_import_fixtures(account, primary_user, run_id) if params[:github_resident_onboarding]
+
       render json: {
         run_id: run_id,
         password: PASSWORD,
@@ -149,6 +401,8 @@ module TestSupport
         primary_user: user_json(primary_user),
         secondary_user: user_json(secondary_user),
         admin_user: user_json(admin_user),
+        **(github_imports || {}),
+        **(whatsapp ? { whatsapp: whatsapp } : {}),
         agents: agents.map { |agent|
           { id: agent.to_param, name: agent.name, edit_url: edit_account_agent_path(account, agent) }
         }
@@ -196,11 +450,19 @@ module TestSupport
           interaction.activity_configuration!
         end
       end
+      if params[:silence_seconds]
+        run.update!(started_at: params[:silence_seconds].to_i.clamp(0, 3600).seconds.ago)
+      end
+      if params[:post_update]
+        chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic progress update.")
+      end
       attempt = run.agent_runtime_attempts.first
       attempt_id = attempt&.attempt_id || SecureRandom.uuid
       seq = attempt&.last_seq || 0
       events = if params[:complete]
-        chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic work is complete.", runtime_interaction: run)
+        unless params[:quiet_complete]
+          chat.messages.create!(agent: agent, role: "assistant", content: "Synthetic work is complete.", runtime_interaction: run)
+        end
         [ { "seq" => seq + 1, "type" => "supervisor.finished", "data" => { "outcome" => "completed" } } ]
       elsif attempt.nil?
         [
@@ -226,10 +488,12 @@ module TestSupport
         end
       end
       events << { "seq" => next_seq += 1, "type" => "stream.gap", "data" => {} } if params[:stream_gap]
+      events << { "seq" => next_seq + 1, "type" => "heartbeat", "data" => {} } if events.empty?
       RuntimeActivityIngestion.new(run, {
         "schema_version" => 1, "run_id" => run.run_id, "attempt_id" => attempt_id,
         "attempt_number" => 1, "events" => events
       }).call
+      run.agent_runtime_attempts.last.update!(last_report_at: 31.seconds.ago) if params[:stale_report]
       render json: { runtime_run_id: run.run_id }
     end
 
@@ -358,6 +622,12 @@ module TestSupport
             refinement_threshold: agent.refinement_threshold,
             heartbeat_wakes_per_day: agent.heartbeat_wakes_per_day
           }
+        },
+        # The phone request a WhatsApp connector would have been sent in the
+        # signed pair_phone command (the browser test plays the connector,
+        # and its code event must name the request it answers).
+        whatsapp: account.service_connections.where(provider: "whatsapp").order(:id).last&.then { |connection|
+          { id: connection.public_id, phone_request: connection.phone_pairing_state["request"] }
         }
       }
     end
@@ -369,8 +639,142 @@ module TestSupport
 
     private
 
+    # Three Telegram connections owned by the primary user, with no connector
+    # behind them: one showing a QR code, one asking for the two-step
+    # password, and one signed in with a few chats.
+    def telegram_fixtures(account, user)
+      adapter = Services::Definition.fetch("telegram").adapter
+      create = lambda do |label, **attributes|
+        result = adapter.connection_attributes(credentials: {}, user: user)
+        account.service_connections.create!(
+          connected_by_user: user, provider: "telegram", management_scope: "personal", label: label,
+          credential_kind: result[:credential_kind], credential_fingerprint: result[:credential_fingerprint],
+          credential_metadata: result[:credential_metadata], credential_payload_hash: result[:credential_payload],
+          login_generation: 1, **attributes
+        )
+      end
+      now = Time.current
+      create.call("Telegram sign-in", status: "pairing",
+        pairing_qr: "tg://login?token=e2e-#{SecureRandom.hex(16)}",
+        pairing_qr_issued_at: now, pairing_qr_expires_at: now + 5.minutes)
+      create.call("Telegram password", status: "pairing",
+        connector_state: { "login" => { "step" => "password", "hint" => "the usual one" } })
+      connected = create.call("Telegram account", status: "connected",
+        external_subject_id: "e2e-telegram-#{SecureRandom.hex(6)}", external_identity: "Ada Example (@ada_example)",
+        connector_state: { "availability" => { "state" => "backlogged", "reason" => "6,000 events waiting" } })
+      [ [ "user:1", "direct", true ], [ "chat:2", "group", true ], [ "channel:3", "broadcast", false ] ].each do |chat_id, kind, synced|
+        connected.comms_chats.create!(provider_chat_id: chat_id, kind: kind, name: "E2E #{kind}",
+          sync_state: synced ? { "synced" => true } : { "synced" => false, "reason" => "broadcast_channel" })
+      end
+    end
+
+    # A WhatsApp connection owned by the primary user, waiting to pair, with no
+    # connector behind it. The test gets the callback secret so it can sign
+    # the connector's events itself and post them to the real events endpoint.
+    def whatsapp_fixture(account, user)
+      result = Services::Definition.fetch("whatsapp").adapter.connection_attributes(credentials: {}, user: user)
+      connection = account.service_connections.create!(
+        connected_by_user: user, provider: "whatsapp", management_scope: "personal", status: "pairing",
+        label: result[:label], credential_kind: result[:credential_kind],
+        credential_fingerprint: result[:credential_fingerprint], credential_metadata: result[:credential_metadata],
+        credential_payload_hash: result[:credential_payload]
+      )
+      { id: connection.public_id, callback_secret: result[:credential_payload]["callback_secret"] }
+    end
+
+    def github_import_fixtures(account, user, run_id)
+      connection = account.service_connections.create!(
+        provider: "github", connected_by_user: user, status: "connected",
+        external_subject_id: "example-identity", external_identity: "example-user",
+        label: "example-org/example-home", management_scope: "personal",
+        credential_kind: "token",
+        credential_fingerprint: Services::GithubTokenAdapter.fingerprint("github_pat_EXAMPLE_NOT_A_REAL_TOKEN"),
+        credential_payload_hash: { "token" => "github_pat_EXAMPLE_NOT_A_REAL_TOKEN" },
+        credential_metadata: {
+          "repository" => "example-org/example-home", "repository_id" => "123456",
+          "default_branch" => "main", "token_kind" => "fine_grained",
+          "oauth_scopes" => nil, "authority_source" => "token_format"
+        }
+      )
+      attributes = {
+        account: account, requested_by: user, service_connection: connection,
+        name: "Example resident", model_id: HouseInference::Offering::DEEPSEEK_MODEL_ID,
+        repository: "example-org/example-home", repository_id: "123456", branch: "main",
+        commit_sha: "0123456789abcdef0123456789abcdef01234567",
+        portable_home_id: "example-#{run_id}",
+        credential_fingerprint: connection.credential_fingerprint,
+        token_metadata: connection.credential_metadata.slice("token_kind", "oauth_scopes", "authority_source")
+      }
+      pending = GithubResidentImport.create!(attributes)
+      failed = GithubResidentImport.create!(attributes.merge(
+        name: "Example failed import", portable_home_id: "example-failed-#{run_id}",
+        status: "failed", last_error: "Synthetic setup failure; no real repository or runtime was contacted."
+      ))
+      waiting_trust = GithubResidentImport.create!(attributes.merge(
+        name: "Example awaiting runtime trust", portable_home_id: "example-trust-#{run_id}",
+        status: "needs_runtime_trust", approved_by: user, approved_at: Time.current,
+        approved_commit_sha: attributes[:commit_sha],
+        observed_branch_sha_at_approval: attributes[:commit_sha],
+        approved_credential_fingerprint: connection.credential_fingerprint,
+        approved_image: "example-runtime:synthetic"
+      ))
+      standard_attributes = attributes.merge(
+        name: "Example standard sync", portable_home_id: "example-standard-#{run_id}",
+        sync_strategy: "standard",
+        sync_configuration: {
+          "auto_commit_paths" => [ "journals", "notes" ],
+          "append_only_paths" => [ "journals" ], "allow_destructive_paths" => []
+        }
+      )
+      standard = GithubResidentImport.create!(standard_attributes) if params[:standard_home_sync]
+      if standard
+        ready_attributes = standard_attributes.merge(
+          status: "ready", approved_by: user, approved_at: Time.current,
+          approved_commit_sha: attributes[:commit_sha],
+          observed_branch_sha_at_approval: attributes[:commit_sha],
+          approved_credential_fingerprint: connection.credential_fingerprint,
+          approved_image: "example-runtime:synthetic"
+        )
+        conflict_health = {
+          "state" => "needs_attention", "checked_at" => Time.current.iso8601,
+          "last_success_at" => 2.hours.ago.iso8601, "reason_code" => "merge_conflict",
+          "rescue_ref" => "rescue/synthetic/20261006T100000000000Z-abcdef012345", "rescue_status" => "pushed"
+        }
+        conflict = GithubResidentImport.create!(ready_attributes.merge(
+          name: "Example sync conflict", portable_home_id: "example-conflict-#{run_id}",
+          sync_health: conflict_health
+        ))
+        rescue_failed = GithubResidentImport.create!(ready_attributes.merge(
+          name: "Example rescue failure", portable_home_id: "example-rescue-failed-#{run_id}",
+          sync_health: conflict_health.merge("rescue_status" => "failed")
+        ))
+        stale = GithubResidentImport.create!(ready_attributes.merge(
+          name: "Example stale sync", portable_home_id: "example-stale-#{run_id}",
+          sync_configuration: {},
+          sync_health: {
+            "state" => "ok", "checked_at" => 2.days.ago.iso8601,
+            "last_success_at" => 2.days.ago.iso8601, "reason_code" => "synced", "rescue_status" => "not_needed"
+          }
+        ))
+      end
+      base = "/accounts/#{account.to_param}/github_resident_imports"
+      { github_import_url: "#{base}/#{pending.to_param}", github_import_new_url: "#{base}/new",
+        github_import_failed_url: "#{base}/#{failed.to_param}",
+        github_import_trust_url: "#{base}/#{waiting_trust.to_param}",
+        **(standard ? {
+          standard_sync_review_url: "#{base}/#{standard.to_param}",
+          standard_sync_conflict_url: "#{base}/#{conflict.to_param}",
+          standard_sync_rescue_failed_url: "#{base}/#{rescue_failed.to_param}",
+          standard_sync_stale_url: "#{base}/#{stale.to_param}"
+        } : {}) }
+    end
+
     def ensure_test_environment
       head :not_found unless Rails.env.test?
+    end
+
+    def file_fixture_audio
+      StringIO.new(File.binread(Rails.root.join("test/fixtures/files/test_audio.mp3")))
     end
 
     def cleanup_run(run_id)
@@ -394,6 +798,10 @@ module TestSupport
       ApiKey.where(agent_id: agent_ids).destroy_all
       AuditLog.where(account: accounts).or(AuditLog.where(user: users)).destroy_all
       Session.where(user: users).destroy_all
+      GithubResidentImport.where(account: accounts).destroy_all
+      connections = ServiceConnection.where(account_id: accounts.select(:id))
+      CommsMessage.where(service_connection: connections).delete_all
+      CommsChat.where(service_connection: connections).delete_all
       accounts.find_each(&:destroy!)
       users.find_each(&:destroy!)
     end

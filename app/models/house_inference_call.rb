@@ -8,11 +8,11 @@ class HouseInferenceCall < ApplicationRecord
   def settle!(usage = nil, upstream_id: nil)
     with_lock do
       return unless status == 'pending'
-      cost = BigDecimal(usage['cost'].to_s, exception: false) if usage.is_a?(Hash)
-      byok = usage.is_a?(Hash) && usage['is_byok'] == true
-      known = !byok && cost&.finite? && cost >= 0
-      cost = cost.ceil(8) if known # never round a fractional charge down in the ledger
-      outcome = if byok || (known && cost > charge_usd)
+      # BYOK and rounding (never down) live in HouseInference::UsageCost. A
+      # BYOK call without a usable upstream cost fails closed as before.
+      cost, byok = HouseInference::UsageCost.call(usage)
+      known = !cost.nil?
+      outcome = if (byok && !known) || (known && cost > charge_usd)
         'overrun'
       else
         known ? 'settled' : 'uncertain'

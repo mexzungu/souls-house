@@ -7,7 +7,12 @@ class Admin::SettingsController < ApplicationController
     render inertia: "admin/settings", props: {
       setting: Setting.instance.as_json.merge(
         logo_url: Setting.instance.logo.attached? ? url_for(Setting.instance.logo) : nil
-      )
+      ),
+      follow_through_residents: follow_through_residents,
+      stalled_sweep_accounts: stalled_sweep_accounts,
+      vm_births: Agents::VmBirthPolicy.current.as_json,
+      field_ocr: FieldOcr.status_json,
+      field_tweets: FieldTweets.status_json
     }
   end
 
@@ -16,8 +21,19 @@ class Admin::SettingsController < ApplicationController
 
     setting.logo.purge if params[:setting]&.[](:remove_logo)
 
-    if setting.update(setting_params)
-      audit_with_changes("update_settings", setting)
+    if params[:setting]&.[](:field_tweets_resume_house).to_s == "true"
+      setting.assign_attributes(field_tweets_house_halted_at: nil, field_tweets_house_halt_reason: nil)
+    end
+
+    saved = Setting.transaction do
+      setting.update(setting_params).tap do |ok|
+        update_follow_through_residents if ok && params[:setting]&.key?(:follow_through_resident_ids)
+        update_stalled_sweep_accounts if ok && params[:setting]&.key?(:stalled_sweep_account_ids)
+      end
+    end
+
+    if saved
+      audit_with_changes("update_settings", setting, **@follow_through_changes.to_h, **@stalled_sweep_changes.to_h)
       redirect_to admin_settings_path, notice: "Settings updated"
     else
       redirect_to admin_settings_path, inertia: { errors: setting.errors.to_hash }
@@ -34,8 +50,79 @@ class Admin::SettingsController < ApplicationController
       :allow_chats,
       :allow_agents,
       :show_usage_in_chat,
+      :safeguard_conversations_enabled,
+      :follow_through_scope,
+      :stalled_sweep_minutes,
+      :stalled_sweep_wake,
+      :new_residents_on_vm,
+      :vm_resident_limit,
+      :field_ocr_enabled,
+      :field_ocr_daily_usd_ceiling,
+      :field_tweets_enabled,
+      :field_tweets_site_monthly_usd_ceiling,
+      :field_tweets_account_monthly_usd_ceiling,
+      :field_tweets_daily_import_cap,
+      :field_tweets_poll_minutes,
       :logo
     )
+  end
+
+  # Every active resident, so the admin can pick who the follow-through check
+  # covers when it is set to "selected".
+  def follow_through_residents
+    Agent.active.includes(:account).sort_by { |a| [ a.account&.name.to_s.downcase, a.name.to_s.downcase ] }.map do |agent|
+      {
+        id: agent.to_param,
+        name: agent.name,
+        account: agent.account&.name,
+        icon: agent.icon,
+        colour: agent.colour,
+        paused: agent.paused?,
+        follow_through: agent.follow_through?
+      }
+    end
+  end
+
+  # The form sends the full list of picked residents; anyone not in it is off.
+  def update_follow_through_residents
+    picked = Array(params[:setting][:follow_through_resident_ids]).compact_blank.filter_map do |param|
+      Agent.find_by_obfuscated_id(param)&.id
+    rescue StandardError
+      nil
+    end
+    turned_on = Agent.active.where(id: picked, follow_through: false).pluck(:id)
+    turned_off = Agent.active.where(follow_through: true).where.not(id: picked).pluck(:id)
+    Agent.where(id: turned_on).update_all(follow_through: true, updated_at: Time.current)
+    Agent.where(id: turned_off).update_all(follow_through: false, updated_at: Time.current)
+    @follow_through_changes = {
+      follow_through_on: Agent.where(id: turned_on).map(&:to_param),
+      follow_through_off: Agent.where(id: turned_off).map(&:to_param)
+    }.compact_blank
+  end
+
+  # Accounts the stalled-thread sweeper may read. Each opts in separately; the
+  # site interval alone sweeps nothing.
+  def stalled_sweep_accounts
+    Account.order(:name).map do |account|
+      { id: account.to_param, name: account.name, enabled: account.stalled_sweep_enabled?, disabled: account.disabled? }
+    end
+  end
+
+  # The form sends the full list of opted-in accounts; any not in it is off.
+  def update_stalled_sweep_accounts
+    picked = Array(params[:setting][:stalled_sweep_account_ids]).compact_blank.filter_map do |param|
+      Account.find_by_obfuscated_id(param)&.id
+    rescue StandardError
+      nil
+    end
+    turned_on = Account.where(id: picked, stalled_sweep_enabled: false).pluck(:id)
+    turned_off = Account.where(stalled_sweep_enabled: true).where.not(id: picked).pluck(:id)
+    Account.where(id: turned_on).update_all(stalled_sweep_enabled: true, updated_at: Time.current)
+    Account.where(id: turned_off).update_all(stalled_sweep_enabled: false, updated_at: Time.current)
+    @stalled_sweep_changes = {
+      stalled_sweep_on: Account.where(id: turned_on).map(&:to_param),
+      stalled_sweep_off: Account.where(id: turned_off).map(&:to_param)
+    }.compact_blank
   end
 
   def require_site_admin

@@ -9,7 +9,7 @@ class User < ApplicationRecord
   has_one :profile, dependent: :destroy
   accepts_nested_attributes_for :profile, update_only: false
   delegate :full_name, :avatar, :avatar_url, :timezone,
-           :first_name, :last_name, :chat_colour, to: :profile, allow_nil: true
+           :first_name, :last_name, :chat_colour, :theme_hue, to: :profile, allow_nil: true
 
   # Account associations through memberships
   has_many :memberships, dependent: :destroy
@@ -24,6 +24,13 @@ class User < ApplicationRecord
 
   # API keys for external access
   has_many :api_keys, dependent: :destroy
+  # The account a signed-in user lands in when no account is in the URL.
+  # Nil means "the first confirmed membership", the behaviour before the setting.
+  belongs_to :chosen_default_account, class_name: "Account", foreign_key: :default_account_id, optional: true
+  has_many :requested_github_resident_imports, class_name: "GithubResidentImport",
+    foreign_key: :requested_by_id, dependent: :restrict_with_error
+  has_many :approved_github_resident_imports, class_name: "GithubResidentImport",
+    foreign_key: :approved_by_id, dependent: :nullify
   has_many :conversation_drafts, dependent: :destroy
   has_many :device_streams, foreign_key: :subject_user_id, dependent: :destroy
 
@@ -43,11 +50,22 @@ class User < ApplicationRecord
   validates :email_address, presence: true,
     uniqueness: { case_sensitive: false },
     format: { with: URI::MailTo::EMAIL_REGEXP }
+  validate :default_account_must_be_confirmed, if: -> { default_account_id_changed? || @default_account_key_unreadable }
 
   after_create :ensure_membership_exists
   after_create :create_profile
+  after_update :refresh_connection_owner_name, if: :saved_change_to_email_address?
+  after_update -> { GuestDirectory.refresh_personal_labels!([ id ]) }, if: :saved_change_to_email_address?
 
-  json_attributes :first_name, :last_name, :timezone, :full_name, :site_admin, :avatar_url, :initials, :preferences, :chat_colour, except: [ :password_digest, :password_reset_token, :password_reset_sent_at ]
+  def refresh_connection_owner_name
+    owner_id = id
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(ServiceConnection.where(connected_by_user_id: owner_id).distinct.pluck(:account_id))
+    end
+  end
+  private :refresh_connection_owner_name
+
+  json_attributes :first_name, :last_name, :timezone, :full_name, :site_admin, :avatar_url, :initials, :preferences, :chat_colour, :theme_hue, except: [ :password_digest, :password_reset_token, :password_reset_sent_at, :default_account_id ]
 
   # Confirmation is now handled entirely by Membership
   def confirmed?
@@ -104,7 +122,28 @@ class User < ApplicationRecord
   end
 
   def default_account
-    memberships.confirmed.includes(:account).first&.account
+    chosen = confirmed_accounts.find_by(id: default_account_id) if default_account_id
+    chosen || memberships.confirmed.includes(:account).first&.account
+  end
+
+  # Obfuscated id of the chosen default account, for the user's own settings
+  # page only. Deliberately not in json_attributes: User JSON is nested into
+  # membership lists that other members of an account can read.
+  def default_account_key
+    chosen_default_account&.to_param
+  end
+
+  def default_account_key=(key)
+    @default_account_key_unreadable = false
+    return self.default_account_id = nil if key.blank?
+
+    decoded = begin
+      Account.decode_id(key.to_s)
+    rescue Hashids::InputError
+      nil
+    end
+    @default_account_key_unreadable = decoded.nil?
+    self.default_account_id = decoded if decoded
   end
 
   # For finding or creating invited users
@@ -152,7 +191,76 @@ class User < ApplicationRecord
     profile&.preferences || {}
   end
 
+  # Settings a person changes about themselves (web settings page and
+  # /api/v1/me). The attributes that live on Profile rather than User.
+  PROFILE_SETTINGS = %i[first_name last_name timezone avatar theme chat_colour theme_hue].freeze
+
+  # Splits permitted settings params into [user attributes, profile
+  # attributes]. Accepts profile attributes sent directly, the legacy
+  # preferences: { theme: } form and nested profile_attributes.
+  def self.split_settings_params(permitted)
+    all_params = permitted.dup
+
+    # Extract profile attributes directly sent
+    profile_params = all_params.extract!(*PROFILE_SETTINGS)
+
+    # Handle preferences format (legacy)
+    if all_params[:preferences].present?
+      preferences = all_params.delete(:preferences)
+      profile_params[:theme] = preferences[:theme] if preferences[:theme].present?
+    end
+
+    # Also handle nested profile_attributes format
+    if all_params[:profile_attributes].present?
+      profile_params.merge!(all_params.delete(:profile_attributes))
+    end
+
+    [ all_params, profile_params ]
+  end
+
+  # Updates the user, then the profile. Profile errors are copied onto the
+  # user so callers report one error list. Returns true or false.
+  def update_settings(user_attributes, profile_attributes)
+    saved = false
+
+    # A plain `return` inside a transaction block commits it (Rails 7.1+), so a
+    # profile failure must raise Rollback, or the user half would be saved.
+    # requires_new keeps the Rollback effective if a caller is already in a transaction.
+    User.transaction(requires_new: true) do
+      raise ActiveRecord::Rollback unless update(user_attributes)
+
+      if profile_attributes.present? && !profile.update(profile_attributes)
+        # Add profile errors to user errors
+        profile.errors.each do |error|
+          errors.add(error.attribute, error.message)
+        end
+        raise ActiveRecord::Rollback
+      end
+
+      saved = true
+    end
+
+    saved
+  end
+
+  # The audit action for a successful update_settings, read from what it saved.
+  def settings_audit_action(avatar_updated:)
+    profile_changes = profile&.saved_changes || {}
+    return :change_theme if profile_changes.key?("theme")
+    return :update_timezone if profile_changes.key?("timezone")
+    return :set_avatar if avatar_updated
+    :update_profile
+  end
+
   private
+
+  def default_account_must_be_confirmed
+    return errors.add(:default_account, "is not an account you belong to") if @default_account_key_unreadable
+    return if default_account_id.nil?
+    return if confirmed_accounts.exists?(id: default_account_id)
+
+    errors.add(:default_account, "is not an account you belong to")
+  end
 
   def create_profile
     # Create a profile for the user with default theme
