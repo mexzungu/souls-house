@@ -48,6 +48,46 @@ class Api::V1::CompanionOperationsTest < ActionDispatch::IntegrationTest
     assert_nil CompanionDevice.authenticate(@credential)
   end
 
+  test "device uploads an empty raw error result without storing a body" do
+    operation = CompanionOperation.start!(device: @device, agent: @agent, kind: "stat",
+      arguments: { "volume" => "fixture-volume", "path" => "protected-fixture" })
+    operation.dispatch!
+
+    post "/api/v1/companion/operations/#{operation.to_param}/result", params: "",
+      headers: bearer(@credential).merge("CONTENT_TYPE" => "application/octet-stream",
+        "X-Companion-Epoch" => "epoch", "X-Companion-Revision" => "1",
+        "X-Companion-Format" => "json", "X-Companion-Error" => "denied")
+
+    assert_response :created
+    assert_equal "failed", operation.reload.state
+    assert_equal "denied", operation.outcome
+    assert_nil operation.body
+    get "/api/v1/companion_devices/#{@device.to_param}/operations/#{operation.to_param}/body",
+      headers: bearer(@key.raw_token)
+    assert_response :gone
+  end
+
+  test "device uploads a successful empty raw read result for single use delivery" do
+    operation = CompanionOperation.start!(device: @device, agent: @agent, kind: "read",
+      arguments: { "volume" => "fixture-volume", "path" => "empty-fixture" })
+    operation.dispatch!
+
+    post "/api/v1/companion/operations/#{operation.to_param}/result", params: "",
+      headers: bearer(@credential).merge("CONTENT_TYPE" => "application/octet-stream",
+        "X-Companion-Epoch" => "epoch", "X-Companion-Revision" => "1", "X-Companion-Format" => "binary")
+
+    assert_response :created
+    assert_equal "completed", operation.reload.state
+    assert_equal "ok", operation.outcome
+    assert_equal "", operation.body.data
+    path = "/api/v1/companion_devices/#{@device.to_param}/operations/#{operation.to_param}/body"
+    get path, headers: bearer(@key.raw_token)
+    assert_response :success
+    assert_equal "", response.body
+    get path, headers: bearer(@key.raw_token)
+    assert_response :gone
+  end
+
   test "previous device credential is not removal authority" do
     result = CompanionDevice.create_session!(@credential, "rotation-fixture")
     post "/api/v1/companion/revoke", headers: bearer(@credential)

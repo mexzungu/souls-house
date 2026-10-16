@@ -12,7 +12,7 @@ module Api
         operation = CompanionOperation.where(companion_device: device).find(params[:id])
         format = request.headers["X-Companion-Format"]
         return head :unprocessable_entity unless format == "json" || (format == "binary" && operation.kind == "read")
-        data = request.body.read(CompanionOperation::MAX_BODY + 1)
+        data = request.body.read(CompanionOperation::MAX_BODY + 1) || "".b
         return head :payload_too_large if data.bytesize > CompanionOperation::MAX_BODY
         return head :content_too_large if format == "json" && operation.kind != "execute" && data.bytesize > CompanionOperation::MAX_INLINE
 
