@@ -67,10 +67,26 @@ class StalledThreadSweeperTest < ActiveSupport::TestCase
     assert_equal 0, StalledThreadSweep.count
   end
 
-  test "a room quiet for four days is still judged" do
-    post(@lume, "I'll merge once CI is green.", at: @now - 4.days)
-    sweeper(decide: ->(**) { { "can_act:1" => 0.9, "can_act:2" => 0.1, "person_holds" => 0.1 } }).call
-    assert_equal [ "would_wake", 4 * 24 * 60 ], StalledThreadSweep.sole.values_at(:outcome, :quiet_minutes)
+  test "only rooms quiet for between the interval and the interval plus the window are judged" do
+    window = StalledThreadSweeper::WINDOW
+    assert_equal 15.minutes, window
+    post(@lume, "I'll merge once CI is green.", at: @now - 45.minutes)
+    edge = room(@lume, "Edge", quiet_since: @now - 30.minutes)
+    room(@lume, "Too fresh", quiet_since: @now - 29.minutes)
+    room(@lume, "Too old", quiet_since: @now - 46.minutes)
+    room(@lume, "Days old", quiet_since: @now - 4.days)
+    decide = ->(state:, questions:) { questions.keys.index_with { 0.1 } }
+
+    sweeper(window: window, decide: decide).call
+
+    assert_equal [ edge, @chat ], StalledThreadSweep.order(:id).map(&:chat)
+    assert_equal [ 30, 45 ], StalledThreadSweep.order(:id).pluck(:quiet_minutes)
+  end
+
+  test "by default a room quiet for two hours is left alone" do
+    post(@lume, "I'll merge once CI is green.", at: @now - 2.hours)
+    assert_equal [], StalledThreadSweeper.new(now: @now, interval: 30.minutes, decide: ->(**) { flunk "too old" }).call
+    assert_equal 0, StalledThreadSweep.count
   end
 
   test "busy rooms don't use the budget: an eligible room behind twenty-five busy ones is judged" do
@@ -171,8 +187,10 @@ class StalledThreadSweeperTest < ActiveSupport::TestCase
 
   private
 
-  def sweeper(interval: 30.minutes, decide:)
-    StalledThreadSweeper.new(now: @now, interval: interval, decide: decide)
+  # A wide window by default, so the other tests can use round hours; the
+  # window tests pass the real one.
+  def sweeper(interval: 30.minutes, window: 1.week, decide:)
+    StalledThreadSweeper.new(now: @now, interval: interval, window: window, decide: decide)
   end
 
   def stub_const(klass, name, value)
