@@ -6,11 +6,39 @@ and user-cgroup runner primitives; no Dell acceptance is implied.
 
 ## Authority
 
-Every operation still intersects the house grant and independent local ceiling.
-Write implies read, not execute. Copy needs source read and destination write;
-move needs write on both. Rename/trash need write on their volume. Execute
-requires an explicit per-computer execute grant, and intentionally has the
-service user's general OS authority rather than a volume sandbox.
+Admission of each operation intersects the house grant and local ceiling.
+Write implies read, not permission to call the execute API. **Write access to
+a volume containing the service user's home must nevertheless be treated as
+deferred arbitrary code execution as that user**: a resident can modify
+`.bashrc` or other startup/configuration files that later run code when the user
+loads them. This does not require an execute grant. Copy needs source read and
+destination write; move needs write on both. Rename/trash need write on their
+volume.
+
+Execute requires an explicit per-computer execute grant and intentionally has
+the service user's general OS authority, not a volume sandbox. **Executed
+programs can rewrite `state.json`, including the local ceiling.** The companion
+is not a sandbox, and the local ceiling is not an enforceable limit against an
+execute-granted actor. Admission checks are not post-execution confinement.
+
+### Human enrollment warning
+
+Enrollment is API-only; there is no companion settings page or grant-description
+endpoint. A confirmed account owner/admin creates a grant with a human API key
+at POST `/api/v1/companion_enrollment_grants` (see the
+[enrollment contract](companion-read-plane.md#authority-and-enrollment)).
+The successful creation response includes `id`, `expires_at` and
+`authority_warnings`, an array of human-readable strings for the grant creator:
+
+- Any resident with a `write` volume adds the deferred-code-execution warning,
+  even when `execute` is false. Rails does not know whether an opaque volume key
+  contains the user's home, so every write grant receives this warning.
+- Any resident with `execute: true` adds the full-user-authority and
+  rewritable-`state.json`/local-ceiling warning, including execute-only grants.
+- Read-only policies with no execute permission return an empty array.
+
+Human-facing API clients must display these warnings with the created grant;
+the response is not a new consent/acknowledgement gate or a permission change.
 
 Candidate metadata:
 

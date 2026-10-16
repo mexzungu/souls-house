@@ -13,7 +13,8 @@ class Api::V1::CompanionEnrollmentTest < ActionDispatch::IntegrationTest
 
   test "owner grants resident mints and public device enrolls then rotates session credential" do
     grant_id = create_grant
-    assert_equal [ "expires_at", "id" ], response.parsed_body.keys.sort
+    assert_equal [ "authority_warnings", "expires_at", "id" ], response.parsed_body.keys.sort
+    assert_empty response.parsed_body.fetch("authority_warnings")
     post "/api/v1/companion_enrollment_grants/#{grant_id}/token", headers: bearer(@resident_key.raw_token)
     assert_response :created
     token = response.parsed_body.fetch("enrollment_token")
@@ -36,6 +37,44 @@ class Api::V1::CompanionEnrollmentTest < ActionDispatch::IntegrationTest
     assert_equal enrollment_response, response.parsed_body
     get "/api/v1/me", headers: bearer(session["device_credential"])
     assert_response :unauthorized
+  end
+
+  test "human grant creation warns that home volume write is deferred execution without an execute grant" do
+    post_grant(policy: { residents: [ { id: @agent.obfuscated_id,
+      volumes: [ { volume: "opaque-volume", access: "write" } ], execute: false } ] })
+    assert_response :created
+    assert_equal "no-store", response.headers["Cache-Control"]
+    warnings = response.parsed_body.fetch("authority_warnings")
+    assert_equal 1, warnings.size
+    assert_match(/volume containing the service user's home/, warnings.sole)
+    assert_match(/deferred arbitrary code execution as that user/, warnings.sole)
+    assert_match(/\.bashrc/, warnings.sole)
+    assert_match(/even without an execute grant/, warnings.sole)
+    assert_equal false, CompanionEnrollmentGrant.sole.policy.fetch("residents").sole.fetch("execute")
+  end
+
+  test "human execute-only grant creation warns that execution can rewrite the local ceiling" do
+    post_grant(policy: { residents: [ { id: @agent.obfuscated_id, volumes: [], execute: true } ] })
+    assert_response :created
+    warnings = response.parsed_body.fetch("authority_warnings")
+    assert_equal 1, warnings.size
+    assert_match(/service user's OS authority/, warnings.sole)
+    assert_match(/rewrite state\.json, including the local ceiling/, warnings.sole)
+    assert_match(/not a sandbox/, warnings.sole)
+    assert_match(/not an enforceable limit against an execute-granted actor/, warnings.sole)
+  end
+
+  test "human grant creation includes both warnings for permissions held by different residents" do
+    post_grant(policy: { residents: [
+      { id: @agent.obfuscated_id, volumes: [], execute: true },
+      { id: agents(:code_reviewer).obfuscated_id,
+        volumes: [ { volume: "opaque-volume", access: "write" } ], execute: false }
+    ] })
+    assert_response :created
+    warnings = response.parsed_body.fetch("authority_warnings")
+    assert_equal 2, warnings.size
+    assert_match(/deferred arbitrary code execution/, warnings.first)
+    assert_match(/rewrite state\.json/, warnings.last)
   end
 
   test "resident and ordinary account member cannot approve enrollment" do

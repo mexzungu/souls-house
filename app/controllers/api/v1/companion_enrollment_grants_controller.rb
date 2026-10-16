@@ -37,7 +37,8 @@ module Api
         grant.save!
         audit_human_action("companion.enrollment_grant.created", grant, account: account,
           minting_agent_id: agent.to_param, device_request_id: grant.device_request_id)
-        render json: { id: grant.to_param, expires_at: grant.expires_at.iso8601(3) }, status: :created
+        render json: { id: grant.to_param, expires_at: grant.expires_at.iso8601(3),
+          authority_warnings: grant.authority_warnings }, status: :created
       rescue ArgumentError
         render json: { error: "Invalid enrollment grant" }, status: :unprocessable_entity
       rescue ActiveRecord::RecordInvalid => error
