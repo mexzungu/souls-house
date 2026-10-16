@@ -616,6 +616,110 @@ def cmd_field_note(client, args):
     emit(client.post("whiteboards", json_body=body))
 
 
+def cmd_field_lines(client, args):
+    data = client.get(f"field/recordings/{args.recording}/lines")
+    if args.json:
+        emit(data)
+        return
+    print(f"revision {data['revision']}")
+    for line in data["lines"]:
+        speaker = f"{line['speaker']}: " if line.get("speaker") else ""
+        print(f"{line['line']:>4}  {speaker}{line['text']}")
+
+
+def cmd_field_correct(client, args):
+    text = read_text_arg(args.text, required=True)
+    was, revision = args.was, args.revision
+    if was is None or revision is None:
+        data = client.get(f"field/recordings/{args.recording}/lines")
+        line = next((entry for entry in data["lines"] if entry["line"] == args.line), None)
+        if line is None:
+            raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
+        was = line["text"] if was is None else was
+        revision = data["revision"] if revision is None else revision
+    data = client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
+                        json_body={"text": text, "was": was, "revision": revision})
+    if args.json:
+        emit(data)
+        return
+    line = data.get("line") or {}
+    speaker = f"{line['speaker']}: " if line.get("speaker") else ""
+    print(f"revision {data.get('revision')}")
+    print(f"{line.get('line', args.line):>4}  {speaker}{line.get('text', '')}")
+
+
+def resolve_speaker(lines, who):
+    """WHO as `souls field lines` shows it (a name, case-insensitive), a
+    speaker id, or "new". The ids come from the lines themselves: a resident
+    reading the recording sees names, not ids."""
+    if who.strip().lower() == "new":
+        return "new"
+    seen, said = {}, {}
+    for entry in lines:
+        if entry.get("speaker_id") and entry.get("speaker"):
+            seen.setdefault(entry["speaker_id"], entry["speaker"])
+            said.setdefault(entry["speaker_id"], []).append(entry["line"])
+    if who in seen:
+        return who
+    wanted = who.strip().casefold()
+    # A shared name doesn't prove a shared person: a voice named "Speaker 2"
+    # and an unnamed second speaker both read "Speaker 2", and /lines carries
+    # no identity to tell them apart. So a name that fits two ids is refused.
+    matches = [speaker_id for speaker_id, name in seen.items() if name.casefold() == wanted]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        options = "; ".join(f"{speaker_id} (lines {', '.join(map(str, said[speaker_id][:5]))})"
+                            for speaker_id in matches)
+        raise CliError(f"more than one speaker reads {who!r}: {options}. "
+                       f"Give the id of the one you mean", EXIT_USAGE)
+    names = sorted(set(seen.values()), key=str.casefold)
+    raise CliError(f"no one called {who!r} speaks in this recording; "
+                   f"choose one of: {', '.join(names) or '(nobody named)'}, or 'new'", EXIT_USAGE)
+
+
+def cmd_field_speaker(client, args):
+    data = client.get(f"field/recordings/{args.recording}/lines")
+    if args.revision is not None and args.revision != data["revision"]:
+        raise CliError(f"the transcript has changed since revision {args.revision} (it is now "
+                       f"{data['revision']}); read the lines again", EXIT_CONFLICT)
+    line = next((entry for entry in data["lines"] if entry["line"] == args.line), None)
+    if line is None:
+        raise CliError(f"recording {args.recording} has no line {args.line} (it has {len(data['lines'])})", EXIT_USAGE)
+    speaker = resolve_speaker(data["lines"], args.who)
+    was = line["text"] if args.was is None else args.was
+    revision = data["revision"] if args.revision is None else args.revision
+    data = client.patch(f"field/recordings/{args.recording}/lines/{args.line}",
+                        json_body={"speaker": speaker, "was": was, "revision": revision})
+    if args.json:
+        emit(data)
+        return
+    moved = data.get("line") or {}
+    name = f"{moved['speaker']}: " if moved.get("speaker") else ""
+    print(f"revision {data.get('revision')}")
+    print(f"{moved.get('line', args.line):>4}  {name}{moved.get('text', '')}")
+
+
+FIELD_DATE_TARGETS = {
+    "recording": ("field/recordings", "recorded_at"),
+    "file": ("field/files", "dated_at"),
+    "note": ("whiteboards", "dated_at"),
+}
+
+
+def cmd_field_date(client, args):
+    if args.clear == bool(args.date):
+        raise CliError("give a DATE or --clear (not both)", EXIT_USAGE)
+    path, param = FIELD_DATE_TARGETS[args.kind]
+    body = {param: "" if args.clear else args.date}
+    if args.kind == "note":
+        # Notes are optimistically locked; redating alone is not an edit, but
+        # the PATCH still names the version it read.
+        note = client.get(f"{path}/{args.id}").get("whiteboard") or {}
+        body["lock_version"] = note.get("lock_version")
+    emit(client.patch(f"{path}/{args.id}", json_body=body))
+
+
 def cmd_glossary(client, args):
     action = args.glossary_command
     if action == "list":
@@ -757,6 +861,102 @@ def cmd_watches_cancel(client, args):
     emit(client.delete(f"watches/{args.id}"))
 
 
+
+# ---------------------------------------------------------------- integrations
+
+
+def cmd_integrations(client, args):
+    emit(client.get("account/service_connections"))
+
+
+def cmd_integrations_providers(client, args):
+    emit(client.get("account/service_connections/providers"))
+
+
+def parse_field_args(pairs):
+    values = {}
+    for position, pair in enumerate(pairs or [], start=1):
+        key, sep, value = pair.partition("=")
+        if not sep or not key:
+            # Never echo the argument: a secret pasted without KEY= would land in stderr.
+            raise CliError(f"--field #{position} isn't KEY=VALUE (not shown, in case it holds a secret)", EXIT_USAGE)
+        values[key.strip()] = value
+    return values
+
+
+def cmd_integrations_connect(client, args):
+    """souls integrations connect PROVIDER -> POST /api/v1/account/service_connections.
+
+    Values come from --json - (an object on stdin), then --field KEY=VALUE, then
+    a prompt for anything still missing (secrets without echo). Putting a secret
+    in --field leaves it in shell history and the process list, so prefer the
+    prompt or stdin. --grant RESIDENT_ID gives residents access afterwards."""
+    providers = client.get("account/service_connections/providers").get("providers", [])
+    provider = next((item for item in providers if item.get("key") == args.provider), None)
+    if provider is None:
+        known = ", ".join(item.get("key", "?") for item in providers) or "none"
+        raise CliError(f"{args.provider} can't be connected from the command line here (can: {known})", EXIT_USAGE)
+
+    values = {}
+    if args.json_input:
+        raw = sys.stdin.read() if args.json_input == "-" else args.json_input
+        try:
+            loaded = json.loads(raw)
+        except ValueError as err:
+            raise CliError(f"--json is not valid JSON: {err}", EXIT_USAGE)
+        if not isinstance(loaded, dict):
+            raise CliError("--json must be an object of field values", EXIT_USAGE)
+        values.update({str(k): str(v) for k, v in loaded.items()})
+    values.update(parse_field_args(args.field))
+
+    fields = provider.get("credential_fields", [])
+    allowed = {field["key"] for field in fields}
+    unknown = sorted(set(values) - allowed)
+    if unknown:
+        # Name only the provider's own fields: an unknown key may be a secret
+        # typed in the wrong place.
+        raise CliError(f"{len(unknown)} field name(s) aren't {args.provider}'s (not shown, in case they hold a secret); "
+                       f"its fields are: {', '.join(sorted(allowed)) or 'none'}", EXIT_USAGE)
+
+    missing = [field for field in fields if not values.get(field["key"])]
+    if missing and not args.json_input and sys.stdin.isatty():
+        import getpass
+        for field in missing:
+            if field.get("help"):
+                print(f"{field.get('label', field['key'])}: {field['help']}", file=sys.stderr)
+            prompt = f"{field.get('label', field['key'])}: "
+            values[field["key"]] = (getpass.getpass(prompt) if field.get("type") == "password" else input(prompt)).strip()
+        missing = [field for field in fields if not values.get(field["key"])]
+    if missing:
+        raise CliError("missing " + ", ".join(field["key"] for field in missing) +
+                       ": pass --json - with an object on stdin, or run in a terminal to be prompted", EXIT_USAGE)
+
+    body = {"provider": args.provider, "management_scope": args.scope, "credentials": values}
+    if args.label:
+        body["label"] = args.label
+    result = client.post("account/service_connections", json_body=body)
+    connection = result.get("service_connection", {})
+    grants = []
+    for resident in args.grant or []:
+        grants.append(client.patch(f"residents/{resident}/service_accesses/{connection.get('id')}",
+                                   json_body={"enabled": True}).get("service_connection"))
+    if grants:
+        result["granted"] = [{"resident_id": resident, "enabled": bool(grant and grant.get("enabled"))}
+                             for resident, grant in zip(args.grant, grants)]
+    emit(result)
+
+
+def cmd_integrations_grant(client, args):
+    """souls integrations grant CONNECTION_ID --resident ID [--revoke]
+    -> PATCH /api/v1/residents/:id/service_accesses/:connection_id."""
+    emit(client.patch(f"residents/{args.resident}/service_accesses/{args.id}",
+                      json_body={"enabled": not args.revoke}))
+
+
+def cmd_integrations_disconnect(client, args):
+    emit(client.delete(f"account/service_connections/{args.id}"))
+
+
 # ---------------------------------------------------------------- parser
 
 COMMAND_GROUPS = [
@@ -765,6 +965,7 @@ COMMAND_GROUPS = [
                "rename", "archive", "unarchive", "discard", "restore", "fork", "search"]),
     ("Attention", ["attention", "dismiss", "invitations"]),
     ("Repository watches", ["repos", "watches"]),
+    ("Integrations", ["integrations"]),
     ("Field", ["field"]),
     ("Other", ["residents", "glossary", "download", "api"]),
 ]
@@ -936,17 +1137,54 @@ def build_parser():
     wp.add_argument("id")
     wp.set_defaults(func=cmd_watches_cancel)
 
+    p = add("integrations", cmd_integrations,
+            "Service connections: list, providers, connect, grant, disconnect (souls help integrations)",
+            epilog="Connect anything that takes a pasted key (Porkbun, Cloudflare, Pipedrive, GitHub, Honeybadger, ...);\n"
+                   "OAuth and QR-paired services still connect on the web. Examples:\n"
+                   "  souls integrations providers\n"
+                   "  souls integrations connect porkbun                 # prompts for the keys, no echo\n"
+                   "  souls integrations connect cloudflare --grant RESIDENT_ID\n"
+                   "  pass porkbun.json | souls integrations connect porkbun --json -\n"
+                   "  souls integrations grant svc_12 --resident RESIDENT_ID   (--revoke to withdraw)\n"
+                   "  souls integrations disconnect svc_12",
+            formatter_class=argparse.RawDescriptionHelpFormatter)
+    isub = p.add_subparsers(dest="integrations_command", metavar="list|providers|connect|grant|disconnect")
+    ip = isub.add_parser("list", parents=[common], help="Connections you can manage in this account")
+    ip.set_defaults(func=cmd_integrations)
+    ip = isub.add_parser("providers", parents=[common], help="Services you can connect here, and the fields each asks for")
+    ip.set_defaults(func=cmd_integrations_providers)
+    ip = isub.add_parser("connect", parents=[common], help="Connect a service from its API key or token")
+    ip.add_argument("provider", help="e.g. porkbun, cloudflare, pipedrive")
+    ip.add_argument("--field", action="append", metavar="KEY=VALUE",
+                    help="a field value (repeatable); secrets here land in shell history, so prefer the prompt or --json -")
+    ip.add_argument("--json", dest="json_input", metavar="JSON",
+                    help="field values as a JSON object, or - to read it from stdin")
+    ip.add_argument("--scope", default="personal", choices=["personal", "account_managed"],
+                    help="who owns it: you (default) or the account (admins)")
+    ip.add_argument("--label", help="a name for the connection")
+    ip.add_argument("--grant", action="append", metavar="RESIDENT_ID", help="give this resident access too (repeatable)")
+    ip.set_defaults(func=cmd_integrations_connect)
+    ip = isub.add_parser("grant", parents=[common], help="Give a resident access to a connection, or withdraw it")
+    ip.add_argument("id", metavar="CONNECTION_ID")
+    ip.add_argument("--resident", required=True, metavar="RESIDENT_ID")
+    ip.add_argument("--revoke", action="store_true", help="withdraw access instead")
+    ip.set_defaults(func=cmd_integrations_grant)
+    ip = isub.add_parser("disconnect", parents=[common], help="Disconnect a service (removes its credential from residents)")
+    ip.add_argument("id", metavar="CONNECTION_ID")
+    ip.set_defaults(func=cmd_integrations_disconnect)
+
     p = add("field", None,
-            "Bring things into the Field: upload a file, or write a note (souls help field)",
+            "The Field: upload a file, write a note, change a date, or correct a transcript line (souls help field)",
             epilog="--date is when the thing is from, for old material: an ISO 8601 date or time\n"
                    "(2019-03-14, 2019-03-14T09:30:00Z). The Field orders by it instead of the\n"
                    "upload time. Examples:\n"
                    "  souls field upload transcript-2019-03-14.txt --date 2019-03-14 --tag archive\n"
                    "  souls field note 'Call with Anna' --date 2021-06-02 --file call.md\n"
                    "  cat diary.md | souls field note 'Diary, May 2018' --date 2018-05-01\n"
+                   "  souls field date recording REC_ID 2019-03-14\n"
                    "Recordings take recorded_at instead: see docs/api.md.",
             formatter_class=argparse.RawDescriptionHelpFormatter)
-    fsub = p.add_subparsers(dest="field_command", metavar="upload|note")
+    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|date|lines|correct|speaker")
 
     fp = fsub.add_parser("upload", parents=[common], help="Upload a file (a document, an old transcript)")
     fp.add_argument("file", metavar="FILE")
@@ -963,6 +1201,54 @@ def build_parser():
     fp.add_argument("--summary", help="one line, up to 250 characters")
     fp.add_argument("--date", metavar="ISO_DATE", help="when the note is from (sent as dated_at)")
     fp.set_defaults(func=cmd_field_note)
+
+    fp = fsub.add_parser("date", parents=[common],
+                         help="Change when a recording, file or note is from (or --clear it)")
+    fp.add_argument("kind", choices=sorted(FIELD_DATE_TARGETS), help="what ID names")
+    fp.add_argument("id", metavar="ID")
+    fp.add_argument("date", nargs="?", metavar="ISO_DATE", help="2019-03-14 or 2019-03-14T09:30:00Z")
+    fp.add_argument("--clear", action="store_true",
+                    help="remove the date; the Field goes back to its default date ordering "
+                         "(upload time; for a note, its last edit)")
+    fp.set_defaults(func=cmd_field_date)
+
+    fp = fsub.add_parser("lines", parents=[common], help="A recording's transcript as numbered lines, with its revision")
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON")
+    fp.set_defaults(func=cmd_field_lines)
+
+    fp = fsub.add_parser("correct", parents=[common],
+                         help="Correct one line of a recording's transcript (souls field lines shows the numbers)",
+                         epilog="Without --was and --revision it reads the line just before writing, which only\n"
+                                "guards those few seconds. Pass the revision `souls field lines` printed to be\n"
+                                "refused (exit 6) if anything in the transcript changed since you read it.\n"
+                                "  souls field lines KJkAjl\n"
+                                "  souls field correct KJkAjl 14 'Soixante-dix kilos.' --revision 3f2a9c1d0b7e4a65",
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("line", type=int, metavar="LINE", help="the line's number")
+    fp.add_argument("text", nargs="?", metavar="TEXT", help="the whole corrected line; - or omitted reads stdin")
+    fp.add_argument("--was", help="the line as you read it (default: as it reads now)")
+    fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON (the whole transcript)")
+    fp.set_defaults(func=cmd_field_correct)
+
+    fp = fsub.add_parser("speaker", parents=[common],
+                         help="Give one line of a recording's transcript to another speaker (the words stay)",
+                         epilog="WHO is a name as `souls field lines` shows it, a speaker id, or 'new' for a\n"
+                                "voice the transcriber didn't separate (it reads as \"Speaker N\" until someone\n"
+                                "names it). Only when you know who said it. Pass the revision `souls field\n"
+                                "lines` printed to be refused (exit 6) if the transcript changed since.\n"
+                                "  souls field lines KJkAjl\n"
+                                "  souls field speaker KJkAjl 14 Sanda --revision 3f2a9c1d0b7e4a65",
+                         formatter_class=argparse.RawDescriptionHelpFormatter)
+    fp.add_argument("recording", metavar="RECORDING_ID")
+    fp.add_argument("line", type=int, metavar="LINE", help="the line's number")
+    fp.add_argument("who", metavar="WHO", help="a speaker's name, a speaker id, or new")
+    fp.add_argument("--was", help="the line as you read it (default: as it reads now)")
+    fp.add_argument("--revision", help="the revision you read it at (default: the current one)")
+    fp.add_argument("--json", action="store_true", help="print the house's JSON (the whole transcript)")
+    fp.set_defaults(func=cmd_field_speaker)
 
     p = add("glossary", cmd_glossary, "The account's transcription glossary: list, add, remove, pin, unpin")
     p.add_argument("glossary_command", nargs="?", choices=["list", "add", "remove", "pin", "unpin"],

@@ -46,6 +46,42 @@ class FieldRecordingsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_field_path(@account, tab: "recordings", item: "recording-#{recording.to_param}")
   end
 
+  test "creating with a recorded date keeps it, and an impossible one makes nothing" do
+    blob = pinned_blob(account: @account, user: @user)
+    post account_field_recordings_path(@account), params: {
+      field_recording: { upload_id: blob.signed_id, title: "Old call", recorded_at: "2019-03-14" }
+    }
+    assert_equal Time.zone.local(2019, 3, 14), @account.field_recordings.last.recorded_at
+
+    other = pinned_blob(account: @account, user: @user)
+    assert_no_difference -> { FieldRecording.count } do
+      post account_field_recordings_path(@account), params: {
+        field_recording: { upload_id: other.signed_id, title: "Bad date", recorded_at: "2019-02-30" }
+      }
+    end
+    assert_redirected_to account_field_path(@account, tab: "recordings")
+  end
+
+  test "editing changes when a recording was made, clears it, and refuses an impossible date" do
+    recording = claimed_recording(account: @account, user: @user, title: "Call")
+
+    patch account_field_recording_path(@account, recording), params: { field_recording: { recorded_at: "2019-03-14" } }
+    assert_equal Time.zone.local(2019, 3, 14), recording.reload.recorded_at
+
+    patch account_field_recording_path(@account, recording), params: { field_recording: { title: "Renamed" } }
+    assert_equal Time.zone.local(2019, 3, 14), recording.reload.recorded_at, "no date sent, date kept"
+
+    patch account_field_recording_path(@account, recording),
+      params: { field_recording: { title: "Again", recorded_at: "2019-02-30" } }
+    recording.reload
+    assert_equal Time.zone.local(2019, 3, 14), recording.recorded_at
+    assert_equal "Renamed", recording.title
+    assert_match "recorded_at must be", flash[:alert]
+
+    patch account_field_recording_path(@account, recording), params: { field_recording: { recorded_at: "" } }
+    assert_nil recording.reload.recorded_at
+  end
+
   test "a blob signed for something else can't become a recording" do
     message_blob = ActiveStorage::Blob.create_and_upload!(io: file_fixture("test_audio.mp3").open, filename: "voice.mp3")
 
@@ -157,6 +193,52 @@ class FieldRecordingsControllerTest < ActionDispatch::IntegrationTest
     assert_equal %w[hello Dan], recording.transcript_words.reject { |word| word["k"] == "s" }.map { |word| word["t"] }
     assert_includes recording.transcript_text, "Dan"
     assert_equal [ 2000, 2600 ], recording.transcript_words.last.values_at("s", "e")
+  end
+
+  test "a line can be given to another speaker on the page" do
+    recording = ready_recording(account: @account, user: @user)
+    anna = recording.speakers.find_by!(label: "speaker_0")
+    anna.name_as!(@account.field_voices.create!(name: "Anna"), by: @user)
+    recording.reload
+
+    patch line_speaker_account_field_recording_path(@account, recording),
+      params: { line: { first: 1, last: 1, was: "there", revision: recording.transcript_revision, speaker: anna.to_param } }
+
+    assert_redirected_to account_field_recording_path(@account, recording)
+    recording.reload
+    assert_equal %w[speaker_0 speaker_0], recording.transcript_words.reject { |word| word["k"] == "s" }.map { |word| word["spk"] }
+    assert_equal [ "Anna" ], recording.speakers.map(&:display_name)
+    assert_match(/Anna: hello\n\[00:02\] Anna: there|Anna: hello there/, recording.transcript_text)
+  end
+
+  test "a line can be given to someone new, and a stale or unknown choice changes nothing" do
+    recording = ready_recording(account: @account, user: @user)
+
+    patch line_speaker_account_field_recording_path(@account, recording),
+      params: { line: { first: 0, last: 0, was: "hello", revision: recording.transcript_revision, speaker: "new" } }
+    recording.reload
+    assert_equal %w[speaker_1 speaker_2], recording.speakers.in_order.map(&:label)
+    assert_equal [ "Speaker 2", "Speaker 3" ], recording.speakers.in_order.map(&:display_name), "nobody is renumbered"
+    seen = recording.transcript_revision
+
+    [ { speaker: "new", was: "hello", revision: "0000000000000000" },
+      { speaker: "new", was: "goodbye", revision: seen },
+      { speaker: "nobody", was: "hello", revision: seen } ].each do |line|
+      patch line_speaker_account_field_recording_path(@account, recording), params: { line: { first: 0, last: 0, **line } }
+      follow_redirect!
+      assert inertia_props.dig("props", "errors", "line_speaker").present?, line.inspect
+    end
+    assert_equal seen, recording.reload.transcript_revision
+  end
+
+  test "another account's line can't be given to anyone" do
+    recording = ready_recording(account: accounts(:another_team), user: @user)
+
+    patch line_speaker_account_field_recording_path(@account, recording),
+      params: { line: { first: 1, last: 1, was: "there", revision: recording.transcript_revision, speaker: "new" } }
+
+    assert_response :not_found
+    assert_equal %w[speaker_0 speaker_1], recording.reload.speakers.map(&:label).sort
   end
 
   test "a correction to a line that changed meanwhile is refused" do

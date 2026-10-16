@@ -15,7 +15,14 @@ Rails.application.routes.draw do
         post :state, to: "/test_support/e2e#state"
         post :cleanup, to: "/test_support/e2e#cleanup"
         post :stone_fixture, to: "/test_support/e2e#stone_fixture"
+        post :song_card_fixture, to: "/test_support/e2e#song_card_fixture"
         post :field_recording_fixture, to: "/test_support/e2e#field_recording_fixture"
+        post :field_activity_fixture, to: "/test_support/e2e#field_activity_fixture"
+        post :tweet_stream_fixture, to: "/test_support/e2e#tweet_stream_fixture"
+        post :guest_directory_fixture, to: "/test_support/e2e#guest_directory_fixture"
+        post :room_navigation_fixture, to: "/test_support/e2e#room_navigation_fixture"
+        post :expired_subscription_fixture, to: "/test_support/e2e#expired_subscription_fixture"
+        post :audio_blob, to: "/test_support/e2e#audio_blob"
       end
     end
   end
@@ -123,9 +130,22 @@ Rails.application.routes.draw do
     resource :integrations, only: :show, module: :accounts
     resource :interface, only: %i[show update], module: :accounts
     resources :visual_tags, only: [ :create, :update, :destroy ], module: :accounts
+    resources :rooms, only: [ :index, :create, :update, :destroy ], module: :accounts
+    resource :resident_room, only: :update, module: :accounts
     resources :service_authorizations, only: :create
     resources :service_connections, only: [ :create, :update, :destroy ], module: :accounts do
-      resource :pairing, only: :show, controller: "service_connection_pairings"
+      resource :pairing, only: :show, controller: "service_connection_pairings" do
+        get :link
+        post :restart
+        post :phone
+      end
+      resource :login, only: :show, controller: "service_connection_logins" do
+        post :phone
+        post :code
+        post :password
+        post :restart
+        post :cancel
+      end
     end
     # Repository watches on the Integrations page's GitHub card.
     resources :watched_repositories, path: "repositories", only: [ :create, :destroy ], module: :accounts
@@ -144,6 +164,7 @@ Rails.application.routes.draw do
       end
       scope module: :chats do
         resource :visual_tag, only: :update
+        resource :room, only: :update
         resource :reply_dismissal, only: :create
         resource :draft, only: [ :show, :update ]
         resource :archive, only: [ :create, :destroy ]
@@ -212,6 +233,10 @@ Rails.application.routes.draw do
       post :resummarize, on: :member
     end
     resources :field_tweets, path: "field/tweets", only: [ :destroy ]
+    resources :field_songs, path: "field/songs", only: [ :show, :create, :update, :destroy ] do
+      get :lookup, on: :collection
+      match :offer, via: [ :get, :post ], on: :collection
+    end
     resource :field_tweet_source, path: "field/tweet_stream", only: [ :create, :update, :destroy ] do
       post :pause
       post :resume
@@ -221,6 +246,7 @@ Rails.application.routes.draw do
       post :retry, on: :member
       post :resummarize, on: :member
       patch :line, on: :member, action: :correct_line
+      patch :line_speaker, on: :member, action: :reassign_line
       post :dismiss_you_hint, on: :collection
       resources :speakers, only: [ :update ], controller: "field_recording_speakers" do
         resources :enrolments, only: [ :create ], controller: "field_voice_enrolments"
@@ -255,6 +281,7 @@ Rails.application.routes.draw do
     end
     patch "resident_turns/capacity", to: "resident_turns#update"
     resources :resident_turns, only: [ :index, :destroy ]
+    resources :stalled_sweeps, only: :index
     resources :runtime_sessions, only: :index, controller: "agent_runtime_sessions"
     resources :agents, only: [] do
       resource :runtime, only: :show, controller: "agent_runtime_sessions"
@@ -267,6 +294,8 @@ Rails.application.routes.draw do
         patch :convert
         patch :shared_ai_credentials
         patch :founding
+        patch :field_swarm
+        patch :field_tweets_house_key
         post :refresh_storage
       end
       resources :memberships, only: [ :create, :destroy ], controller: "account_memberships"
@@ -308,6 +337,23 @@ Rails.application.routes.draw do
     end
 
     namespace :v1 do
+      resources :companion_enrollment_grants, only: :create do
+        post :token, on: :member
+      end
+      namespace :companion do
+        post :enroll, to: "enrollments#create"
+        post :session, to: "sessions#create"
+        post :revoke, to: "revocations#create"
+      end
+      resources :companion_devices, only: :update do
+        resources :operations, only: [ :create, :show ], controller: "companion_operations" do
+          get :body, on: :member
+          put :input, on: :member
+        end
+      end
+      post "companion/operations/:id/result", to: "companion_results#create"
+      get "companion/operations/:id/input", to: "companion_inputs#show"
+
       # Host runners on house-ordered VMs: telemetry (#192) and commands (#238).
       namespace :host_runner do
         match "backup(/*path)", to: "backups#repository", via: %i[get head post delete], format: false
@@ -347,7 +393,9 @@ Rails.application.routes.draw do
           resources :visual_tags, only: %i[create update destroy]
           resources :api_keys, only: %i[index destroy]
           resources :guest_memberships, only: %i[index create destroy]
-          resources :service_connections, only: %i[index update destroy]
+          resources :service_connections, only: %i[index create update destroy] do
+            get :providers, on: :collection
+          end
           resource :ai_provider_keys, only: %i[show update]
         end
       end
@@ -441,11 +489,13 @@ Rails.application.routes.draw do
       resource :subscription_usage, only: :show
       resources :youtube_reads, only: :create
       resources :x_reads, only: :create
+      resources :x_posts, only: %i[create update]
       resources :service_connections, only: [] do
         resource :access_token, only: :show, controller: "service_connection_tokens"
         namespace :comms do
           resources :chats, only: :index
           resources :messages, only: :index
+          resource :search, only: :show
         end
       end
       resources :repositories, only: %i[index create destroy]
@@ -457,6 +507,7 @@ Rails.application.routes.draw do
       namespace :field do
         resource :limits, only: :show
         resource :search, only: :show
+        resource :swarm_search, only: :create
         resources :tags, only: [ :index, :update, :destroy ]
         resources :files, only: [ :index, :show, :create, :update, :destroy ] do
           get :download, on: :member
@@ -467,11 +518,18 @@ Rails.application.routes.draw do
           resource :tags, only: :update, controller: "item_tags"
         end
         get :tweet_stream, to: "tweets#stream"
+        resources :songs, only: [ :index, :show, :create, :update, :destroy ] do
+          get :audio, on: :member
+          get :lookup, on: :collection
+          resource :tags, only: :update, controller: "item_tags"
+        end
         resources :recording_uploads, path: "recordings/uploads", only: :create
         resources :recordings, only: [ :index, :show, :create, :update, :destroy ] do
           member do
             get :audio
             post :retry
+            get :lines
+            patch "lines/:line", action: :correct_line, as: :line
           end
           post :dismiss_you_hint, on: :collection
           resources :speakers, only: :update
@@ -507,6 +565,7 @@ Rails.application.routes.draw do
   # X/Twitter integration (OAuth 2.0 with PKCE)
   resource :x_integration, only: %i[show create update destroy], controller: "x_integration" do
     get :callback
+    match :app, via: %i[put delete]
   end
 
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
@@ -522,6 +581,7 @@ Rails.application.routes.draw do
   get "changelog" => "pages#changelog", as: :changelog
   get "privacy" => "pages#privacy", as: :privacy
   get "self-host" => "pages#self_host", as: :self_host
+  get "pricing" => "pages#pricing", as: :pricing
   get "self-host/technical" => "pages#self_host_technical", as: :self_host_technical
   get "terms" => "pages#terms", as: :terms
   get "safeguard-responses" => "pages#safeguard_responses", as: :safeguard_responses

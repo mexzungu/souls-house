@@ -267,4 +267,65 @@ class FieldRecordingSpeakersControllerTest < ActionDispatch::IntegrationTest
     assert_not inertia_props["props"]["show_you_hint"]
   end
 
+
+  test "just noise sets a speaker aside, and undo asks for a name again" do
+    @first.update_columns(suggested_name: "Priya", suggestion_generation: 0, suggested_at: Time.current)
+    name_speaker(@first, ignore: true)
+
+    assert_redirected_to account_field_recording_path(@account, @recording)
+    @first.reload
+    assert @first.ignored?
+    assert_equal @user, @first.ignored_by
+    assert_not @first.unnamed?
+    assert_nil @first.suggested_name, "a suggestion shown for noise goes"
+    assert_equal 1, FieldItems.recording_json(@recording.reload)[:unnamed_speakers]
+
+    name_speaker(@first, unignore: true)
+    assert_not @first.reload.ignored?
+    assert @first.unnamed?
+    assert_equal 2, FieldItems.recording_json(@recording.reload)[:unnamed_speakers]
+  end
+
+  test "stay anonymous sets a person aside without calling them noise, and the reason can change" do
+    name_speaker(@first, ignore: true, ignore_as: "anonymous")
+
+    assert_redirected_to account_field_recording_path(@account, @recording)
+    @first.reload
+    assert @first.ignored?
+    assert @first.anonymous?
+    assert_not @first.unnamed?
+    assert_equal "Speaker 1", @first.display_name
+    json = FieldItems.recording_json(@recording.reload)
+    assert_equal 1, json[:unnamed_speakers]
+
+    generation = @first.decision_generation
+    name_speaker(@first, ignore: true, ignore_as: "noise")
+    @first.reload
+    assert @first.ignored?
+    assert_not @first.anonymous?
+    assert_equal "noise", @first.ignored_as
+    assert_equal generation, @first.decision_generation, "changing only the reason is not a new decision"
+
+    name_speaker(@first, ignore: true, ignore_as: "whatever")
+    assert_equal "noise", @first.reload.ignored_as
+
+    name_speaker(@first, unignore: true)
+    assert_not @first.reload.ignored?
+    assert_not @first.anonymous?
+  end
+
+  test "naming an ignored speaker takes the mark off; a named speaker can't be ignored" do
+    @first.ignore!(by: @user)
+    name_speaker(@first, name: "Priya")
+    assert_not @first.reload.ignored?
+    assert_nil @first.ignored_at
+
+    name_speaker(@first, ignore: true)
+    follow_redirect!
+    @inertia_props = nil
+    assert_equal "This speaker was named since the page loaded. Please look again.", inertia_props.dig("props", "errors", "name")
+    assert_nil @first.reload.ignored_at
+    assert_equal "Priya", @first.display_name
+  end
+
 end

@@ -35,6 +35,27 @@ class Profile < ApplicationRecord
 
   # Callbacks
   after_initialize :set_default_theme, if: :new_record?
+  after_save :refresh_connection_owner_name, if: -> {
+    (saved_changes.keys & %w[first_name last_name]).any?
+  }
+  after_destroy :refresh_connection_owner_name
+  after_save :refresh_guest_directory_labels, if: -> {
+    (saved_changes.keys & %w[first_name last_name user_id]).any?
+  }
+  after_destroy :refresh_guest_directory_labels
+
+  def refresh_guest_directory_labels
+    GuestDirectory.refresh_personal_labels!([ user_id, user_id_before_last_save ].compact)
+  end
+  private :refresh_guest_directory_labels
+
+  def refresh_connection_owner_name
+    owner_id = user_id
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(ServiceConnection.where(connected_by_user_id: owner_id).distinct.pluck(:account_id))
+    end
+  end
+  private :refresh_connection_owner_name
 
   # JSON attributes to include theme preferences
   def preferences

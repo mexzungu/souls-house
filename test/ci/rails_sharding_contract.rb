@@ -133,7 +133,7 @@ class RailsTestShardTest < Minitest::Test
     command = nil
     assert_equal 0, RailsTestShard.run(["1", "3"], root: @root,
       executor: ->(args) { command = args; true }, out: StringIO.new)
-    assert_equal [File.join(@root, "bin/test"), "test/a_test.rb"], command
+    assert_equal [File.join(@root, "bin/test"), "--timeout", "120", "test/a_test.rb"], command
   end
 
   def test_child_failure_status_propagates_without_credentials
@@ -171,5 +171,24 @@ class RailsTestShardTest < Minitest::Test
     assert status.success?, errors
     assert_equal RailsTestShard::Plan.new(ROOT).shards(3).first, output.lines.map(&:chomp)
     assert_empty errors
+  end
+
+  # bin/test with a stub bin/instance that prints the padded_cell arguments.
+  def bin_test_arguments(*argv, workers: "4")
+    write("bin/test", File.read(File.join(ROOT, "bin/test")))
+    write("bin/instance", "#!#{RbConfig.ruby}\nputs ARGV.drop_while { |a| a != \"padded_cell\" }.drop(1)\n")
+    %w[bin/test bin/instance].each { |path| File.chmod(0o700, File.join(@root, path)) }
+    output, errors, status = Open3.capture3({ "PARALLEL_WORKERS" => workers },
+      RbConfig.ruby, File.join(@root, "bin/test"), *argv)
+    assert status.success?, errors
+    output.lines.map(&:chomp)
+  end
+
+  def test_bin_test_defaults_jobs_from_parallel_workers_unless_given_before_double_dash
+    assert_equal %w[--jobs 4 test/a_test.rb], bin_test_arguments("test/a_test.rb")
+    assert_equal %w[-j 2 test/a_test.rb], bin_test_arguments("-j", "2", "test/a_test.rb")
+    assert_equal %w[--jobs=2], bin_test_arguments("--jobs=2")
+    assert_equal %w[--jobs 4 -- --jobs], bin_test_arguments("--", "--jobs")
+    assert_equal %w[test/a_test.rb], bin_test_arguments("test/a_test.rb", workers: "0")
   end
 end

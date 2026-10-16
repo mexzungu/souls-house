@@ -342,12 +342,149 @@ class FieldTest(CliTestCase):
         self.assertNotIn("Traceback", err)
         self.assertEqual(self.house.requests, [])
 
+    def test_date_redates_a_recording_or_file(self):
+        for kind, path, param in (("recording", "/api/v1/field/recordings/r1", "recorded_at"),
+                                  ("file", "/api/v1/field/files/r1", "dated_at")):
+            self.house.route("PATCH", path, body={"ok": True})
+            code, _, _ = self.run_cli("field", "date", kind, "r1", "2019-03-14")
+            self.assertEqual(code, 0, kind)
+            req = self.last()
+            self.assertEqual((req["method"], req["path"]), ("PATCH", path))
+            self.assertEqual(json.loads(req["body"]), {param: "2019-03-14"})
+
+    def test_date_on_a_note_sends_the_lock_version_it_read(self):
+        self.house.route("GET", "/api/v1/whiteboards/w1", body={"whiteboard": {"id": "w1", "lock_version": 4}})
+        self.house.route("PATCH", "/api/v1/whiteboards/w1", body={"whiteboard": {"id": "w1"}})
+        code, _, _ = self.run_cli("field", "date", "note", "w1", "2018-05-01")
+        self.assertEqual(code, 0)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET", "PATCH"])
+        self.assertEqual(json.loads(self.last()["body"]), {"dated_at": "2018-05-01", "lock_version": 4})
+
+    def test_date_clear_sends_an_empty_date(self):
+        self.house.route("PATCH", "/api/v1/field/recordings/r1", body={"ok": True})
+        self.run_cli("field", "date", "recording", "r1", "--clear")
+        self.assertEqual(json.loads(self.last()["body"]), {"recorded_at": ""})
+
+    def test_date_needs_exactly_one_of_a_date_or_clear(self):
+        for argv in (("field", "date", "recording", "r1"), ("field", "date", "recording", "r1", "2019-03-14", "--clear")):
+            code, _, err = self.run_cli(*argv)
+            self.assertEqual(code, souls.EXIT_USAGE, argv)
+            self.assertIn("--clear", err)
+        self.assertEqual(self.house.requests, [])
+
     def test_field_without_a_subcommand_prints_help(self):
         code, out, _ = self.run_cli("field")
         self.assertEqual(code, souls.EXIT_USAGE)
-        self.assertIn("upload|note", out)
+        self.assertIn("upload|note|date", out)
         self.assertEqual(self.house.requests, [])
 
+    LINES = {"id": "KJkAjl", "revision": "rev1",
+             "lines": [{"line": 1, "speaker": "Sanda", "text": "Cinquante kilos."},
+                       {"line": 2, "speaker": None, "text": "[laughter]"}]}
+
+    def test_lines_prints_numbered_lines_and_the_revision(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        code, out, _ = self.run_cli("field", "lines", "KJkAjl")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["revision rev1", "   1  Sanda: Cinquante kilos.", "   2  [laughter]"])
+
+    def test_correct_reads_the_line_then_sends_it_with_was_and_revision(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={
+            "revision": "rev2", "lines": self.LINES["lines"],
+            "line": {"line": 1, "speaker": "Sanda", "text": "Soixante-dix kilos."}})
+        code, out, _ = self.run_cli("field", "correct", "KJkAjl", "1", "Soixante-dix kilos.")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["revision rev2", "   1  Sanda: Soixante-dix kilos."],
+                         "only the corrected line, not the whole transcript")
+        self.assertEqual(json.loads(self.last()["body"]),
+                         {"text": "Soixante-dix kilos.", "was": "Cinquante kilos.", "revision": "rev1"})
+
+    def test_correct_with_was_and_revision_sends_them_without_reading(self):
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", status=409,
+                         body={"error": "The transcript has changed", "revision": "rev2"})
+        code, _, err = self.run_cli("field", "correct", "KJkAjl", "1", "-", "--was", "Cinquante kilos.",
+                                    "--revision", "rev1", stdin="Soixante-dix kilos.\n")
+        self.assertEqual(code, souls.EXIT_CONFLICT)
+        self.assertIn("The transcript has changed", err)
+        self.assertEqual(len(self.house.requests), 1)
+        self.assertEqual(json.loads(self.last()["body"])["text"], "Soixante-dix kilos.")
+
+    def test_correcting_a_line_that_does_not_exist_is_a_usage_error_without_a_write(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.LINES)
+        code, _, err = self.run_cli("field", "correct", "KJkAjl", "9", "x")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("has no line 9 (it has 2)", err)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
+
+    SPEAKER_LINES = {"id": "KJkAjl", "revision": "rev1",
+                     "lines": [{"line": 1, "speaker": "Sanda", "speaker_id": "spA", "text": "Cinquante kilos."},
+                               {"line": 2, "speaker": "Ioan", "speaker_id": "spB", "text": "Non, soixante-dix."},
+                               {"line": 3, "speaker": None, "speaker_id": None, "text": "[laughter]"}]}
+
+    def test_speaker_by_name_sends_the_id_with_was_and_revision(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/2", body={
+            "revision": "rev2", "lines": [],
+            "line": {"line": 2, "speaker": "Sanda", "speaker_id": "spA", "text": "Non, soixante-dix."}})
+        code, out, _ = self.run_cli("field", "speaker", "KJkAjl", "2", "sanda")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), ["revision rev2", "   2  Sanda: Non, soixante-dix."])
+        self.assertEqual(json.loads(self.last()["body"]),
+                         {"speaker": "spA", "was": "Non, soixante-dix.", "revision": "rev1"})
+
+    def test_speaker_accepts_an_id_or_new(self):
+        for who, sent in (("spB", "spB"), ("New", "new")):
+            self.house.requests.clear()
+            self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+            self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", body={
+                "revision": "rev2", "lines": [], "line": {"line": 1, "speaker": "Speaker 3", "text": "Cinquante kilos."}})
+            code, _, _ = self.run_cli("field", "speaker", "KJkAjl", "1", who, "--revision", "rev1")
+            self.assertEqual(code, 0, who)
+            self.assertEqual(json.loads(self.last()["body"]),
+                             {"speaker": sent, "was": "Cinquante kilos.", "revision": "rev1"}, who)
+
+    def test_speaker_nobody_by_that_name_is_a_usage_error_naming_who_speaks(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "1", "Anna")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("Ioan, Sanda, or 'new'", err)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
+
+    def test_speaker_stale_revision_is_a_conflict_without_a_write(self):
+        # Even when the line it names has since merged away.
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+        for line in ("1", "9"):
+            code, _, err = self.run_cli("field", "speaker", "KJkAjl", line, "Ioan", "--revision", "rev0")
+            self.assertEqual(code, souls.EXIT_CONFLICT, line)
+            self.assertIn("has changed since revision rev0", err)
+        self.assertEqual({r["method"] for r in self.house.requests}, {"GET"})
+
+    def test_speaker_server_conflict_is_a_conflict(self):
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=self.SPEAKER_LINES)
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/1", status=409,
+                         body={"error": "The transcript has changed", "revision": "rev2"})
+        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "1", "Ioan")
+        self.assertEqual(code, souls.EXIT_CONFLICT)
+        self.assertIn("The transcript has changed", err)
+
+    def test_speaker_a_name_two_speakers_share_is_refused_listing_their_ids(self):
+        # A voice someone named "Speaker 2" and an unnamed second speaker read the
+        # same; /lines can't say whether they are one person.
+        lines = {"id": "KJkAjl", "revision": "rev1",
+                 "lines": [{"line": 1, "speaker": "Speaker 2", "speaker_id": "named", "text": "One."},
+                           {"line": 2, "speaker": "Speaker 2", "speaker_id": "unnamed", "text": "Two."},
+                           {"line": 3, "speaker": "Other", "speaker_id": "other", "text": "Three."}]}
+        self.house.route("GET", "/api/v1/field/recordings/KJkAjl/lines", body=lines)
+        code, _, err = self.run_cli("field", "speaker", "KJkAjl", "3", "Speaker 2")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("named (lines 1); unnamed (lines 2)", err)
+        self.assertEqual([r["method"] for r in self.house.requests], ["GET"])
+        self.house.route("PATCH", "/api/v1/field/recordings/KJkAjl/lines/3", body={
+            "revision": "rev2", "lines": [], "line": {"line": 3, "speaker": "Speaker 2", "text": "Three."}})
+        code, _, _ = self.run_cli("field", "speaker", "KJkAjl", "3", "unnamed")
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(self.last()["body"])["speaker"], "unnamed")
 
 class OriginTest(CliTestCase):
     def test_a_foreign_absolute_url_is_refused_before_any_request(self):
@@ -646,6 +783,105 @@ class GlossaryTest(CliTestCase):
         self.assertEqual(code, souls.EXIT_USAGE)
         self.assertEqual(self.house.requests, [])
         self.assertIn("exactly one TERM", err)
+
+
+class IntegrationsTest(CliTestCase):
+    """souls integrations list|providers|connect|grant|disconnect."""
+
+    PROVIDERS = {"providers": [
+        {"key": "porkbun", "name": "Porkbun", "management_scopes": ["personal", "account_managed"],
+         "credential_fields": [{"key": "api_key", "label": "API key", "type": "password"},
+                               {"key": "secret_key", "label": "Secret API key", "type": "password"}]},
+        {"key": "pipedrive", "name": "Pipedrive CRM", "management_scopes": ["personal"],
+         "credential_fields": [{"key": "company_domain", "label": "Company domain", "type": "text"},
+                               {"key": "api_token", "label": "Personal API token", "type": "password"}]},
+    ]}
+
+    def setUp(self):
+        super().setUp()
+        self.house.route("GET", "/api/v1/account/service_connections/providers", body=self.PROVIDERS)
+        self.house.route("POST", "/api/v1/account/service_connections", status=201,
+                         body={"service_connection": {"id": "svc_9", "provider": "porkbun", "label": "Porkbun (acme)"}})
+
+    def posted(self):
+        return [json.loads(r["body"]) for r in self.house.requests
+                if (r["method"], r["path"]) == ("POST", "/api/v1/account/service_connections")]
+
+    def test_bare_and_list_read_the_account_connections(self):
+        self.house.route("GET", "/api/v1/account/service_connections", body={"service_connections": []})
+        for argv in (("integrations",), ("integrations", "list")):
+            code, _, _ = self.run_cli(*argv)
+            self.assertEqual(code, 0)
+            self.assertEqual((self.last()["method"], self.last()["path"]), ("GET", "/api/v1/account/service_connections"))
+
+    def test_connect_reads_secrets_as_json_on_stdin(self):
+        code, out, _ = self.run_cli("integrations", "connect", "porkbun", "--json", "-",
+                                    stdin='{"api_key": "pk1_a", "secret_key": "sk1_b"}')
+        self.assertEqual(code, 0)
+        self.assertEqual(self.posted(), [{"provider": "porkbun", "management_scope": "personal",
+                                          "credentials": {"api_key": "pk1_a", "secret_key": "sk1_b"}}])
+        self.assertEqual(json.loads(out)["service_connection"]["id"], "svc_9")
+
+    def test_connect_prompts_for_missing_secrets_without_echo_in_a_terminal(self):
+        with mock.patch("getpass.getpass", side_effect=["sk1_hidden"]) as hidden:
+            code, _, _ = self.run_cli("integrations", "connect", "porkbun", "--field", "api_key=pk1_a", tty=True)
+        self.assertEqual(code, 0)
+        hidden.assert_called_once()
+        self.assertEqual(self.posted()[0]["credentials"], {"api_key": "pk1_a", "secret_key": "sk1_hidden"})
+
+    def test_connect_without_a_terminal_names_what_is_missing_and_sends_nothing(self):
+        code, _, err = self.run_cli("integrations", "connect", "porkbun", "--field", "api_key=pk1_a")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("missing secret_key", err)
+        self.assertEqual(self.posted(), [])
+
+    def test_connect_refuses_unknown_fields_and_unknown_providers_before_posting(self):
+        code, _, err = self.run_cli("integrations", "connect", "porkbun", "--field", "password=x", "--field", "api_key=a",
+                                    "--field", "secret_key=b")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("its fields are: api_key, secret_key", err)
+        self.assertNotIn("password", err)
+        code, _, err = self.run_cli("integrations", "connect", "dropbox", "--json", "{}")
+        self.assertEqual(code, souls.EXIT_USAGE)
+        self.assertIn("can: porkbun, pipedrive", err)
+        self.assertEqual(self.posted(), [])
+
+    def test_connect_passes_scope_label_and_grants_each_resident(self):
+        self.house.route("PATCH", "/api/v1/residents/r1/service_accesses/svc_9",
+                         body={"service_connection": {"id": "svc_9", "enabled": True}})
+        code, out, _ = self.run_cli("integrations", "connect", "porkbun", "--scope", "account_managed", "--label", "DNS",
+                                    "--grant", "r1", "--json", '{"api_key": "a", "secret_key": "b"}')
+        self.assertEqual(code, 0)
+        body = self.posted()[0]
+        self.assertEqual((body["management_scope"], body["label"]), ("account_managed", "DNS"))
+        self.assertEqual(json.loads(self.last()["body"]), {"enabled": True})
+        self.assertEqual(json.loads(out)["granted"], [{"resident_id": "r1", "enabled": True}])
+
+    def test_rejected_credential_input_never_echoes_what_was_typed(self):
+        secret = "sk1_SYNTHETIC_SECRET_9f3a"
+        for argv, stdin in (
+            (("integrations", "connect", "porkbun", "--field", secret), ""),
+            (("integrations", "connect", "porkbun", "--json", "-"), '{"%s": "x", "api_key": "a", "secret_key": "b"}' % secret),
+            (("integrations", "connect", "porkbun", "--json", "-"), '{"api_key": "a", "secret_key": "b", "oops": "%s"}' % secret),
+        ):
+            code, out, err = self.run_cli(*argv, stdin=stdin)
+            self.assertEqual(code, souls.EXIT_USAGE)
+            self.assertNotIn(secret, out + err)
+        self.assertEqual(self.posted(), [])
+
+    def test_grant_and_revoke_patch_the_resident_access(self):
+        self.house.route("PATCH", "/api/v1/residents/r1/service_accesses/svc_9",
+                         body={"service_connection": {"id": "svc_9"}})
+        self.run_cli("integrations", "grant", "svc_9", "--resident", "r1")
+        self.assertEqual(json.loads(self.last()["body"]), {"enabled": True})
+        self.run_cli("integrations", "grant", "svc_9", "--resident", "r1", "--revoke")
+        self.assertEqual(json.loads(self.last()["body"]), {"enabled": False})
+
+    def test_disconnect_deletes_the_connection(self):
+        self.house.route("DELETE", "/api/v1/account/service_connections/svc_9", body={"disconnected": {"id": "svc_9"}})
+        code, _, _ = self.run_cli("integrations", "disconnect", "svc_9")
+        self.assertEqual(code, 0)
+        self.assertEqual((self.last()["method"], self.last()["path"]), ("DELETE", "/api/v1/account/service_connections/svc_9"))
 
 
 class RepositoryWatchesTest(CliTestCase):

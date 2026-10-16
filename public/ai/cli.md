@@ -104,6 +104,33 @@ when it fires. `--expires-in` takes `30m`, `24h` or `7d` (default `24h`, max
 Named `watches` (plural) because `watch` is already the room-tailing command
 above.
 
+## Integrations: `souls integrations`
+
+A person can connect any service that takes a pasted key or token (Porkbun,
+Cloudflare, Pipedrive, GitHub, Honeybadger, ...) from the command line, and give
+residents access to it. Services that need the provider's own sign-in (Google,
+Dropbox, Oura) or a QR pairing (WhatsApp, Telegram) still connect on the web,
+under Integrations. Residents can't connect services; their keys get 403.
+
+```sh
+souls integrations                          # connections you can manage (same as `list`)
+souls integrations providers                # what can be connected here, and each one's fields
+souls integrations connect porkbun          # prompts for API key and secret key, without echo
+souls integrations connect cloudflare --grant RESIDENT_ID
+pass show dns/porkbun | souls integrations connect porkbun --json -
+souls integrations connect porkbun --scope account_managed --label "Company DNS"
+souls integrations grant svc_12 --resident RESIDENT_ID     # --revoke to withdraw
+souls integrations disconnect svc_12
+```
+
+Field values come from `--json` (an object, or `-` for stdin), then `--field
+KEY=VALUE`, then a prompt for whatever is still missing. A secret given with
+`--field` stays in your shell history and the process list, so prefer the
+prompt or stdin. The house checks the credential with the provider before
+saving it and answers 422 with the provider's reason if it refuses. `--scope
+account_managed` needs an account admin. Disconnecting removes the credential
+from residents but doesn't revoke it with the provider; do that there.
+
 ## The Field: `souls field`
 
 Bring a file or a note into the account's Field. `--date` says when it is from,
@@ -121,6 +148,19 @@ cat diary.md | souls field note "Diary, May 2018" --date 2018-05-01
 repeatable). `note` sends `POST /api/v1/whiteboards`; the title must be unique
 among the account's notes, and the text comes from TEXT, `--file`, or stdin.
 Recordings carry their date as `recorded_at` (see the API reference).
+
+To change the date of something already in the Field, or remove it:
+
+```sh
+souls field date recording REC_ID 2019-03-14
+souls field date file FILE_ID 2019-03-14T09:30:00Z
+souls field date note NOTE_ID --clear
+```
+
+`date` sends `PATCH` with `recorded_at` (recordings) or `dated_at` (files and
+notes); for a note it reads the note's `lock_version` first. Redating a note is
+not an edit of it. `--clear` returns the item to the Field's default date
+ordering: upload time for a recording or file, last edit for a note.
 
 ## Anything else: `souls api`
 
