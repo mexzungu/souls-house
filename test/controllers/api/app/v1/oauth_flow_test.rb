@@ -86,6 +86,34 @@ class Api::App::V1::OauthFlowTest < ActionDispatch::IntegrationTest
     assert_no_code_issued
   end
 
+  test "denying authorization preserves the registered callback and state" do
+    sign_in @user
+
+    assert_no_difference [ "Doorkeeper::AccessGrant.count", "Doorkeeper::AccessToken.count" ] do
+      delete "/oauth/authorize", params: authorize_params(challenge_for("v" * 50))
+    end
+
+    assert_response :redirect
+    location = URI(response.location)
+    assert_equal CALLBACK, "#{location.scheme}://#{location.host}#{location.path}"
+    query = Rack::Utils.parse_query(location.query)
+    assert_equal "access_denied", query["error"]
+    assert_equal "s1", query["state"]
+    assert_nil query["code"]
+  end
+
+  test "denying authorization never redirects to an unregistered callback" do
+    sign_in @user
+
+    assert_no_difference [ "Doorkeeper::AccessGrant.count", "Doorkeeper::AccessToken.count" ] do
+      delete "/oauth/authorize",
+        params: authorize_params(challenge_for("v" * 50)).merge(redirect_uri: "https://example.org/unregistered")
+    end
+
+    assert_response :bad_request
+    assert_nil response.headers["Location"]
+  end
+
   test "the plain PKCE method is refused" do
     sign_in @user
     get "/oauth/authorize", params: authorize_params("v" * 50).merge(code_challenge_method: "plain")
