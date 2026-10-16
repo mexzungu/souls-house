@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-16
+  title: Telegram counts stay current without creating links
+  body: "Open resident settings follow subscriber and bot-configuration changes without replacing unfinished Telegram settings. Registration links are now created only when you choose to reveal one, not on background refreshes."
+- date: 2026-10-16
   title: Provider connection status stays fresh
   body: "Persisted provider connection changes now update open resident and model-key panels without losing unfinished credentials or interrupting an active sign-in. Status-only reloads no longer regenerate unrelated Telegram links."
 - date: 2026-10-16

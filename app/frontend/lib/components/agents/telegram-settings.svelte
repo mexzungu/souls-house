@@ -4,10 +4,12 @@
   import { Input } from '$lib/components/shadcn/input';
   import { Label } from '$lib/components/shadcn/label';
   import { siteName } from '$lib/branding';
+  import { router } from '@inertiajs/svelte';
   let {
     form,
     agent,
     telegramDeepLink,
+    telegramConfiguration = null,
     telegramSubscriberCount,
     sendingTestNotification,
     registeringWebhook,
@@ -15,6 +17,35 @@
     onregisterWebhook,
     showIntegrationList,
   } = $props();
+  let visibleLink = $state(null);
+  let revealing = $state(false);
+  let revealGeneration = 0;
+  const configurationKey = $derived(JSON.stringify([
+    agent.id, telegramConfiguration?.configured ?? agent.telegram_configured,
+    telegramConfiguration?.username ?? agent.telegram_bot_username,
+  ]));
+  $effect(() => {
+    configurationKey;
+    revealGeneration++;
+    visibleLink = null;
+    revealing = false;
+  });
+
+  function revealLink() {
+    const generation = revealGeneration;
+    revealing = true;
+    router.reload({
+      only: ['telegram_deep_link'],
+      preserveState: true,
+      preserveScroll: true,
+      onSuccess: (page) => {
+        if (generation === revealGeneration) visibleLink = page.props.telegram_deep_link;
+      },
+      onFinish: () => {
+        if (generation === revealGeneration) revealing = false;
+      },
+    });
+  }
 </script>
 
 <div class="space-y-6">
@@ -124,9 +155,13 @@
       <p class="text-xs text-muted-foreground">
         Open this link to connect your own Telegram account for testing. Other users see their own link in the chat UI.
       </p>
-      <code class="block rounded border bg-background p-2 text-xs break-all">
-        {telegramDeepLink}
-      </code>
+      {#if visibleLink}
+        <code class="block rounded border bg-background p-2 text-xs break-all">{visibleLink}</code>
+      {:else}
+        <Button type="button" variant="outline" disabled={revealing} onclick={revealLink}>
+          {revealing ? 'Revealing...' : 'Reveal registration link'}
+        </Button>
+      {/if}
     </div>
 
     <div class="rounded-lg bg-muted/50 p-4">

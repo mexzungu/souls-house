@@ -169,6 +169,21 @@ class Agent < ApplicationRecord
   end
   private :provider_presentation_changed?
 
+  after_save :refresh_telegram_presentation, if: :telegram_presentation_changed?
+
+  def telegram_presentation_changed?
+    return false unless saved_change_to_telegram_bot_username? || saved_change_to_telegram_bot_token?
+
+    old_username = saved_change_to_telegram_bot_username? ? telegram_bot_username_before_last_save : telegram_bot_username
+    old_token = saved_change_to_telegram_bot_token? ? telegram_bot_token_before_last_save : telegram_bot_token
+    [ old_username, old_username.present? && old_token.present? ] != [ telegram_bot_username, telegram_configured? ]
+  end
+
+  def refresh_telegram_presentation
+    TelegramPresentation.refresh!(id)
+  end
+  private :telegram_presentation_changed?, :refresh_telegram_presentation
+
   def refresh_integration_presentation
     account_ids = [ account_id, account_id_before_last_save ].compact.uniq
     ActiveRecord.after_all_transactions_commit do

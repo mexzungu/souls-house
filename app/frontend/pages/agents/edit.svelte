@@ -35,6 +35,7 @@
     agent,
     house_allowance: houseAllowance = null,
     telegram_deep_link: telegramDeepLink = null,
+    telegram_configuration: telegramConfiguration = null,
     telegram_subscriber_count: telegramSubscriberCount = 0,
     grouped_models = {},
     colour_options = [],
@@ -79,6 +80,12 @@
   $effect(() => {
     updateProviderSync({
       [`ProviderPresentation:${account.id}`]: ['provider_subscription', 'can_manage_provider_subscription'],
+    });
+  });
+  const updateTelegramSync = createDynamicSync();
+  $effect(() => {
+    updateTelegramSync({
+      [`TelegramPresentation:${agent.id}`]: ['telegram_configuration', 'telegram_subscriber_count'],
     });
   });
 
@@ -242,6 +249,7 @@
             {agent}
             {account}
             {telegramDeepLink}
+            {telegramConfiguration}
             {telegramSubscriberCount}
             {sendingTestNotification}
             {registeringWebhook}

@@ -75,7 +75,8 @@ class AgentsController < ApplicationController
       subagent_providers: -> { load_catalog.call.providers },
       subagent_catalog_empty_reason: -> { load_catalog.call.empty_reason },
       # Count/provider partials must not mint another registration token.
-      telegram_deep_link: -> { @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil },
+      telegram_deep_link: InertiaRails.optional { @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil },
+      telegram_configuration: -> { { configured: @agent.telegram_configured?, username: @agent.telegram_bot_username } },
       telegram_subscriber_count: -> { @agent.telegram_subscriptions.active.count },
       memories: -> { memories_for_display },
       grouped_models: -> { grouped_models },
