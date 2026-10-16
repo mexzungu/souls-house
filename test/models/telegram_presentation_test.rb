@@ -64,7 +64,7 @@ class TelegramPresentationTest < ActiveSupport::TestCase
   end
 
   test "configuration username transitions signal but token rotation is not a presentation change" do
-    @agent.stub :manage_telegram_webhook, -> {} do
+    @agent.stub :manage_telegram_webhook, -> { } do
       assert_broadcasts(stream(@agent), 1) do
         @agent.update!(telegram_bot_username: "synthetic_bot", telegram_bot_token: "PRIVATE-SYNTHETIC-TOKEN")
       end
