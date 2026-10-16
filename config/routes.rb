@@ -23,6 +23,7 @@ Rails.application.routes.draw do
         post :guest_directory_fixture, to: "/test_support/e2e#guest_directory_fixture"
         post :account_cost_fixture, to: "/test_support/e2e#account_cost_fixture"
         post :provider_presentation_fixture, to: "/test_support/e2e#provider_presentation_fixture"
+        post :comms_count_fixture, to: "/test_support/e2e#comms_count_fixture"
         post :room_navigation_fixture, to: "/test_support/e2e#room_navigation_fixture"
         post :expired_subscription_fixture, to: "/test_support/e2e#expired_subscription_fixture"
         post :audio_blob, to: "/test_support/e2e#audio_blob"

@@ -38,6 +38,48 @@ module TestSupport
       head :ok
     end
 
+    # Real local rows/events only; never contacts Telegram or a connector.
+    def comms_count_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "prepare"
+        account.service_connections.create!(
+          provider: "telegram", status: "connected", label: "Connector counts",
+          connected_by_user: account.memberships.find_by!(role: "owner").user,
+          external_subject_id: "synthetic-comms-counts", management_scope: "personal",
+          credential_kind: "session", credential_metadata: { credential_strategy: "connector" }
+        )
+      else
+        connection = account.service_connections.find_by!(label: "Connector counts", provider: "telegram")
+        now = Time.current
+        event = case params.fetch(:operation)
+        when "arrive", "late"
+          { type: "message.upsert", messages: [
+            { chat: "user:count", provider_message_id: "1", sent_at: now.iso8601, body: "Synthetic arrival" }
+          ] }
+        when "flip"
+          { type: "chat.upsert", chats: [ { provider_chat_id: "user:count", sync_state: { synced: false } } ] }
+        when "checkpoint"
+          { type: "sync.checkpoint", chats: [ { provider_chat_id: "user:count", synced_through: now.iso8601 } ] }
+        when "message"
+          { type: "message.upsert", messages: [
+            { chat: "user:count", provider_message_id: "2", sent_at: now.iso8601, body: "Synthetic ordinary message" }
+          ] }
+        when "remove"
+          chat = connection.comms_chats.find_by!(provider_chat_id: "user:count")
+          chat.comms_messages.each(&:destroy!)
+          chat.comms_messages.reset
+          chat.destroy!
+          nil
+        else
+          return head :unprocessable_entity
+        end
+        CommsEvents.receive!(connection, event.deep_stringify_keys, nonce: SecureRandom.hex(16)) if event
+      end
+      head :ok
+    end
+
     def guest_directory_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")

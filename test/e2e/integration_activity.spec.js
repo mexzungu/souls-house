@@ -1,5 +1,146 @@
 import { expect, test } from '@playwright/test';
 
+test('connector chat counts follow real events and reconnect without replacing drafts', async ({
+  page,
+  browser,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const runId = `comms-count-live-${Date.now()}`;
+  const response = await request.post('/test/e2e/setup', {
+    data: { run_id: runId, resident_dashboard: true },
+  });
+  expect(response.ok()).toBe(true);
+  const setup = await response.json();
+  const mutate = async (operation) => {
+    const result = await request.post('/test/e2e/comms_count_fixture', {
+      data: { account_id: setup.account_id, operation },
+    });
+    expect(result.ok(), `${operation}: HTTP ${result.status()}`).toBe(true);
+  };
+  const otherContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+  const resident = await otherContext.newPage();
+  const draftView = await page.context().newPage();
+  const readers = await Promise.all(
+    [page, resident, draftView].map(async (view) => {
+      const state = { markers: [], reloads: [], confirmations: 0, cable: null, drop: false };
+      await view.routeWebSocket('**/cable', (socket) => {
+        state.cable = socket;
+        const server = socket.connectToServer();
+        server.onMessage((raw) => {
+          const frame = JSON.parse(raw);
+          if (frame.identifier && JSON.parse(frame.identifier).model === 'IntegrationStatus') {
+            if (frame.type === 'confirm_subscription') state.confirmations += 1;
+            if (frame.message) state.markers.push(frame.message);
+          }
+          if (!state.drop || !frame.message) socket.send(raw);
+        });
+      });
+      view.on('response', async (result) => {
+        const partial = result.request().headers()['x-inertia-partial-data'];
+        if (partial?.split(',').some((key) => ['connections', 'service_connections'].includes(key))) {
+          state.reloads.push({ partial, body: await result.json() });
+        }
+      });
+      return state;
+    })
+  );
+  try {
+    await mutate('prepare');
+    const base = `/accounts/${setup.account_param}`;
+    for (const view of [page, resident]) {
+      await view.goto('/login');
+      await view.getByLabel(/email/i).fill(setup.primary_user.email);
+      await view.getByLabel(/password/i).fill(setup.password);
+      await view.getByRole('button', { name: /log in/i }).click();
+      await expect(view).toHaveURL(/\/$/);
+    }
+    await page.goto(`${base}/integrations`);
+    const row = page.getByRole('article').filter({ hasText: 'Connector counts' });
+    await row.getByRole('button', { name: 'Show details for Connector counts', exact: true }).click();
+    // Focused provider setup hides other providers' rows, so keep its
+    // unsaved choice in a separate open view rather than hiding the count.
+    await draftView.goto(`${base}/integrations?connect=google_workspace`);
+    await draftView.getByRole('radio', { name: /The whole account/ }).check();
+    await resident.goto(`${base}/residents/${setup.agents[0].id}/edit`);
+    await resident.getByLabel('Display name', { exact: true }).fill('Unsubmitted count-refresh draft');
+    for (const reader of readers) await expect.poll(() => reader.confirmations).toBe(1);
+
+    const assertCounts = async (synced, total) => {
+      await expect(row.getByTestId('telegram-status')).toContainText(`${synced} of ${total} chats synced`);
+      await expect
+        .poll(() => {
+          const connections = readers[1].reloads.at(-1)?.body.props.service_connections;
+          const comms = connections?.find((connection) => connection.label === 'Connector counts')?.comms;
+          return comms && [comms.synced_chats, comms.chats];
+        })
+        .toEqual([synced, total]);
+      await expect
+        .poll(() => {
+          const comms = readers[2].reloads
+            .at(-1)
+            ?.body.props.connections.find((connection) => connection.label === 'Connector counts')?.comms;
+          return comms && [comms.synced_chats, comms.chats];
+        })
+        .toEqual([synced, total]);
+      await expect(draftView.getByRole('radio', { name: /The whole account/ })).toBeChecked();
+      await expect(row.getByRole('button', { name: 'Hide details for Connector counts', exact: true })).toBeVisible();
+      await expect(resident.getByLabel('Display name', { exact: true })).toHaveValue('Unsubmitted count-refresh draft');
+      expect(readers[0].reloads.at(-1).partial.split(',').sort()).toEqual([
+        'can_manage_account',
+        'connections',
+        'services',
+      ]);
+      expect(readers[1].reloads.at(-1).partial).toBe('service_connections');
+      expect(readers[1].confirmations).toBe(1);
+      expect(readers[2].confirmations).toBe(1);
+    };
+    await expect(row.getByTestId('telegram-status')).toContainText('0 of 0 chats synced');
+    await mutate('arrive'); // message.upsert implicitly creates the first chat.
+    await assertCounts(1, 1);
+    await mutate('flip');
+    await assertCounts(0, 1);
+    await page.waitForLoadState('networkidle');
+    await resident.waitForLoadState('networkidle');
+    await draftView.waitForLoadState('networkidle');
+    const beforeQuiet = readers.map((reader) => [reader.markers.length, reader.reloads.length]);
+    await mutate('checkpoint');
+    await mutate('message');
+    await page.waitForTimeout(1200); // Beyond cable polling and the shared reload debounce.
+    expect(readers.map((reader) => [reader.markers.length, reader.reloads.length])).toEqual(beforeQuiet);
+    await assertCounts(0, 1);
+    await mutate('remove');
+    await assertCounts(0, 0);
+
+    // Suppress the sole event on the account reader; a second real context
+    // witnesses its commit before reconnect reconciles the missed count.
+    readers[0].drop = true;
+    await mutate('late');
+    await expect
+      .poll(
+        () =>
+          readers[1].reloads
+            .at(-1)
+            ?.body.props.service_connections.find((connection) => connection.label === 'Connector counts')?.comms.chats
+      )
+      .toBe(1);
+    await expect(row.getByTestId('telegram-status')).toContainText('0 of 0 chats synced');
+    readers[0].cable.close({ code: 1012, reason: 'Synthetic missed-count reconnect' });
+    await expect.poll(() => readers[0].confirmations, { timeout: 20_000 }).toBe(2);
+    await assertCounts(1, 1);
+    readers[0].drop = false;
+    for (const reader of readers) {
+      expect(reader.markers.length).toBeGreaterThanOrEqual(4);
+      expect(reader.markers.every((marker) => JSON.stringify(marker) === '{"action":"refresh"}')).toBe(true);
+    }
+    await page.screenshot({ path: testInfo.outputPath('comms-counts-reconnected.png'), fullPage: true });
+  } finally {
+    await draftView.close();
+    await otherContext.close();
+    expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
+  }
+});
+
 test('open integration pages and resident tabs update without losing a connect draft', async ({
   page,
   request,
