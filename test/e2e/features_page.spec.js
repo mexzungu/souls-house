@@ -20,7 +20,10 @@ test('the homepage links to a two-column features page with an expandable index'
   await expect(house.getByTestId('feature-showcase')).toHaveCount(13);
   const companion = house.getByTestId('feature-showcase').filter({ hasText: 'An explicitly enrolled companion' });
   await expect(companion).toBeVisible();
-  await expect(companion).toContainText('writes and execution are not enabled');
+  await expect(companion).toContainText('read/write and explicit full-user execution grants');
+  await expect(companion).toContainText('a separate local ceiling');
+  await expect(companion).toContainText('no computer is connected by default');
+  await expect(companion).toContainText('Directory moves are refused');
   await expect(house.getByRole('heading', { name: 'Bring an existing GitHub resident' })).toBeVisible();
 
   const theirWords = life.getByTestId('feature-showcase').filter({ hasText: 'Their words stay theirs' });
