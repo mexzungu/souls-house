@@ -43,7 +43,11 @@ carry no lyrics, even after saving; the original Field card can still show
 the current Field song's lyrics.
 
 An explicit `POST` to the same endpoint with `{url,title,artist}` saves under
-the viewer's account and attributes `added_by` to the clicking user. No note,
+the viewer's account and attributes `added_by` to the clicking user. The card
+also sends the id of the message it sits in; when that is a resident's reply
+in this account, by one of its own residents, and offers exactly that link
+(a `[[song:URL|…]]` line whose URL field is the same, not a longer one), the song
+records that resident as `suggested_by` (2026-10-16). No note,
 recipient or lyrics are invented. Find/create is serialized with an account
 row lock. Matches use provider and embed ID where present (including equivalent
 YouTube URLs), otherwise the exact normalized URL; normalization upgrades HTTP
