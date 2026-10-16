@@ -1,5 +1,8 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/svelte';
-import { router } from '@inertiajs/svelte';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/svelte';
+import { router, useForm } from '@inertiajs/svelte';
+import { get } from 'svelte/store';
+const { subscribe, unsubscribe } = vi.hoisted(() => ({ subscribe: vi.fn(), unsubscribe: vi.fn() }));
+vi.mock('$lib/cable', () => ({ subscribeToModel: subscribe }));
 import RhythmsIndex from './index.svelte';
 import RhythmForm from './form.svelte';
 import RhythmShow from './show.svelte';
@@ -46,13 +49,13 @@ function rhythmFixture(overrides = {}) {
     occurrences: [],
     can_manage: true,
     can_resume: false,
-    start_request_key: 'key-1',
     ...overrides,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  subscribe.mockReturnValue(unsubscribe);
   globalThis.fetch = vi.fn(() =>
     Promise.resolve({
       ok: true,
@@ -83,6 +86,36 @@ test('a paused rhythm names who is holding it instead of a next time', () => {
   render(RhythmsIndex, { account, rhythms: [rhythmFixture({ state: 'paused', holds })] });
   expect(screen.getByText('Paused by Mira')).toBeInTheDocument();
   expect(screen.queryByText(/Next:/)).not.toBeInTheDocument();
+});
+
+test('each rhythm lists its recent conversations as links, marking the ones in the conversation list', () => {
+  const recent_runs = [
+    {
+      id: 'o2',
+      title: 'House watch 7 Oct',
+      scheduled_for: '2026-10-07T07:30:00Z',
+      chat_url: '/accounts/acc/chats/c2',
+      listed: true,
+    },
+    {
+      id: 'o1',
+      title: 'House watch 6 Oct',
+      scheduled_for: '2026-10-06T07:30:00Z',
+      chat_url: '/accounts/acc/chats/c1',
+      listed: false,
+    },
+  ];
+  render(RhythmsIndex, { account, rhythms: [rhythmFixture({ recent_runs })] });
+  const list = screen.getByRole('list', { name: 'Recent conversations' });
+  const links = within(list).getAllByRole('link');
+  expect(links.map((link) => link.getAttribute('href'))).toEqual(['/accounts/acc/chats/c2', '/accounts/acc/chats/c1']);
+  expect(within(links[0]).getByText('in your list')).toBeInTheDocument();
+  expect(within(links[1]).queryByText('in your list')).not.toBeInTheDocument();
+});
+
+test('a rhythm with no runs yet shows no recent list', () => {
+  render(RhythmsIndex, { account, rhythms: [rhythmFixture({ recent_runs: [] })] });
+  expect(screen.queryByRole('list', { name: 'Recent conversations' })).not.toBeInTheDocument();
 });
 
 test('a resident-created invitation shows its author without granting a viewing human management', () => {
@@ -157,14 +190,51 @@ test("a resident's pause is shown with who holds it, and only they can lift it",
   expect(screen.getByRole('button', { name: /Start one now/ })).toBeDisabled();
 });
 
-test('starting one now sends the request key so a double click cannot start two', async () => {
-  render(RhythmShow, { account, rhythm: rhythmFixture() });
+test('a manual start keeps its client key across live refresh and failed retry, rotating only after success', async () => {
+  const { rerender } = render(RhythmShow, { account, rhythm: rhythmFixture() });
   await fireEvent.click(screen.getByRole('button', { name: /Start one now/ }));
-  expect(router.post).toHaveBeenCalledWith(
-    '/accounts/acc/rhythms/r1/start',
-    { request_key: 'key-1' },
-    expect.any(Object)
-  );
+  const first = router.post.mock.calls.at(-1);
+  expect(first[0]).toBe('/accounts/acc/rhythms/r1/start');
+  expect(first[1].request_key).toMatch(/^[0-9a-f-]{36}$/);
+  await rerender({ account, rhythm: rhythmFixture({ title: 'Changed elsewhere' }) });
+  first[2].onFinish();
+  await fireEvent.click(screen.getByRole('button', { name: /Start one now/ }));
+  const retry = router.post.mock.calls.at(-1);
+  expect(retry[1].request_key).toBe(first[1].request_key);
+  retry[2].onSuccess();
+  retry[2].onFinish();
+  await fireEvent.click(screen.getByRole('button', { name: /Start one now/ }));
+  expect(router.post.mock.calls.at(-1)[1].request_key).not.toBe(first[1].request_key);
+});
+
+test('empty lists subscribe to their current account without reconnecting on prop refresh', async () => {
+  const { rerender, unmount } = render(RhythmsIndex, { account, rhythms: [] });
+  expect(subscribe).toHaveBeenCalledWith('RhythmActivity', 'acc', ['rhythms']);
+  await rerender({ account: { ...account }, rhythms: [rhythmFixture()] });
+  expect(subscribe).toHaveBeenCalledTimes(1);
+  await rerender({ account: { id: 'other' }, rhythms: [] });
+  expect(unsubscribe).toHaveBeenCalledTimes(1);
+  expect(subscribe).toHaveBeenLastCalledWith('RhythmActivity', 'other', ['rhythms']);
+  unmount();
+  expect(unsubscribe).toHaveBeenCalledTimes(2);
+});
+
+test('live detail changes preserve an unfinished pause reason and render deletion safely', async () => {
+  const { rerender } = render(RhythmShow, { account, rhythm: rhythmFixture() });
+  expect(subscribe).toHaveBeenCalledWith('RhythmActivity', 'acc', ['rhythm']);
+  await fireEvent.click(screen.getByRole('button', { name: /^Pause$/ }));
+  await fireEvent.input(screen.getByPlaceholderText('Reason (optional)'), { target: { value: 'Still thinking' } });
+  await rerender({ account, rhythm: rhythmFixture({ title: 'Live title', next_run_at: null }) });
+  expect(screen.getByDisplayValue('Still thinking')).toBeInTheDocument();
+  expect(subscribe).toHaveBeenCalledTimes(1);
+  await rerender({ account, rhythm: null });
+  expect(screen.getByText('This rhythm has been deleted')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Start one now/ })).not.toBeInTheDocument();
+});
+
+test('editing a rhythm deliberately does not subscribe over a draft', () => {
+  render(RhythmForm, { account, residents, timezones: [], rhythm: rhythmFixture() });
+  expect(subscribe).not.toHaveBeenCalled();
 });
 
 test('occurrences show late, manual and failure states honestly', () => {
@@ -209,4 +279,97 @@ test('a scheduled message carries its provenance', () => {
     'href',
     '/accounts/acc/rhythms/r1'
   );
+});
+
+test('each selected resident with more than one model gets a model choice, starting from the saved one', () => {
+  const withModels = [
+    {
+      ...residents[0],
+      default_model_label: 'Claude Opus 5.5',
+      model_choices: [
+        { model_id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5' },
+        { model_id: 'anthropic/claude-fable-5.1', label: 'Claude Fable 5.1' },
+      ],
+    },
+    {
+      ...residents[1],
+      default_model_label: 'GPT-6.1 Sol',
+      model_choices: [{ model_id: 'openai/gpt-6.1-sol', label: 'GPT-6.1 Sol' }],
+    },
+  ];
+  render(RhythmForm, {
+    account,
+    residents: withModels,
+    timezones: [],
+    rhythm: rhythmFixture({
+      resident_ids: ['lume', 'mira'],
+      resident_models: { lume: 'anthropic/claude-fable-5.1', mira: null },
+    }),
+  });
+  const select = screen.getByLabelText('Lume runs on');
+  expect(select.value).toBe('anthropic/claude-fable-5.1');
+  expect(within(select).getByRole('option', { name: 'Their default (Claude Opus 5.5)' })).toBeInTheDocument();
+  expect(screen.queryByLabelText('Mira runs on')).not.toBeInTheDocument();
+});
+
+test('a pinned model shows on the resident chip', () => {
+  render(RhythmShow, {
+    account,
+    rhythm: rhythmFixture({ residents: [{ ...residents[0], model_selected: true, model_label: 'Claude Fable 5.1' }] }),
+  });
+  expect(screen.getByText(/Claude Fable 5\.1/)).toBeInTheDocument();
+});
+
+describe('a saved model pin can always be seen and reset', () => {
+  const opus = { model_id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5' };
+  const fable = { model_id: 'anthropic/claude-fable-5.1', label: 'Claude Fable 5.1' };
+  const sonnet = { model_id: 'anthropic/claude-sonnet-5.5', label: 'Claude Sonnet 5.5' };
+
+  function renderPinned({ choices, pin, pinLabel }) {
+    const resident = { ...residents[0], default_model_label: 'Claude Opus 5.5', model_choices: choices };
+    render(RhythmForm, {
+      account,
+      residents: [resident],
+      timezones: [],
+      rhythm: rhythmFixture({
+        resident_models: { lume: pin },
+        residents: [{ ...residents[0], model_id: pin, model_label: pinLabel, model_selected: true }],
+      }),
+    });
+    return screen.getByLabelText('Lume runs on');
+  }
+
+  async function resetAndSubmit(select) {
+    await fireEvent.change(select, { target: { value: '' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    // The form submits through $form.transform; apply it as Inertia would.
+    const form = get(useForm.mock.results.at(-1).value);
+    expect(form.patch).toHaveBeenCalled();
+    return form.transform.mock.calls.at(-1)[0](form);
+  }
+
+  test('a stale pin with one choice left is shown as unavailable and resets to default', async () => {
+    const select = renderPinned({ choices: [opus], pin: fable.model_id, pinLabel: fable.label });
+    expect(select.value).toBe(fable.model_id);
+    expect(within(select).getByRole('option', { name: 'Claude Fable 5.1 (no longer available)' })).toBeInTheDocument();
+    expect(screen.getByText(/no longer on Lume's list/)).toBeInTheDocument();
+    const data = await resetAndSubmit(select);
+    expect(data.rhythm.resident_models).toEqual({ lume: 'default' });
+    expect(screen.queryByText(/no longer on Lume's list/)).not.toBeInTheDocument();
+  });
+
+  test('a valid pin to the sole default can be changed to follow future defaults', async () => {
+    const select = renderPinned({ choices: [opus], pin: opus.model_id, pinLabel: opus.label });
+    expect(select.value).toBe(opus.model_id);
+    expect(within(select).queryByRole('option', { name: /no longer available/ })).not.toBeInTheDocument();
+    const data = await resetAndSubmit(select);
+    expect(data.rhythm.resident_models).toEqual({ lume: 'default' });
+  });
+
+  test('a stale pin among several choices is shown as unavailable and resets to default', async () => {
+    const select = renderPinned({ choices: [opus, sonnet], pin: fable.model_id, pinLabel: fable.label });
+    expect(within(select).getByRole('option', { name: 'Claude Fable 5.1 (no longer available)' })).toBeInTheDocument();
+    const data = await resetAndSubmit(select);
+    expect(data.rhythm.resident_models).toEqual({ lume: 'default' });
+  });
 });

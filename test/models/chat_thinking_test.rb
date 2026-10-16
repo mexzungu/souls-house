@@ -11,10 +11,14 @@ class ChatThinkingTest < ActiveSupport::TestCase
       "openai/gpt-6-luna-pro" => [ "OpenAI", %w[none low medium high xhigh max] ],
       "anthropic/claude-opus-5.5" => [ "Anthropic", %w[low medium high xhigh max] ],
       "anthropic/claude-fable-5.1" => [ "Anthropic", %w[low medium high xhigh max] ],
+      "anthropic/claude-haiku-5.5" => [ "Anthropic", %w[low medium high xhigh max] ],
       "x-ai/grok-4.7" => [ "xAI", %w[low medium high xhigh] ],
       "xiaomi/mimo-v2.6-pro" => [ "Xiaomi", %w[none high] ],
       "xiaomi/mimo-v2.6-pro-ultraspeed" => [ "Xiaomi", %w[none high] ],
-      "xiaomi/mimo-v2.6-flash" => [ "Xiaomi", %w[none high] ]
+      "xiaomi/mimo-v2.6-flash" => [ "Xiaomi", %w[none high] ],
+      "meta/muse-wonder" => [ "Meta", %w[none high] ],
+      "meta/muse-spark-open" => [ "Meta", %w[none high] ],
+      "google/gemini-4-argon" => [ "Google", %w[low medium high] ]
     }.each do |id, (group, efforts)|
       assert Chat::MODELS.any? { |model| model[:model_id] == id && model[:group] == group }, id
       assert Chat.supports_thinking?(id), id
@@ -311,6 +315,7 @@ class ChatThinkingTest < ActiveSupport::TestCase
       "qwen/qwen3.7-flash",
       "qwen/qwen3.8-2.4t-a95b",
       "qwen/qwen3.8-max",
+      "qwen/qwen3.8-omni-flash",
       "x-ai/grok-4.6"
     ].each do |model_id|
       assert_includes model_ids, model_id

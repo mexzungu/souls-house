@@ -8,8 +8,11 @@
     agents = [],
     accountId,
     showUsage = false,
+    // No longer disables the trigger bar: asking a busy resident queues a
+    // wake (PendingWake), and the bar marks who is running itself.
     agentIsResponding = false,
     activeRuntimeAgentIds = [],
+    runtimeInteractions = [],
     responseMarker = null,
     fileUploadConfig = {},
     onAgentTrigger = () => {},
@@ -26,8 +29,9 @@
     {accountId}
     {showUsage}
     chatId={chat.id}
-    disabled={agentIsResponding || !chat?.respondable}
+    disabled={!chat?.respondable}
     {activeRuntimeAgentIds}
+    {runtimeInteractions}
     {responseMarker}
     onTrigger={onAgentTrigger} />
 {/if}

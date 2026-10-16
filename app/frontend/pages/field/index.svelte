@@ -1,0 +1,497 @@
+<script>
+  import { tick } from 'svelte';
+  import { router } from '@inertiajs/svelte';
+  import { createDynamicSync } from '$lib/use-sync';
+  import * as Card from '$lib/components/shadcn/card/index.js';
+  import { Button } from '$lib/components/shadcn/button/index.js';
+  import WhiteboardViewer from '$lib/components/whiteboards/WhiteboardViewer.svelte';
+  import FieldFileViewer from '$lib/components/field/FieldFileViewer.svelte';
+  import NoteHistory from '$lib/components/field/NoteHistory.svelte';
+  import RecordingUploadDialog from '$lib/components/field/RecordingUploadDialog.svelte';
+  import FieldFileUploadDialog from '$lib/components/field/FieldFileUploadDialog.svelte';
+  import RecordingAllowance from '$lib/components/field/RecordingAllowance.svelte';
+  import RecordingViewer from '$lib/components/field/RecordingViewer.svelte';
+  import FieldTweetViewer from '$lib/components/field/FieldTweetViewer.svelte';
+  import FieldSongViewer from '$lib/components/field/FieldSongViewer.svelte';
+  import FieldSongDialog from '$lib/components/field/FieldSongDialog.svelte';
+  import FieldTweetStreamPanel from '$lib/components/field/FieldTweetStreamPanel.svelte';
+  import FieldTagEditor from '$lib/components/field/FieldTagEditor.svelte';
+  import FieldTagManager from '$lib/components/field/FieldTagManager.svelte';
+  import FieldList from '$lib/components/field/FieldList.svelte';
+  import FieldEmpty from '$lib/components/field/FieldEmpty.svelte';
+  import FieldSearchBar from '$lib/components/field/FieldSearchBar.svelte';
+  import FieldSearchResults from '$lib/components/field/FieldSearchResults.svelte';
+  import FieldActions from '$lib/components/field/FieldActions.svelte';
+  import FieldSharing from '$lib/components/field/FieldSharing.svelte';
+  import FieldNoteDialog from '$lib/components/field/FieldNoteDialog.svelte';
+  import { fieldItemLink } from '$lib/field';
+  import { CaretLeft } from 'phosphor-svelte';
+
+  let {
+    items = [],
+    current_item = null,
+    counts = { all: 0, files: 0, notes: 0, recordings: 0, tweets: 0, songs: 0, waiting: 0 },
+    field_empty = false,
+    pagination = { page: 1, pages: 1, per_page: 50, total: 0 },
+    recording_allowance = null,
+    tweet_stream = null,
+    max_recording_bytes = 2 * 1024 * 1024 * 1024,
+    max_recording_label = '2 GB',
+    suggestions_enabled = false,
+    summaries_enabled = false,
+    ocr_enabled = false,
+    tab = 'all',
+    selected = null,
+    max_file_bytes = 100 * 1024 * 1024,
+    max_file_label = '100 MB',
+    song_recipients = [],
+    max_song_audio_bytes = 50 * 1024 * 1024,
+    max_song_audio_label = '50 MB',
+    account_name = '',
+    account,
+    tags = [],
+    filter_tags = [],
+    query = '',
+    search = null,
+  } = $props();
+
+  const tabs = [
+    { key: 'all', label: 'All' },
+    { key: 'files', label: 'Files' },
+    { key: 'notes', label: 'Notes' },
+    { key: 'recordings', label: 'Recordings' },
+    { key: 'tweets', label: 'Tweets' },
+    { key: 'songs', label: 'Songs' },
+    // Items waiting on a person: speakers to name, songs without their
+    // lyrics. Shown while there is something waiting, or while it's the open tab.
+    {
+      key: 'waiting',
+      label: 'Needs you',
+      title: 'Items waiting for you: speakers to name, songs without their lyrics',
+    },
+  ];
+  const visibleTabs = $derived(tabs.filter((t) => t.key !== 'waiting' || counts.waiting > 0 || tab === 'waiting'));
+
+  // The server sends one page of the list (tab and tags already applied),
+  // the counts for each tab, and the open item wherever it sits.
+  const fieldEmpty = $derived(field_empty);
+  const current = $derived(current_item);
+  const accountLabel = $derived(account_name || 'this account');
+  const sharedLine = $derived(
+    `Shared with every human member and resident in ${accountLabel}, including anyone who joins later.`
+  );
+
+  const LIST_PROPS = ['items', 'current_item', 'selected', 'counts', 'field_empty', 'pagination'];
+  const LIVE_PROPS = [...LIST_PROPS, 'recording_allowance', 'tags'];
+  const updateSync = createDynamicSync();
+  $effect(() => {
+    // One narrow parent stream catches new arrivals as well as existing items,
+    // without reloading the Field for unrelated chat/account activity.
+    // Search results remain the requested window until explicit navigation;
+    // live counts and the selected item may refresh without re-ranking it.
+    updateSync({
+      [`FieldActivity:${account.id}`]: LIVE_PROPS,
+      // Subscribe even without a source or while the panel is unavailable.
+      // Status never re-ranks search or refreshes the selected item's draft.
+      [`FieldTweetStream:${account.id}`]: ['tweet_stream'],
+    });
+  });
+
+  // Search, tag filter and page ride along in the URL so a link reopens
+  // them. A search pages its results from 0; the list pages from 1. A new
+  // query, filter or tab starts again from the first page.
+  function visit(
+    params,
+    { q = query, tag = filter_tags, page = q ? search?.page || 0 : pagination.page } = {},
+    opts = {}
+  ) {
+    const extra = {};
+    if (q) extra.q = q;
+    if (tag.length) extra.tag = tag;
+    if (q ? page > 0 : page > 1) extra.page = page;
+    router.get(
+      `/accounts/${account.id}/field`,
+      { ...params, ...extra },
+      { preserveState: true, preserveScroll: true, ...opts }
+    );
+  }
+
+  function goToPage(page) {
+    visit(selected ? { tab, item: selected } : { tab }, { page });
+  }
+
+  let tagsOpen = $state(false);
+
+  function toggleTag(name) {
+    const next = filter_tags.includes(name) ? filter_tags.filter((t) => t !== name) : [...filter_tags, name];
+    visit(selected ? { tab, item: selected } : { tab }, { tag: next, page: 0 });
+  }
+
+  // After a tag is renamed, merged or deleted, an active filter on its old
+  // name would match nothing and have no chip to clear it: follow the change.
+  function tagChanged(oldName, newName) {
+    if (!filter_tags.includes(oldName)) return false;
+    const next = [...new Set(filter_tags.map((name) => (name === oldName ? newName : name)).filter(Boolean))];
+    visit(selected ? { tab, item: selected } : { tab }, { tag: next, page: 0 });
+    return true;
+  }
+
+  function nextResults() {
+    visit(selected ? { tab, item: selected } : { tab }, { page: search.next_page });
+  }
+
+  function selectTab(key) {
+    visit(selected ? { tab: key, item: selected } : { tab: key }, { page: 1 });
+  }
+
+  // Below lg the list and the open item take turns on screen: opening an
+  // item starts it at the top, and going back returns to the same place in
+  // the list. That place is kept in sessionStorage, keyed by the list it
+  // belongs to, because browser Back/Forward recreates this component.
+  const narrow = () => !window.matchMedia?.('(min-width: 1024px)').matches;
+  const returnKey = $derived(
+    `field-return:${account.id}:${tab}:${query}:${filter_tags.join(',')}:${search ? search.page : pagination.page}`
+  );
+
+  function rememberReturn(y) {
+    try {
+      sessionStorage.setItem(returnKey, String(y));
+    } catch {
+      // Storage can be unavailable (private mode); going back then lands at the top.
+    }
+  }
+
+  function recallReturn() {
+    try {
+      return Number(sessionStorage.getItem(returnKey)) || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  function selectItem(key) {
+    editing = false;
+    conflict = null;
+    if (narrow()) {
+      rememberReturn(window.scrollY);
+      visit({ tab, item: key }, {}, { onSuccess: () => tick().then(() => window.scrollTo(0, 0)) });
+    } else {
+      visit({ tab, item: key });
+    }
+  }
+
+  function backToList() {
+    editing = false;
+    conflict = null;
+    const y = recallReturn();
+    visit({ tab }, {}, { onSuccess: () => tick().then(() => window.scrollTo(0, y)) });
+  }
+
+  // A newly opened item starts at its top; the list keeps its own scroll.
+  let detailPane = $state(null);
+  $effect(() => {
+    if (detailPane && current?.key) detailPane.scrollTop = 0;
+  });
+
+  let recordingOpen = $state(false);
+
+  let uploadOpen = $state(false);
+  let noteOpen = $state(false);
+  let songOpen = $state(false);
+  let songEditing = $state(null);
+  let songFocusLyrics = $state(false);
+
+  function addSong() {
+    songEditing = null;
+    songFocusLyrics = false;
+    songOpen = true;
+  }
+
+  function editSong({ lyrics = false } = {}) {
+    songEditing = current;
+    songFocusLyrics = lyrics;
+    songOpen = true;
+  }
+
+  function deleteSong() {
+    const message =
+      `Delete "${current.title}" from the Field? It disappears for everyone, people and residents. Deleting does ` +
+      'not reach anything a resident has already read.';
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/field/songs/${current.id}`);
+  }
+
+  // Note editing, unchanged from the whiteboards page
+  let editing = $state(false);
+  let editContent = $state('');
+  let editRevision = $state(null);
+  let conflict = $state(null);
+  let saving = $state(false);
+
+  function startEditing() {
+    editContent = current?.content || '';
+    editRevision = current?.revision;
+    editing = true;
+  }
+
+  function cancelEditing() {
+    editing = false;
+    editContent = '';
+    conflict = null;
+  }
+
+  async function saveNote() {
+    saving = true;
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+    try {
+      const response = await fetch(`/accounts/${account.id}/whiteboards/${current.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken || '' },
+        body: JSON.stringify({ whiteboard: { content: editContent }, expected_revision: editRevision }),
+      });
+      saving = false;
+      if (response.ok) {
+        editing = false;
+        conflict = null;
+        router.reload({ only: [...LIST_PROPS, 'search'], preserveScroll: true });
+      } else {
+        const data = await response.json();
+        if (data.error === 'conflict') {
+          conflict = {
+            serverContent: data.current_content,
+            serverRevision: data.current_revision,
+            myContent: editContent,
+          };
+        } else {
+          alert('Failed to save. Please try again.');
+        }
+      }
+    } catch {
+      saving = false;
+      alert('Failed to save. Please try again.');
+    }
+  }
+
+  function useServerVersion() {
+    if (!conflict) return;
+    editContent = conflict.serverContent;
+    editRevision = conflict.serverRevision;
+    conflict = null;
+  }
+
+  function keepMyVersion() {
+    editRevision = conflict.serverRevision;
+    conflict = null;
+    saveNote();
+  }
+
+  let historyOpen = $state(false);
+
+  function copyNoteLink() {
+    navigator.clipboard?.writeText(fieldItemLink(account.id, current.key));
+  }
+
+  function deleteNote() {
+    const message = `Delete the note "${current.title}"? Residents who already read it may have quoted it elsewhere.`;
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/whiteboards/${current.id}`);
+  }
+
+  function deleteFile() {
+    const message =
+      `Delete "${current.title}" from the Field? It disappears for everyone, people and residents. Like ` +
+      'everything deleted in the house, the file itself stays stored. Deleting does not reach anything a ' +
+      'resident has already read: quotes in chats and things kept in memory stay where they are.';
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/field/files/${current.id}`);
+  }
+
+  function deleteTweet() {
+    const message = "Delete this tweet from the Field? It won't be brought back by the stream.";
+    if (!confirm(message)) return;
+    router.delete(`/accounts/${account.id}/field/tweets/${current.id}`);
+  }
+</script>
+
+<svelte:head>
+  <title>Field</title>
+</svelte:head>
+
+<div class="px-4 py-6 sm:p-8 max-w-7xl mx-auto">
+  <div class="mb-6 flex-wrap items-end justify-between gap-4 {current ? 'hidden lg:flex' : 'flex'}">
+    <div>
+      <h1 class="text-3xl font-bold">Field</h1>
+      <p class="text-muted-foreground mt-1">Things from your life, brought here to keep and return to together.</p>
+    </div>
+    <FieldActions
+      onFile={() => (uploadOpen = true)}
+      onNote={() => (noteOpen = true)}
+      onRecording={() => (recordingOpen = true)}
+      onSong={addSong} />
+  </div>
+
+  {#if fieldEmpty}
+    <FieldEmpty {accountLabel} />
+  {:else}
+    <!-- On a phone, an open item has the screen to itself. -->
+    <div class={current ? 'hidden lg:block' : ''}>
+      <FieldSearchBar
+        {query}
+        filterTags={filter_tags}
+        {tags}
+        onSearch={(q) => visit(selected ? { tab, item: selected } : { tab }, { q, page: q ? 0 : 1 })}
+        onToggleTag={toggleTag}
+        onManage={() => (tagsOpen = true)} />
+
+      <FieldSharing {sharedLine} summariesEnabled={summaries_enabled} ocrEnabled={ocr_enabled} />
+    </div>
+
+    <!-- The tabs sort the list; a search has its own results. -->
+    {#if !search}
+      <div class="mb-4 gap-1 overflow-x-auto {current ? 'hidden lg:flex' : 'flex'}" role="tablist">
+        {#each visibleTabs as t (t.key)}
+          <Button
+            title={t.title}
+            variant={tab === t.key ? 'secondary' : 'ghost'}
+            size="sm"
+            role="tab"
+            aria-selected={tab === t.key}
+            onclick={() => selectTab(t.key)}>
+            {t.label}
+            <span class="text-muted-foreground ml-1">
+              {counts[t.key] ?? 0}
+            </span>
+          </Button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if tab === 'recordings' && recording_allowance}
+      <div class={current ? 'hidden lg:block' : ''}><RecordingAllowance allowance={recording_allowance} /></div>
+    {/if}
+  {/if}
+
+  <!-- One stable mount preserves local drafts as the Field gains/loses items
+       and across tab switches. Feature-off intentionally closes/resets forms. -->
+  {#if tweet_stream}
+    <div class={fieldEmpty ? 'mt-6' : tab !== 'tweets' ? 'hidden' : current ? 'hidden lg:block' : ''}>
+      <FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} />
+    </div>
+  {/if}
+
+  {#if !fieldEmpty}
+    <div class="grid gap-6 lg:grid-cols-3">
+      <div class="min-w-0 space-y-3 {current ? 'hidden lg:block' : ''}">
+        {#if search}
+          <FieldSearchResults
+            {search}
+            {query}
+            filterTags={filter_tags}
+            currentKey={current?.key}
+            onSelect={selectItem}
+            onMore={nextResults} />
+        {:else}
+          <FieldList
+            {items}
+            {pagination}
+            filterTags={filter_tags}
+            emptyText={tab === 'waiting' ? 'Nothing is waiting for you.' : null}
+            currentKey={current?.key}
+            onSelect={selectItem}
+            onPage={goToPage} />
+        {/if}
+      </div>
+
+      <!-- Sticky, so a long list can be scrolled with the open item in view. -->
+      <div
+        bind:this={detailPane}
+        class="min-w-0 lg:col-span-2 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto {current
+          ? ''
+          : 'hidden lg:block'}"
+        data-testid="field-reader">
+        {#if current}
+          <Button variant="ghost" size="sm" class="-ml-2 mb-2 lg:hidden" onclick={backToList} data-testid="field-back">
+            <CaretLeft class="size-4" /> Back to the Field
+          </Button>
+          <div class="mb-3">
+            {#key current.key}
+              <FieldTagEditor accountId={account.id} itemKey={current.key} tags={current.tags || []} allTags={tags} />
+            {/key}
+          </div>
+        {/if}
+        {#if current?.kind === 'file'}
+          <FieldFileViewer file={current} link={fieldItemLink(account.id, current.key)} onDelete={deleteFile} />
+        {:else if current?.kind === 'recording'}
+          {#key current.key}
+            <RecordingViewer recording={current} />
+          {/key}
+        {:else if current?.kind === 'tweet'}
+          <FieldTweetViewer tweet={current} onDelete={deleteTweet} />
+        {:else if current?.kind === 'song'}
+          {#key current.key}
+            <FieldSongViewer song={current} onEdit={editSong} onDelete={deleteSong} />
+          {/key}
+        {:else if current?.kind === 'note'}
+          <div class="mb-2 flex flex-wrap justify-end gap-1">
+            <Button size="sm" variant="ghost" onclick={() => (historyOpen = true)} data-testid="note-history-open">
+              History
+            </Button>
+            <Button size="sm" variant="ghost" onclick={copyNoteLink}>Copy link</Button>
+            <Button size="sm" variant="ghost" onclick={deleteNote}>Delete note</Button>
+          </div>
+          <WhiteboardViewer
+            selected={{ ...current, name: current.title }}
+            {editing}
+            bind:editContent
+            {conflict}
+            {saving}
+            onStartEditing={startEditing}
+            onCancelEditing={cancelEditing}
+            onSave={saveNote}
+            onUseServerVersion={useServerVersion}
+            onKeepMyVersion={keepMyVersion} />
+        {:else}
+          <Card.Root>
+            <Card.Content class="py-16 text-center text-muted-foreground"
+              >Choose something on the left to read it here.</Card.Content>
+          </Card.Root>
+        {/if}
+      </div>
+    </div>
+  {/if}
+</div>
+
+<FieldFileUploadDialog
+  bind:open={uploadOpen}
+  accountId={account.id}
+  maxBytes={max_file_bytes}
+  maxLabel={max_file_label}
+  summariesEnabled={summaries_enabled}
+  ocrEnabled={ocr_enabled}
+  {sharedLine} />
+
+<RecordingUploadDialog
+  bind:open={recordingOpen}
+  accountId={account.id}
+  allowance={recording_allowance}
+  maxBytes={max_recording_bytes}
+  maxLabel={max_recording_label}
+  suggestionsEnabled={suggestions_enabled}
+  summariesEnabled={summaries_enabled}
+  {sharedLine} />
+
+<FieldNoteDialog bind:open={noteOpen} accountId={account.id} {sharedLine} />
+
+<FieldSongDialog
+  bind:open={songOpen}
+  accountId={account.id}
+  song={songEditing}
+  focusLyrics={songFocusLyrics}
+  recipients={song_recipients}
+  maxBytes={max_song_audio_bytes}
+  maxLabel={max_song_audio_label}
+  {sharedLine} />
+
+<FieldTagManager bind:open={tagsOpen} accountId={account.id} {tags} onChanged={tagChanged} />
+
+<NoteHistory bind:open={historyOpen} accountId={account.id} note={current?.kind === 'note' ? current : null} />

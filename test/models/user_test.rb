@@ -813,4 +813,77 @@ class UserTest < ActiveSupport::TestCase
     assert_not_nil medium_variant
   end
 
+  test "default_account honours a chosen confirmed account" do
+    user = users(:user_1)
+    team = accounts(:team_account)
+    user.update!(default_account_key: team.to_param)
+
+    assert_equal team, user.reload.default_account
+    assert_equal team.to_param, user.default_account_key
+  end
+
+  test "default_account falls back when the chosen account is no longer mine" do
+    user = users(:user_1)
+    team = accounts(:team_account)
+    user.update!(default_account_key: team.to_param)
+    memberships(:team_account_owner).update_columns(confirmed_at: nil)
+
+    assert_equal user.personal_account, user.reload.default_account
+  end
+
+  test "default_account cannot be an account the user does not belong to" do
+    user = users(:user_1)
+    user.default_account_key = accounts(:unconfirmed_user_account).to_param
+
+    assert_not user.valid?
+    assert user.errors[:default_account].any?
+  end
+
+  test "an unreadable default account key is rejected, not silently cleared" do
+    user = users(:user_1)
+    user.default_account_key = "!!!"
+
+    assert_not user.valid?
+  end
+
+  test "a blank default account key clears the choice" do
+    user = users(:user_1)
+    user.update!(default_account_key: accounts(:team_account).to_param)
+    user.update!(default_account_key: "")
+
+    assert_nil user.reload.default_account_id
+  end
+
+  test "the default account choice stays out of user and membership JSON" do
+    user = users(:user_1)
+    user.update!(default_account_key: accounts(:team_account).to_param)
+
+    assert_not user.as_json.key?("default_account_key")
+    assert_not user.as_json.key?("default_account_id")
+
+    membership_json = memberships(:daniel_personal).as_json
+    nested_user = membership_json["user"] || {}
+    assert_not nested_user.key?("default_account_key")
+    assert_not nested_user.key?("default_account_id")
+    assert_not membership_json.to_json.include?(accounts(:team_account).to_param)
+  end
+
+  # requires_new: inside a caller's transaction, a profile failure must still
+  # roll back the user half, without aborting the caller's own work.
+  test "update_settings rolls back its user half inside an outer transaction" do
+    user = users(:user_1)
+    team = accounts(:team_account)
+    saved = nil
+
+    User.transaction do
+      saved = user.update_settings({ default_account_key: team.to_param }, { theme: "neon" })
+      user.profile.reload.update!(timezone: "Tokyo")
+    end
+
+    assert_equal false, saved
+    assert user.errors[:theme].any?
+    assert_nil user.reload.default_account_id
+    assert_equal "Tokyo", user.profile.reload.timezone
+  end
+
 end

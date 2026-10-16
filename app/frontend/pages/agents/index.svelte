@@ -1,6 +1,6 @@
 <script>
   import { router } from '@inertiajs/svelte';
-  import { useSync } from '$lib/use-sync';
+  import { createDynamicSync } from '$lib/use-sync';
   import { newAccountAgentPath, accountAgentPath, accountAgentPredecessorPath } from '@/routes';
   import { findModelLabel as modelLabelFor } from '$lib/agent-models';
   import AgentEmptyState from '$lib/components/agents/AgentEmptyState.svelte';
@@ -14,6 +14,7 @@
     grouped_models = {},
     account,
     resident_import_url: residentImportUrl = null,
+    github_resident_import_url: githubResidentImportUrl = null,
     guest_memberships: guestMemberships = [],
     away_memberships: awayMemberships = [],
     guest_candidates: guestCandidates = [],
@@ -23,9 +24,18 @@
   // Subscribe to both:
   // - Account:${id}:agents - individual agent updates (via collection subscription)
   // - Account:${id} - new agent creation (via broadcasts_to :account)
-  useSync({
-    [`Account:${account.id}:agents`]: 'agents',
-    [`Account:${account.id}`]: 'agents',
+  const updateSync = createDynamicSync();
+  $effect(() => {
+    updateSync({
+      [`Account:${account.id}:agents`]: 'agents',
+      [`Account:${account.id}`]: 'agents',
+      [`GuestDirectory:${account.id}`]: [
+        'guest_memberships',
+        'away_memberships',
+        'guest_candidates',
+        'can_end_guest_memberships',
+      ],
+    });
   });
 
   // Upgrade-with-predecessor modal state.
@@ -81,12 +91,10 @@
 </svelte:head>
 
 <div class="p-8 max-w-6xl mx-auto">
-  <AgentIndexHeader onCreate={() => router.visit(newAccountAgentPath(account.id))} />
-  {#if residentImportUrl}
-    <p class="mb-6 text-sm">
-      <a class="text-primary underline" href={residentImportUrl}>Import a resident archive</a>
-    </p>
-  {/if}
+  <AgentIndexHeader
+    onCreate={() => router.visit(newAccountAgentPath(account.id))}
+    githubImportUrl={githubResidentImportUrl}
+    archiveImportUrl={residentImportUrl} />
 
   {#if agents.length === 0}
     <AgentEmptyState onCreate={() => router.visit(newAccountAgentPath(account.id))} />
@@ -94,12 +102,14 @@
     <AgentGrid {agents} accountId={account.id} onUpgrade={openUpgradeModal} onDisable={disableAgent} />
   {/if}
 
-  <GuestResidents
-    accountId={account.id}
-    guests={guestMemberships}
-    away={awayMemberships}
-    candidates={guestCandidates}
-    canEnd={canEndGuestMemberships} />
+  {#key account.id}
+    <GuestResidents
+      accountId={account.id}
+      guests={guestMemberships}
+      away={awayMemberships}
+      candidates={guestCandidates}
+      canEnd={canEndGuestMemberships} />
+  {/key}
 </div>
 
 <AgentUpgradeDialog

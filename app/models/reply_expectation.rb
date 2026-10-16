@@ -1,5 +1,7 @@
 class ReplyExpectation < ApplicationRecord
 
+  include RhythmListingActivity
+
   DIRECT_MENTION_VERSION = "direct-mention-v1"
 
   belongs_to :message
@@ -16,6 +18,8 @@ class ReplyExpectation < ApplicationRecord
   }
 
   after_commit -> { self.class.refresh_for(user_id) }
+  # The eye on a quiet rhythm run brings it into the list (Chat::QuietRhythmRun).
+  after_create_commit -> { message.chat.announce_listing_change }
 
   def self.summary_for(user, account:, chat: nil)
     counts = visible_to(user).state_open.group("chats.account_id", "chats.id")
@@ -24,11 +28,15 @@ class ReplyExpectation < ApplicationRecord
     chats = Chat.where(id: counts.filter_map { |aid, cid| cid if aid == account&.id }).index_by(&:id)
     by_account = Hash.new(0)
     by_chat = {}
+    by_room = Hash.new(0)
     through_messages = {}
     counts.each do |aid, cid, count, through_id|
       by_account[accounts.fetch(aid).to_param] += 1
       next unless chats.key?(cid)
       by_chat[chats.fetch(cid).to_param] = count
+      # Conversations waiting on you, per room ("main" for no room).
+      room_id = chats.fetch(cid).room_id
+      by_room[room_id ? Room.encode_id(room_id) : "main"] += 1
       through_messages[chats.fetch(cid).to_param] = Message.encode_id(through_id)
     end
     message_ids = if chat && chat.account_id == account&.id
@@ -36,7 +44,17 @@ class ReplyExpectation < ApplicationRecord
     else
       []
     end
-    { total: counts.size, accounts: by_account, chats: by_chat, through_messages: through_messages, messages: message_ids }
+    { total: counts.size, accounts: by_account, chats: by_chat, rooms: by_room, through_messages: through_messages, messages: message_ids }
+  end
+
+  # The person's open flags in one account (and optionally one conversation),
+  # as { chat_id => [message_id, ...] } in message order. Same visibility as
+  # summary_for: kept messages in kept conversations of confirmed accounts.
+  def self.open_message_ids_by_chat(user, account:, chat: nil)
+    scope = visible_to(user).state_open.where(chats: { account_id: account.id })
+    scope = scope.where(messages: { chat_id: chat.id }) if chat
+    scope.order("messages.id").pluck("messages.chat_id", "messages.id")
+      .group_by(&:first).transform_values { |pairs| pairs.map(&:last) }
   end
 
   def self.dismiss_message!(message:, user:)

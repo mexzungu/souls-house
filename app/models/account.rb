@@ -6,7 +6,7 @@ class Account < ApplicationRecord
 
   # Broadcasting configuration
   broadcasts_to :all # Admin collection
-  skip_broadcasts_on_destroy :memberships, :agents, :chats, :whiteboards
+  skip_broadcasts_on_destroy :memberships, :agents, :chats, :whiteboards, :field_files, :field_songs
 
   # Enums
   enum :account_type, { personal: 0, team: 1 }
@@ -49,7 +49,12 @@ class Account < ApplicationRecord
   has_one :owner, through: :owner_membership, source: :user
   has_many :chats, dependent: :destroy
   has_many :visual_tags, dependent: :destroy
+  has_many :rooms, -> { ordered }, dependent: :destroy
+  # Where conversations residents start land unless they choose; nil is Main.
+  belongs_to :resident_room, class_name: "Room", optional: true
+  has_one :pin_tag, -> { pinned }, class_name: "VisualTag"
   has_many :agents, dependent: :destroy
+  has_many :github_resident_imports, dependent: :restrict_with_error
   # Residents hosted elsewhere and present here as guests. Removal callbacks
   # close seats; when the whole account goes, its rooms go with it.
   has_many :guest_memberships, dependent: :delete_all
@@ -58,15 +63,33 @@ class Account < ApplicationRecord
   has_many :api_keys, dependent: :destroy
   has_many :metered_action_events, dependent: :destroy
   has_many :whiteboards, dependent: :destroy
+  has_many :field_files, dependent: :destroy
+  has_many :field_tweets, dependent: :delete_all
+  has_many :field_songs, dependent: :destroy
+  has_one :field_tweet_source, dependent: :destroy
+  has_many :field_tweet_calls, dependent: :delete_all
+  has_many :field_swarm_searches, dependent: :delete_all
+  has_many :field_recordings, dependent: :destroy
+  has_many :field_recording_reservations, dependent: :destroy
+  has_many :field_voices, dependent: :destroy
+  has_many :field_voice_enrolments, dependent: :destroy
+  has_many :field_taggings, dependent: :delete_all
+  has_many :field_tags, dependent: :destroy
   has_many :device_streams, dependent: :destroy
   has_many :service_connections, dependent: :destroy
+  has_many :watched_repositories, dependent: :delete_all
+  has_many :repository_watches, dependent: :delete_all
   has_many :service_authorization_attempts, dependent: :destroy
+  has_many :transcription_glossary_terms, dependent: :delete_all
   has_one :github_integration
   has_one :x_integration
 
   # Validations (Rails-only, no SQL constraints!)
   validates :name, presence: true
   validates :account_type, presence: true
+  validates :logo_colour, inclusion: { in: ->(_) { LOGO_COLOURS } }, allow_nil: true
+  validate :resident_handoff_cap_in_range
+  validate :resident_room_belongs_to_account
   validate :enforce_site_account_limit, on: :create
   validate :enforce_personal_account_limit, if: :personal?
   validate :can_invite_members, if: -> { memberships.any?(&:invitation?) }
@@ -75,11 +98,37 @@ class Account < ApplicationRecord
   before_validation :set_default_name, on: :create
   before_validation :generate_slug, on: :create
   after_create :create_default_visual_tags
+  after_save -> { FieldTweetStream.refresh!(id) }, if: :saved_change_to_field_tweets_house_key?
   before_destroy :mark_memberships_for_skip_check, prepend: true
   after_update_commit :disconnect_members_app_cable, if: -> { saved_change_to_disabled_at? && disabled? }
   after_update_commit -> { users.ids.each { |id| ReplyExpectation.refresh_for(id) } }, if: :saved_change_to_disabled_at?
+  after_save :refresh_guest_directory, if: -> {
+    (saved_changes.keys & %w[name account_type disabled_at]).any?
+  }
+  # Both hosted agents and receiving joins disappear in dependent callbacks.
+  before_destroy :snapshot_guest_directory, prepend: true
+  after_destroy -> { GuestDirectory.refresh!(@guest_directory_account_ids) }
+
+  def snapshot_guest_directory
+    @guest_directory_account_ids = GuestDirectory.account_ids_for([ id ])
+  end
+
+  def refresh_guest_directory
+    GuestDirectory.refresh!(GuestDirectory.account_ids_for([ id ]))
+  end
+  private :snapshot_guest_directory, :refresh_guest_directory
 
   ACCOUNT_LIMIT_MESSAGE = "This house has reached its account limit. New signups and accounts are temporarily closed."
+
+  # Curated colours for the dot in the logo, so an account is recognisable at a glance.
+  # Each name has a hand-tuned light and dark value in application.css ([data-account-colour]).
+  # Null means the default coral, the colour the mark was drawn with.
+  LOGO_COLOURS = %w[teal plum ochre sky moss indigo slate].freeze
+
+  # How many times residents may wake each other in a room between messages
+  # from a person (MessageHandoff). Stored in settings; 0 turns handoffs off.
+  RESIDENT_HANDOFF_CAP_DEFAULT = 6
+  RESIDENT_HANDOFF_CAP_RANGE = 0..50
 
   # Scopes
   scope :personal, -> { where(account_type: :personal) }
@@ -153,6 +202,15 @@ class Account < ApplicationRecord
 
   def disabled?
     disabled_at.present?
+  end
+
+  def resident_handoff_cap
+    value = (settings || {})["resident_handoff_cap"]
+    value.is_a?(Integer) ? value : RESIDENT_HANDOFF_CAP_DEFAULT
+  end
+
+  def resident_handoff_cap=(value)
+    self.settings = (settings || {}).merge("resident_handoff_cap" => Integer(value.to_s, exception: false) || value)
   end
 
   def disable!
@@ -247,8 +305,67 @@ class Account < ApplicationRecord
     (saved_changes.keys.map(&:to_sym) & AI_CREDENTIAL_ATTRIBUTES).any?
   end
 
+  # Write-only change to the account's own model provider keys, shared by the
+  # web page and the API. `set` maps provider names to new keys; blank values
+  # leave that key alone. Providers named in `clear` lose their key, even if
+  # `set` also names them. Residents are refreshed when anything changed.
+  def update_ai_api_keys!(set: {}, clear: [])
+    set = set.to_h.transform_keys(&:to_s)
+    clear = Array(clear).map(&:to_s)
+    attributes = {}
+
+    AI_PROVIDERS.each_key do |provider|
+      attribute = "#{provider}_api_key"
+      attributes[attribute] = set[provider.to_s] if set[provider.to_s].present?
+      attributes[attribute] = nil if clear.include?(provider.to_s)
+    end
+
+    update!(attributes)
+    AccountAgentCredentialsRefreshJob.perform_later(id) if saved_ai_credentials_change?
+  end
+
   alias_method :active, :active?
   alias_method :disabled, :disabled?
+
+  # Field recordings: accounts with a site admin in them aren't held to the
+  # weekly transcription allowance (Daniel, 2026-10-09). The column keeps its
+  # stored value; every reader goes through here, so the reservation check,
+  # the vendor exposure ceiling and the gauge all see the same number. Later
+  # this comes from the account's plan.
+  UNLIMITED_RECORDING_MS = 100_000.hours.in_milliseconds
+
+  def recording_ms_weekly_limit
+    recording_unlimited? ? UNLIMITED_RECORDING_MS : super
+  end
+
+  # Field swarm search: a site admin's per-account test switch (unmetered beyond
+  # FieldSwarm's daily cap), or a resident of this account on a plan that
+  # includes it (Life or Work), metered per calendar month by the plan.
+  def field_swarm_allowed?
+    field_swarm_enabled? || field_swarm_plan_searches.positive?
+  end
+
+  # nil when the admin switch is on: that path has only the daily cap.
+  def field_swarm_monthly_limit
+    field_swarm_enabled? ? nil : field_swarm_plan_searches
+  end
+
+  def field_swarm_plan_searches
+    tiers = ResidentEntitlement.where(account: self, state: Billing::Tier::IN_FORCE_STATES,
+      tier: Billing::Tier.with_swarm_search.map(&:id)).pluck(:tier)
+    tiers.sum { |id| Billing::Tier.find(id)&.swarm_searches.to_i }
+  end
+
+  def recording_unlimited? = includes_site_admin?
+
+  # A site admin's own account, or any account a site admin is a confirmed
+  # member of. Such accounts may use house-paid credentials (unlimited
+  # recording, the house X app).
+  def includes_site_admin?
+    return true if is_site_admin?
+
+    memberships.confirmed.includes(:user).any? { |membership| membership.user&.site_admin }
+  end
 
   # Authorization methods - following DHH's "fat models, skinny controllers" principle
   def manageable_by?(user)
@@ -293,6 +410,7 @@ class Account < ApplicationRecord
     VisualTag::DEFAULTS.each do |label, icon, colour|
       visual_tags.create!(label: label, icon: icon, colour: colour)
     end
+    visual_tags.create!(**VisualTag::PIN, pinned: true)
   end
 
   # A disabled account leaves its members' confirmed accounts, so their
@@ -343,6 +461,17 @@ class Account < ApplicationRecord
 
   def mark_memberships_for_skip_check
     memberships.each { |m| m.skip_owner_check = true }
+  end
+
+  def resident_handoff_cap_in_range
+    value = (settings || {})["resident_handoff_cap"]
+    return if value.nil? || (value.is_a?(Integer) && RESIDENT_HANDOFF_CAP_RANGE.cover?(value))
+
+    errors.add(:resident_handoff_cap, "must be a whole number from #{RESIDENT_HANDOFF_CAP_RANGE.min} to #{RESIDENT_HANDOFF_CAP_RANGE.max}")
+  end
+
+  def resident_room_belongs_to_account
+    errors.add(:resident_room, "must belong to this account") if resident_room && resident_room.account_id != id
   end
 
 end

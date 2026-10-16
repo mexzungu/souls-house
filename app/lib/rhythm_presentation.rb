@@ -2,15 +2,20 @@ class RhythmPresentation
 
   include Rails.application.routes.url_helpers
 
+  RECENT_RUNS = 5
+
   def initialize(rhythm, user: nil, agent: nil)
     @rhythm, @user, @agent = rhythm, user, agent
   end
 
-  def as_json(history: false)
+  def as_json(history: false, recent: false)
     manageable = @rhythm.manageable_by?(@user) || @rhythm.manageable_by_agent?(@agent)
     holds = @rhythm.persisted? ? @rhythm.open_holds.includes(:user, :agent).to_a : []
     at = @rhythm.next_run_at
     selected = @rhythm.agents.to_a
+    seat_models = @rhythm.persisted? ? @rhythm.rhythm_agents.pluck(:agent_id, :model_id).to_h : {}
+    # A form re-rendered after a rejected save shows what was asked for.
+    seat_models = seat_models.merge(@rhythm.pending_resident_models.to_h)
     present = @agent && @rhythm.account.conversation_agents.exists?(@agent.id)
     {
       id: @rhythm.persisted? ? @rhythm.to_param : nil,
@@ -29,14 +34,18 @@ class RhythmPresentation
         type: @rhythm.creator_agent ? "agent" : (@rhythm.creator ? "user" : nil)
       },
       resident_ids: selected.map(&:to_param),
-      residents: selected.map { |resident| { id: resident.to_param, name: resident.name, colour: resident.colour } },
+      # nil follows the resident's default; a model id pins the model the
+      # rhythm's conversations open with.
+      resident_models: selected.to_h { |resident| [ resident.to_param, seat_models[resident.id] ] },
+      residents: selected.map { |resident| resident_payload(resident, seat_models[resident.id]) },
       can_manage: manageable, can_resume: holds.any? { |hold| can_release?(hold) },
       can_join: !!(present && @agent.eligible_for_conversation? && !selected.include?(@agent)),
       can_leave: !!(present && selected.include?(@agent)),
-      start_request_key: SecureRandom.uuid, errors: @rhythm.errors.to_hash(true),
+      errors: @rhythm.errors.to_hash(true),
       holds: holds.map { |hold| hold_payload(hold) },
       occurrences: history ? @rhythm.occurrences.includes(:chat, message: :message_dispatch)
-        .order(created_at: :desc).limit(30).map { |occurrence| occurrence_payload(occurrence) } : []
+        .order(created_at: :desc).limit(30).map { |occurrence| occurrence_payload(occurrence) } : [],
+      recent_runs: recent ? recent_runs : []
     }
   end
 
@@ -53,6 +62,30 @@ class RhythmPresentation
   end
 
   private
+
+  def resident_payload(resident, model_id)
+    {
+      id: resident.to_param, name: resident.name, colour: resident.colour,
+      model_id: model_id, model_label: Agent.label_for_model(model_id.presence || resident.model_id),
+      model_selected: model_id.present?
+    }
+  end
+
+  # The last few conversations, shown inline on the Rhythms page. Quiet runs
+  # are off the conversation list (Chat::QuietRhythmRun), so this is where
+  # they are seen; `listed` says a run has been brought into the list.
+  def recent_runs
+    return [] unless @rhythm.persisted?
+
+    occurrences = @rhythm.occurrences.joins(:chat).merge(Chat.kept).includes(:chat)
+      .order(created_at: :desc).limit(RECENT_RUNS).to_a
+    quiet = Chat.quiet_rhythm_runs.where(id: occurrences.map(&:chat_id)).pluck(:id).to_set
+    occurrences.map do |occurrence|
+      chat = occurrence.chat
+      { id: occurrence.id.to_s, title: chat.title_or_default, scheduled_for: occurrence.scheduled_for.iso8601,
+        chat_url: account_chat_path(@rhythm.account, chat), listed: !quiet.include?(chat.id) }
+    end
+  end
 
   # Names can be blank for people who never filled in a profile.
   def display_name(user)

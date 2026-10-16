@@ -5,9 +5,39 @@ class SyncChannel < ApplicationCable::Channel
       model: User,
       collections: []
     },
+    # The room switchers' working spinners, per account (RoomActivity).
+    "RoomActivity" => {
+      model: Account,
+      collections: []
+    },
+    "FieldActivity" => {
+      model: Account,
+      collections: []
+    },
+    "FieldTweetStream" => {
+      model: Account,
+      collections: []
+    },
+    # Room names/order only, separate from chat traffic and working spinners.
+    "RoomNavigation" => {
+      model: Account,
+      collections: []
+    },
+    "RhythmActivity" => {
+      model: Account,
+      collections: []
+    },
+    "IntegrationStatus" => {
+      model: Account,
+      collections: []
+    },
+    "GuestDirectory" => {
+      model: Account,
+      collections: []
+    },
     "Account" => {
       model: Account,
-      collections: %w[agents chats whiteboards],
+      collections: %w[agents chats whiteboards field_files field_recordings],
       allow_all: true
     },
     "Agent" => {
@@ -20,6 +50,22 @@ class SyncChannel < ApplicationCable::Channel
     },
     "Whiteboard" => {
       model: Whiteboard,
+      collections: []
+    },
+    "FieldFile" => {
+      model: FieldFile,
+      collections: []
+    },
+    "FieldRecording" => {
+      model: FieldRecording,
+      collections: []
+    },
+    "FieldTweet" => {
+      model: FieldTweet,
+      collections: []
+    },
+    "FieldSong" => {
+      model: FieldSong,
       collections: []
     },
     "Setting" => {

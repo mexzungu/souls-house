@@ -77,6 +77,32 @@ class Membership < ApplicationRecord
   after_update_commit :track_invitation_acceptance, if: :became_confirmed?
   after_commit :disconnect_app_cable, if: :lost_app_authority?
   after_commit -> { ReplyExpectation.refresh_for(user_id) }
+  after_save :refresh_integration_permissions, if: -> {
+    (saved_changes.keys & %w[id account_id user_id role confirmed_at]).any?
+  }
+  after_destroy :refresh_integration_permissions
+  after_save :refresh_guest_directory, if: -> {
+    (saved_changes.keys & %w[id account_id user_id role confirmed_at]).any?
+  }
+  # Account destruction owns the complete pre-deletion snapshot.
+  after_destroy :refresh_guest_directory, unless: -> { destroyed_by_association&.active_record == Account }
+
+  def refresh_guest_directory
+    account_ids = [ account_id, account_id_before_last_save ].compact.uniq
+    # Ownership changes affect removal controls here, and derived personal
+    # account labels on the opposite side of existing guest relationships.
+    personal_ids = Account.personal.where(id: account_ids).ids
+    GuestDirectory.refresh!(account_ids + GuestDirectory.account_ids_for(personal_ids))
+  end
+  private :refresh_guest_directory
+
+  def refresh_integration_permissions
+    account_ids = [ account_id, account_id_before_last_save ].compact.uniq
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(account_ids)
+    end
+  end
+  private :refresh_integration_permissions
 
   # Scopes
   scope :owners, -> { where(role: "owner") }
@@ -135,6 +161,14 @@ class Membership < ApplicationRecord
     return false if self.user_id == user.id # Can't remove yourself
     return false if owner? && account.last_owner? # Can't remove last owner
     true
+  end
+
+  # Why a manager may not remove this membership, or nil when they may. The
+  # web and API both show these words.
+  def removal_refusal_for(user)
+    return "Cannot remove the last owner" if owner? && account.last_owner?
+
+    "You can't remove yourself from this account" if user_id == user&.id
   end
 
   def resend_invitation!

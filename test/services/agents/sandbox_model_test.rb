@@ -9,9 +9,11 @@ module Agents
         "openai/gpt-6-luna" => [ "openai", "gpt-6-luna" ],
         "anthropic/claude-opus-5.5" => [ "anthropic", "claude-opus-5-5" ],
         "anthropic/claude-fable-5.1" => [ "anthropic", "claude-fable-5-1" ],
+        "anthropic/claude-haiku-5.5" => [ "anthropic", "claude-haiku-5-5" ],
         "x-ai/grok-4.7" => [ "xai", "grok-4.7" ],
         "openai/gpt-6-astra" => [ "openai", "gpt-6-astra" ],
-        "google/gemini-3.8-flash" => [ "gemini", "gemini-3.8-flash" ]
+        "google/gemini-3.8-flash" => [ "gemini", "gemini-3.8-flash" ],
+        "google/gemini-4-argon" => [ "gemini", "gemini-4-argon" ]
       }.each do |model_id, (provider, direct_id)|
         agent = agents(:research_assistant)
         agent.model_id = model_id

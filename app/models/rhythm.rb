@@ -34,16 +34,96 @@ class Rhythm < ApplicationRecord
   validates :agents, length: { minimum: 1 }, on: :create, unless: -> { validation_context == :preview }
   validate :one_creator
   validate :residents_present_in_account, if: :new_record?
+  validate :resident_models_valid, if: -> { @pending_resident_models }
 
   before_validation :reset_next_run, if: :schedule_changed?
   after_save :hold_empty_selection
+  after_save :apply_resident_models, if: -> { @pending_resident_models }
+  after_commit :broadcast_rhythm_activity, on: [ :create, :update, :destroy ]
 
   scope :due, ->(now = Time.current) { where(next_run_at: ..now) }
+
+  # The residents a human may select: eligible residents of the account or
+  # its accepted guests. An id outside that set raises RecordNotFound, so a
+  # foreign or ineligible selection fails closed rather than being dropped.
+  # Every id must decode to exactly one resident: an undecodable or malformed
+  # id is not found too, rather than silently dropped or an error.
+  def self.selectable_resident_ids(account, ids)
+    ids = Array(ids).reject(&:blank?)
+    decoded = ids.map { |id| decode_resident_id(id) }
+    raise ActiveRecord::RecordNotFound, "Couldn't find every selected resident" if decoded.include?(nil)
+
+    account.conversation_agents.eligible_for_conversation.find(decoded).map(&:id)
+  end
+
+  def self.decode_resident_id(id)
+    case id
+    when Integer then id if id.positive?
+    when /\A[1-9]\d*\z/ then id.to_i
+    when String
+      numbers = Agent.hashids.decode(id)
+      numbers.first if numbers.one?
+    end
+  rescue Hashids::InputError
+    nil
+  end
+  private_class_method :decode_resident_id
+
+  # A model per selected resident, as { resident id => model id or "default" }.
+  # Keys decode like selectable_resident_ids and fail closed the same way.
+  def self.decode_resident_models(models)
+    hash = models.respond_to?(:to_unsafe_h) ? models.to_unsafe_h : models.to_h
+    hash.each_with_object({}) do |(id, model_id), decoded|
+      agent_id = decode_resident_id(id.to_s)
+      raise ActiveRecord::RecordNotFound, "Couldn't find every resident in resident_models" unless agent_id
+
+      decoded[agent_id] = model_id.nil? ? nil : model_id.to_s
+    end
+  end
 
   def resident_ids = agent_ids
 
   def resident_ids=(ids)
     self.agent_ids = ids
+  end
+
+  # Choose the model each selected resident runs on in this rhythm's
+  # conversations, as { agent id => model id, or nil/"default" to follow the
+  # resident's default }. Residents left out keep what they had. Applied on
+  # save; a resident outside the selection or a model off its allowlist is a
+  # validation error.
+  def resident_models=(models)
+    @pending_resident_models = models.to_h.transform_keys(&:to_i)
+  end
+
+  attr_reader :pending_resident_models
+
+  # { agent id => model id or nil } for the current selection.
+  def resident_models
+    rhythm_agents.to_h { |seat| [ seat.agent_id, seat.model_id ] }
+  end
+
+  # How a human's form save lands: validate, then restart the schedule from
+  # now. Returns false, with errors, when the rhythm is invalid.
+  def save_from_form
+    return false unless valid?
+
+    self.next_run_at = next_occurrence(after: Time.current)
+    save!
+  end
+
+  # A form edit of a saved rhythm. Assigning a selection writes its join rows
+  # at once, so the whole edit runs in its own savepoint and is undone when
+  # the rhythm is invalid: a rejected edit changes nothing. Returns false,
+  # with errors, in that case.
+  def update_from_form(attributes)
+    saved = false
+    transaction(requires_new: true) do
+      assign_attributes(attributes)
+      saved = save_from_form
+      raise ActiveRecord::Rollback unless saved
+    end
+    saved
   end
 
   def manageable_by?(user)
@@ -54,11 +134,12 @@ class Rhythm < ApplicationRecord
     agent.present? && creator_agent_id == agent.id && account.conversation_agents.exists?(agent.id)
   end
 
-  def join!(agent:)
+  def join!(agent:, model_id: :unchanged)
     with_lock do
       next Result.new(status: :forbidden) unless account.conversation_agents.exists?(agent.id)
       agent.require_conversation_runtime!
-      rhythm_agents.find_or_create_by!(agent: agent)
+      seat = rhythm_agents.find_or_create_by!(agent: agent)
+      seat.update!(model_id: model_id) unless model_id == :unchanged
       Result.new(status: held? ? :held : :active)
     end
   end
@@ -119,6 +200,7 @@ class Rhythm < ApplicationRecord
         message_content: creator_agent ? nil : opening, user: creator, agent_ids: agents.order(:id).ids,
         automatic_response: false
       )
+      apply_seat_models(chat)
       if creator_agent
         chat.messages.create!(role: "assistant", agent: creator_agent, content: opening,
           suppress_automatic_dispatch: true)
@@ -168,15 +250,21 @@ class Rhythm < ApplicationRecord
           next Result.new(status: :unavailable, reason: reason)
         end
 
-        own_holds.update_all(released_at: Time.current, updated_at: Time.current)
-        system_holds.update_all(released_at: Time.current, updated_at: Time.current) if can_release_system
+        released = own_holds.update_all(released_at: Time.current, updated_at: Time.current)
+        released += system_holds.update_all(released_at: Time.current, updated_at: Time.current) if can_release_system
       elsif holder.is_a?(User) && manageable_by?(holder)
         if open_holds.where(kind: "system").exists? && (reason = unavailable_reason)
           next Result.new(status: :unavailable, reason: reason)
         end
-        open_holds.where(kind: %w[human system]).update_all(released_at: Time.current, updated_at: Time.current)
+        released = open_holds.where(kind: %w[human system]).update_all(released_at: Time.current, updated_at: Time.current)
       else
         next Result.new(status: :forbidden)
+      end
+      # Bulk releases skip hold callbacks. Another author's hold can remain,
+      # so the rhythm itself need not be saved. Wait for the outer commit.
+      if released.positive?
+        activity_account = account
+        ActiveRecord.after_all_transactions_commit { RhythmActivity.broadcast_for(activity_account) }
       end
       if held?
         Result.new(status: :held)
@@ -188,6 +276,47 @@ class Rhythm < ApplicationRecord
   end
 
   private
+
+  def broadcast_rhythm_activity
+    RhythmActivity.broadcast_for(account)
+  end
+
+  # Each resident's rhythm model becomes its seat model before anyone is
+  # woken, so the first turn already runs on it. Agents::ModelSelection reads
+  # the seat when the turn starts and reports a selection that has stopped
+  # being valid rather than quietly using the default.
+  def apply_seat_models(chat)
+    rhythm_agents.where.not(model_id: nil).find_each do |seat|
+      chat.chat_agents.where(agent_id: seat.agent_id).update_all(model_id: seat.model_id)
+    end
+  end
+
+  def resident_models_valid
+    selected = agents.to_a.index_by(&:id)
+    @pending_resident_models.each do |agent_id, model_id|
+      agent = selected[agent_id]
+      unless agent
+        errors.add(:resident_models, "can only name residents selected for this rhythm")
+        next
+      end
+      model_id = model_id.to_s.strip
+      next if model_id.blank? || model_id == "default"
+      # Keeping a pin that has since left the allowlist is allowed: an edit to
+      # something else must not fail on it. It is reported at run time.
+      next if persisted? && rhythm_agents.where(agent_id: agent_id).pick(:model_id) == model_id
+      if (problem = agent.model_selection_problem(model_id))
+        errors.add(:resident_models, "#{Agent.label_for_model(model_id)} #{problem}")
+      end
+    end
+  end
+
+  def apply_resident_models
+    models = @pending_resident_models
+    @pending_resident_models = nil
+    models.each do |agent_id, model_id|
+      rhythm_agents.find_by!(agent_id: agent_id).update!(model_id: model_id)
+    end
+  end
 
   def one_creator
     if creator && creator_agent
