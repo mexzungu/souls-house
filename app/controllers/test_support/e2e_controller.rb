@@ -284,6 +284,47 @@ module TestSupport
       render json: { recording_param: recording.to_param }
     end
 
+    # Synthetic stored state only: no enrolment service, vendor, recognition
+    # gate overrides or inferred consent. Normal callbacks provide the hints.
+    def field_voice_lifecycle_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      recording = account.field_recordings.find(params.fetch(:recording_param))
+      speaker = recording.speakers.order(:position).first!
+      if params[:operation] == "setup"
+        voice = account.field_voices.create!(name: "Synthetic lifecycle voice")
+        speaker.name_as!(voice, by: account.users.first!)
+        return head :ok
+      end
+
+      voice = account.field_voices.kept.find_by!(name: "Synthetic lifecycle voice")
+      raise ActiveRecord::RecordNotFound unless speaker.field_voice_id == voice.id
+
+      case params.fetch(:operation)
+      when "remember"
+        voice.with_lock do
+          generation = voice.print_generation + 1
+          voice.update_columns(print_generation: generation)
+          FieldVoiceprint.create!(account:, field_voice: voice, generation:,
+            print: "synthetic-not-a-biometric-print", sample_ms: 12_000,
+            consented_by: account.users.first!, consented_at: Time.current,
+            consent_text_version: FieldVoiceprints::CONSENT_TEXT_VERSION)
+        end
+      when "metadata"
+        voice.voiceprint.update!(sample_ms: 21_000)
+      when "preview"
+        FieldVoiceEnrolment.create!(account:, field_voice: voice, field_recording_speaker: speaker,
+          start_generation: voice.print_generation, decision_generation: speaker.decision_generation,
+          sample_ms: 12_000, consent_text_version: FieldVoiceprints::CONSENT_TEXT_VERSION,
+          expires_at: 1.hour.from_now,
+          sample: { io: file_fixture_audio, filename: "synthetic-sample.mp3", content_type: "audio/mpeg" })
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
     def stone_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
