@@ -22,19 +22,31 @@
 #
 # Targets are the agent ids the sweep scored (would_wake_agent_ids), never
 # names. Every scored resident not woken is recorded in `held` with a reason.
+#
+# Switching waking on is not retroactive: a room state already judged (in
+# shadow or otherwise) is never judged again, so only states that arise after
+# waking is on can wake anyone.
 class StalledThreadWake
 
   def self.enabled?
     Setting.instance.stalled_sweep_wake?
   end
 
-  # Why a sweeper wake may no longer go ahead, or nil. Read fresh.
-  def self.refusal_reason(chat:, agent:)
+  # Why waking may not act in this room at all now, or nil. Read fresh.
+  def self.room_refusal_reason(chat)
     setting = Setting.uncached { Setting.first }
     return "wake_off" unless setting&.stalled_sweep_wake?
     return "sweep_off" unless setting.stalled_sweep_minutes.to_i.positive?
     return "account_not_opted_in" unless Account.where(id: chat.account_id, stalled_sweep_enabled: true).exists?
     return "account_disabled" if chat.account.reload.disabled?
+
+    nil
+  end
+
+  # Why a sweeper wake of this resident may no longer go ahead, or nil.
+  def self.refusal_reason(chat:, agent:)
+    reason = room_refusal_reason(chat)
+    return reason if reason
     return "paused" if agent.paused?
     return "not_in_room" unless chat.agents.exists?(agent.id)
     return "unavailable" unless agent.eligible_for_conversation?
@@ -66,7 +78,11 @@ class StalledThreadWake
       targets = Agent.where(id: @sweep.would_wake_agent_ids).index_by(&:id)
       agents = @sweep.would_wake_agent_ids.filter_map { |id| targets[id] }
 
-      if chain_stopped?
+      # The feature and account gates come before anything with a side
+      # effect, the stop notice included.
+      if (reason = self.class.room_refusal_reason(@chat))
+        agents.each { |agent| hold(agent, reason) }
+      elsif chain_stopped?
         agents.each { |agent| hold(agent, "chain_stopped") }
       elsif (repeat = agents.find { |agent| woken_in_chain?(agent) })
         stop!(repeat)

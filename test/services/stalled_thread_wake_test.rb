@@ -107,6 +107,41 @@ class StalledThreadWakeTest < ActiveSupport::TestCase
     assert_equal [ "account_not_opted_in" ], StalledThreadSweep.order(:id).last.held.pluck("reason")
   end
 
+  test "a repeat verdict after waking was switched off posts no stop notice and stops nothing" do
+    sweep(lume: 0.9)
+    finish_runs
+    post(@lume, "Still waiting on CI.", at: 1.second.from_now)
+    flip = lambda do |state:, questions:|
+      Setting.instance.update!(stalled_sweep_wake: false)
+      answers(lume: 0.9).call(state: state, questions: questions)
+    end
+    sweeper(decide: flip).call
+    assert_equal 0, stop_notices
+    last = StalledThreadSweep.order(:id).last
+    assert_not last.stopped
+    assert_equal [ "wake_off" ], last.held.pluck("reason")
+
+    Setting.instance.update!(stalled_sweep_wake: true)
+    post(@lume, "Hm.", at: 2.seconds.from_now)
+    opt_out = lambda do |state:, questions:|
+      @lume.account.update!(stalled_sweep_enabled: false)
+      answers(lume: 0.9).call(state: state, questions: questions)
+    end
+    sweeper(decide: opt_out).call
+    assert_equal 0, stop_notices
+    assert_equal [ "account_not_opted_in" ], StalledThreadSweep.order(:id).last.held.pluck("reason")
+  end
+
+  test "switching waking on doesn't act on states already judged in shadow; only new states can wake" do
+    Setting.instance.update!(stalled_sweep_wake: false)
+    sweep(lume: 0.9, wake: false)
+    Setting.instance.update!(stalled_sweep_wake: true)
+    assert_no_difference(-> { AgentRuntimeInteraction.count }) { sweep(lume: 0.9) }
+
+    post(@mira, "CI is green on abc123.", at: 1.second.from_now)
+    assert_difference(-> { AgentRuntimeInteraction.count }, 1) { sweep(lume: 0.9) }
+  end
+
   test "a wake revoked after it was reserved is cancelled before it starts" do
     sweep(lume: 0.9)
     run = @chat.agent_runtime_interactions.sole
