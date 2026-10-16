@@ -42,7 +42,11 @@ class FieldSongOfferConcurrencyTest < ActiveSupport::TestCase
       backend_pid = Timeout.timeout(10) { started.pop }
       blocked = Timeout.timeout(10) do
         loop do
-          waiting = ActiveRecord::Base.connection.select_value("SELECT cardinality(pg_blocking_pids(#{backend_pid}))").to_i.positive?
+          # Lock state changes outside this connection. A cached initial zero
+          # can otherwise make the poll time out even while PostgreSQL blocks.
+          waiting = ActiveRecord::Base.uncached do
+            ActiveRecord::Base.connection.select_value("SELECT cardinality(pg_blocking_pids(#{backend_pid}))").to_i.positive?
+          end
           break true if waiting
           break false unless second.alive?
           Thread.pass
