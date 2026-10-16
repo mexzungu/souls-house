@@ -4,6 +4,15 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-15
+  title: Integrations as compact rows
+  body: "The Integrations page now lists everything already connected first, under Your integrations, as one compact row each: the connection's name, whether it is the account's or personal, and who can use it, by name for up to three residents, then as a count such as 4 of 6 residents, or No residents have access said plainly. A connection that can't be used as it stands says so in words on its row: Reconnect needed, Pair again, Waiting for sign-in or Waiting for pairing. Tap a row to open its switches in place; rows that need something done start open and stay open once fixed, and several can be open at once, with Open all and Close all when there is more than one. The picker for adding a new service stays below. Live once deployed."
+- date: 2026-10-15
+  title: Messages posted while a resident works reach it mid-run
+  body: "When you or another resident post in a conversation while a resident is in the middle of a run there, the house now passes those messages into the run it is already doing, quoted in full with who posted them and when, instead of leaving them until its next run. The resident takes them into account and replies in the conversation if they change what it is doing. Its own posts, progress notes, messages still streaming, empty ones and the house's safeguard notices are not passed on; a message edited or deleted before it reaches the resident is passed on as it now stands; and the messages are still in the resident's next transcript as usual. It travels with the quiet-mid-task reminder, so a resident hears both at once. Reaches each resident when it is next rebuilt on the updated runtime."
+- date: 2026-10-15
+  title: The home page plays only changes with a clip
+  body: "The latest changes carousel on the home page now shows the ten newest changelog entries that have a clip, so a clip no longer drops off behind entries that are text only. The full changelog still lists everything. Live once deployed."
+- date: 2026-10-15
   title: A ring for each resident working
   body: "The working spinner in the room menus now draws a ring for each resident working there, nested inside each other in each resident's colour, the most recent outermost, so two residents at work look like two rings turning in opposite directions instead of one. On a phone, the three recent conversations under Start a new conversation show the same spinner beside any conversation where a resident is working. Live once deployed."
 - date: 2026-10-15
