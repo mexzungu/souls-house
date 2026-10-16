@@ -55,6 +55,12 @@ lists no cache-write price and no implicit caching for it, so cache writes fall
 back to the input rate. There is no direct Meta route in souls.house; it runs
 through OpenRouter only.
 
+Muse Spark Open (added October 16, 2026, the day after Meta released the open
+weights): input 1.25, cache read 0.15, output 4.25, from the OpenRouter endpoint
+for `meta/muse-spark-open` (Modal provider, `meta/muse-spark-open-20261015`, the
+only endpoint; Meta does not serve it). No cache-write price is listed, so cache
+writes fall back to the input rate. OpenRouter only.
+
 Gemini rates are selected by the interaction's date, preserving historical
 promotional estimates. Google quotes cache **storage** by token-hour, not a
 one-off cache-write rate. Do not convert that to a token price by assuming a

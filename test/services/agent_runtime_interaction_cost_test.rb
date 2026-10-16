@@ -216,6 +216,17 @@ class AgentRuntimeInteractionCostTest < ActiveSupport::TestCase
     assert_equal "0.2", cost.dig(:components_usd, :cache_read_input)
   end
 
+  test "Muse Spark Open is priced from the routed Modal endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "meta/muse-spark-open",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "5.65", cost[:amount_usd]
+    assert_equal "0.15", cost.dig(:components_usd, :cache_read_input)
+  end
+
   test "Opus 5.5 supports dotted runtime ID and one hour cache writes" do
     cost = build_interaction(
       provider: "anthropic", model: "claude-opus-5.5", cache_ttl: "1h",
