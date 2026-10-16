@@ -98,6 +98,7 @@ class Account < ApplicationRecord
   before_validation :set_default_name, on: :create
   before_validation :generate_slug, on: :create
   after_create :create_default_visual_tags
+  after_save -> { FieldTweetStream.refresh!(id) }, if: :saved_change_to_field_tweets_house_key?
   before_destroy :mark_memberships_for_skip_check, prepend: true
   after_update_commit :disconnect_members_app_cable, if: -> { saved_change_to_disabled_at? && disabled? }
   after_update_commit -> { users.ids.each { |id| ReplyExpectation.refresh_for(id) } }, if: :saved_change_to_disabled_at?
@@ -453,7 +454,6 @@ class Account < ApplicationRecord
 
     errors.add(:resident_handoff_cap, "must be a whole number from #{RESIDENT_HANDOFF_CAP_RANGE.min} to #{RESIDENT_HANDOFF_CAP_RANGE.max}")
   end
-
 
   def resident_room_belongs_to_account
     errors.add(:resident_room, "must belong to this account") if resident_room && resident_room.account_id != id
