@@ -279,7 +279,7 @@ class FieldVoiceActivityTest < ActiveSupport::TestCase
     @second.name_as!(@voice, by: @user)
     blob = @recording.audio.blob
     assert_equal 2, used_count(@voice)
-    assert_equal [ roster_stream(@account) ] * 2, roster_events { @recording.destroy! }
+    assert_equal [ roster_stream(@account) ], roster_events { @recording.destroy! }
     assert_equal 0, used_count(@voice)
   ensure
     blob&.purge
@@ -311,9 +311,9 @@ class FieldVoiceActivityTest < ActiveSupport::TestCase
     assert_refreshes(@account) { @speaker.reload.name_as!(@voice, by: @user) }
   end
 
-  test "batches emit one roster hint per changed speaker and one existing detail hint" do
+  test "batches coalesce roster hints per account and keep one existing detail hint" do
     markers = capture_broadcasts(detail_stream) do
-      assert_equal [ roster_stream(@account) ] * 2, roster_events {
+      assert_equal [ roster_stream(@account) ], roster_events {
         FieldRecording.transaction do
           assert_silent do
             @speaker.name_as!(@voice, by: @user)

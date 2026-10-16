@@ -6,11 +6,26 @@ module FieldVoiceActivity
     ids = Array(account_ids).compact.uniq
     return if ids.empty?
 
-    ActiveRecord.after_all_transactions_commit do
+    transaction = ApplicationRecord.current_transaction
+    if transaction.closed?
       Account.where(id: ids).select(:id).each do |account|
         ActionCable.server.broadcast("FieldVoiceActivity:#{account.to_param}", { action: "refresh" })
       end
+      return
     end
+
+    # As in FieldTweetStream: capture producing writes, not final dirty state.
+    # Rails transfers callbacks out of committed savepoints and drops rolled
+    # back ones. Separate committed savepoints can each send a marker.
+    pending = ActiveSupport::IsolatedExecutionState[:field_voice_activity_refreshes] ||= {}
+    unless pending.key?(transaction)
+      pending[transaction] = []
+      transaction.after_rollback { pending.delete(transaction) }
+      transaction.after_commit do
+        refresh!(pending.delete(transaction))
+      end
+    end
+    pending[transaction] |= ids
   end
 
   # Capture before User destruction removes memberships and the database

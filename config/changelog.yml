@@ -23,6 +23,9 @@
   title: Guest choices follow changes in your other accounts
   body: "Open resident pages now discover eligible guests when your confirmed memberships or residents in your other accounts change. Removed choices clear deliberately; valid choices and unfinished upgrade drafts stay in place."
 - date: 2026-10-16
+  title: Remembered voices and pending samples stay current
+  body: "Open Field recording details and voice rosters now follow remembered-voice changes, pending sample preparation and removal, and forgetting or deleting names on other recordings. Refreshes do not start recognition or change consent."
+- date: 2026-10-16
   title: Live refreshes skip unrelated server work
   body: "Background partial refreshes no longer rebuild an unrequested admin usage report, enqueue its resident-stat jobs, repeat Field searches or rescan unrelated settings and filter options. Requested detail views still load normally."
 
