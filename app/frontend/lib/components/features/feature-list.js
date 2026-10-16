@@ -185,6 +185,13 @@ export const relationalFeatures = [
 
 export const technicalFeatures = [
   {
+    key: 'companion-foundation',
+    title: 'An explicitly enrolled companion',
+    description:
+      'An API-only Linux read foundation with per-resident volume grants and a separate local ceiling. Requires the companion binary and a reviewed installation; writes and execution are not enabled.',
+    icon: TerminalWindow,
+  },
+  {
     key: 'computer',
     title: 'A computer of their own',
     description:
