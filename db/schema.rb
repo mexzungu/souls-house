@@ -313,6 +313,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.bigint "follow_through_of_id"
     t.datetime "follow_through_checked_at"
     t.bigint "failure_notice_message_id"
+    t.bigint "stalled_thread_sweep_id"
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -326,6 +327,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.index ["message_dispatch_id"], name: "index_agent_runtime_interactions_on_message_dispatch_id"
     t.index ["run_id"], name: "index_agent_runtime_interactions_on_run_id", unique: true
     t.index ["session_id"], name: "index_agent_runtime_interactions_on_session_id"
+    t.index ["stalled_thread_sweep_id"], name: "index_agent_runtime_interactions_on_stalled_thread_sweep_id"
     t.index ["started_at"], name: "index_agent_runtime_interactions_on_started_at"
   end
 
@@ -2275,6 +2277,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.string "field_tweets_house_halt_reason", limit: 300
     t.integer "stalled_sweep_minutes", default: 0, null: false
     t.integer "stalled_sweep_cursor", default: 0, null: false
+    t.boolean "stalled_sweep_wake", default: false, null: false
   end
 
   create_table "stalled_thread_sweeps", force: :cascade do |t|
@@ -2290,7 +2293,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.string "error_class"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.bigint "human_message_id"
+    t.jsonb "woken_agent_ids", default: [], null: false
+    t.jsonb "held", default: {}, null: false
+    t.boolean "stopped", default: false, null: false
     t.index ["account_id"], name: "index_stalled_thread_sweeps_on_account_id"
+    t.index ["chat_id", "human_message_id"], name: "index_stalled_thread_sweeps_on_chat_id_and_human_message_id"
     t.index ["chat_id", "message_id"], name: "index_stalled_thread_sweeps_on_chat_id_and_message_id", unique: true
     t.index ["chat_id"], name: "index_stalled_thread_sweeps_on_chat_id"
     t.index ["created_at"], name: "index_stalled_thread_sweeps_on_created_at"
@@ -2575,6 +2583,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
   add_foreign_key "agent_runtime_interactions", "chats"
   add_foreign_key "agent_runtime_interactions", "message_dispatches", on_delete: :nullify
   add_foreign_key "agent_runtime_interactions", "messages", column: "failure_notice_message_id", on_delete: :nullify
+  add_foreign_key "agent_runtime_interactions", "stalled_thread_sweeps", on_delete: :nullify
   add_foreign_key "agent_service_accesses", "agents"
   add_foreign_key "agent_service_accesses", "service_connections"
   add_foreign_key "agents", "accounts"

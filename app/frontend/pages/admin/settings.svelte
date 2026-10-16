@@ -45,6 +45,7 @@
     formData.append('setting[safeguard_conversations_enabled]', form.safeguard_conversations_enabled ?? false);
     formData.append('setting[follow_through_scope]', form.follow_through_scope ?? 'off');
     formData.append('setting[stalled_sweep_minutes]', form.stalled_sweep_minutes ?? 0);
+    formData.append('setting[stalled_sweep_wake]', form.stalled_sweep_wake ?? false);
     formData.append('setting[new_residents_on_vm]', form.new_residents_on_vm ?? false);
     formData.append('setting[vm_resident_limit]', form.vm_resident_limit ?? 0);
     formData.append('setting[field_ocr_enabled]', form.field_ocr_enabled ?? false);

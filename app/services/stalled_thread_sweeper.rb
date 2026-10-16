@@ -1,7 +1,8 @@
 # Finds quiet rooms and judges each once per state with StalledThreadClassifier.
 #
-# Every verdict becomes a StalledThreadSweep row an admin can read; this is
-# shadow mode: nothing is posted and nobody is woken.
+# Every verdict becomes a StalledThreadSweep row an admin can read. With
+# Setting#stalled_sweep_wake off (shadow, the default) that is all; on, a
+# verdict naming a resident goes to StalledThreadWake.
 #
 # Two switches: the site interval (Setting#stalled_sweep_minutes, 0 = off)
 # and each account's own opt-in (Account#stalled_sweep_enabled). No room in an
@@ -32,10 +33,12 @@ class StalledThreadSweeper
     interval.present?
   end
 
-  def initialize(now: Time.current, interval: self.class.interval, decide: UtilityInference.method(:decide))
+  def initialize(now: Time.current, interval: self.class.interval, decide: UtilityInference.method(:decide),
+    wake: StalledThreadWake.enabled?)
     @now = now
     @interval = interval
     @decide = decide
+    @wake = wake
   end
 
   def call
@@ -107,13 +110,22 @@ class StalledThreadSweeper
     end
     would_wake = verdict.wake_residents.map { |resident| resident[:name] }
     outcome = if would_wake.any? then "would_wake" elsif verdict.person_holds? then "person_holds" else "quiet" end
-    StalledThreadSweep.create!(
+    sweep = StalledThreadSweep.create!(
       account: chat.account, chat: chat, message: message, outcome: outcome,
       scores: scores, person_holds: verdict.person_holds, would_wake: would_wake,
-      quiet_minutes: state[:minutes_since_last_message], prompt_version: PROMPT_VERSION
+      quiet_minutes: state[:minutes_since_last_message], prompt_version: PROMPT_VERSION,
+      human_message_id: last_human_message_id(chat)
     )
+    StalledThreadWake.new(sweep).call if would_wake.any? && @wake
+    sweep
   rescue ActiveRecord::RecordNotUnique
     nil
+  end
+
+  # The chain a wake belongs to (StalledThreadWake): the room's last message
+  # from a person, the same boundary the handoff loop cap uses.
+  def last_human_message_id(chat)
+    chat.messages.where(role: "user").where.not(user_id: nil).maximum(:id)
   end
 
   def record_error(chat, message, error)

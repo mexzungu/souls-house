@@ -1,7 +1,7 @@
 <script>
   import { router } from '@inertiajs/svelte';
 
-  let { interval_minutes = 0, outcome = null, counts = {}, sweeps = [] } = $props();
+  let { interval_minutes = 0, waking = false, outcome = null, counts = {}, sweeps = [] } = $props();
 
   const outcomes = [
     { value: null, label: 'All' },
@@ -24,8 +24,9 @@
   <h1 class="text-2xl font-semibold">Stalled threads</h1>
   <p>
     {#if interval_minutes > 0}
-      Shadow mode: rooms quiet for {interval_minutes} minutes are judged once per state. Nothing is posted and nobody
-      is woken; these rows are what the sweeper would have done.
+      Rooms quiet for {interval_minutes} minutes are judged once per state.
+      {#if waking}Waking is on: a resident judged to have a step is woken once per stretch between a person's messages.{:else}Shadow
+        mode: nothing is posted and nobody is woken; these rows are what the sweeper would have done.{/if}
     {:else}
       The sweeper is off (Site Settings). Earlier verdicts stay listed.
     {/if}
@@ -65,7 +66,11 @@
             </td>
             <td>
               {#if sweep.outcome === 'would_wake'}
-                Would wake {sweep.would_wake.join(', ')}
+                {sweep.woken.length ? `Woke ${sweep.woken.join(', ')}` : `Would wake ${sweep.would_wake.join(', ')}`}
+                {#each Object.entries(sweep.held || {}) as [name, reason]}
+                  <p class="text-muted-foreground">{name} held: {reason.replaceAll('_', ' ')}</p>
+                {/each}
+                {#if sweep.stopped}<p class="text-muted-foreground">Automation stopped in this room</p>{/if}
               {:else if sweep.outcome === 'person_holds'}
                 Waiting on a person
               {:else if sweep.outcome === 'error'}
