@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-16
+  title: Companion read-plane foundation
+  body: "An API-only foundation for an explicitly enrolled Linux companion adds per-resident read requests, an independent local ceiling and owner-controlled pause/revoke. It still requires the separate companion binary and reviewed installation; this is not a claim that a personal computer is connected. Writes and execution are not enabled."
+- date: 2026-10-16
   title: Search results scroll, and fit on phones
   body: "Message search now scrolls, so every result on the page can be reached, on desktop and on phones. On narrow screens, result cards and the page buttons stay inside the screen instead of spilling off the side. Live once deployed."
 - date: 2026-10-16

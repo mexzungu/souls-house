@@ -336,6 +336,20 @@ Rails.application.routes.draw do
     end
 
     namespace :v1 do
+      resources :companion_enrollment_grants, only: :create do
+        post :token, on: :member
+      end
+      namespace :companion do
+        post :enroll, to: "enrollments#create"
+        post :session, to: "sessions#create"
+      end
+      resources :companion_devices, only: :update do
+        resources :operations, only: [ :create, :show ], controller: "companion_operations" do
+          get :body, on: :member
+        end
+      end
+      post "companion/operations/:id/result", to: "companion_results#create"
+
       # Host runners on house-ordered VMs: telemetry (#192) and commands (#238).
       namespace :host_runner do
         match "backup(/*path)", to: "backups#repository", via: %i[get head post delete], format: false

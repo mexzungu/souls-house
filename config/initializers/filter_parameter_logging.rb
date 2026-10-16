@@ -59,3 +59,8 @@ Rails.application.config.filter_parameters += [ /\Aphone\z/ ]
 # connector sends back is `code` (masked above) and is stored encrypted in
 # `pairing_phone_code`, masked here in SQL binds too.
 Rails.application.config.filter_parameters += [ /\A(?:phone_number|pairing_phone_code)\z/ ]
+
+# Companion device credentials and temporary file bodies never enter logs.
+Rails.application.config.filter_parameters += [
+  /\A(?:device_credential|credential_digest|previous_credential_digest|body_base64)\z/
+]
