@@ -188,7 +188,7 @@ export const technicalFeatures = [
     key: 'companion-foundation',
     title: 'An explicitly enrolled companion',
     description:
-      'An API-only Linux read foundation with per-resident volume grants and a separate local ceiling. Requires the companion binary and a reviewed installation; writes and execution are not enabled.',
+      'API-only Linux read/write and explicit full-user execution grants, intersected with a separate local ceiling. Requires a compatible companion binary, reviewed installation and verified user-cgroup setup; no computer is connected by default. Directory moves are refused.',
     icon: TerminalWindow,
   },
   {

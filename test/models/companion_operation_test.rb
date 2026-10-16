@@ -18,6 +18,68 @@ class CompanionOperationTest < ActiveSupport::TestCase
       arguments: { "volume" => "fixture-volume", "path" => "fixture.txt", "limit" => 16 })
   end
 
+  def allow_mutations(execute: false, source_write: false)
+    request_id = SecureRandom.hex(12)
+    grant = CompanionEnrollmentGrant.create!(account: @agent.account, minting_agent: @agent,
+      created_by_user: users(:user_1), name: "Mutation fixture", device_request_id: request_id,
+      policy: { "residents" => [ { "id" => @agent.obfuscated_id, "execute" => execute,
+        "volumes" => [ { "volume" => "fixture-volume", "access" => source_write ? "write" : "read" },
+          { "volume" => "destination", "access" => "write" } ] } ] },
+      expires_at: 1.hour.from_now)
+    @device, @credential = CompanionEnrollmentGrant.enroll!(grant.issue_token!(@agent), request_id)
+    @device.update!(connection_epoch: "fixture-epoch")
+  end
+
+  test "copy needs source read but move needs source write too" do
+    allow_mutations
+    arguments = { "source_volume" => "fixture-volume", "source_path" => "source",
+      "volume" => "destination", "path" => "target" }
+    assert CompanionOperation.start!(device: @device, agent: @agent, kind: "copy", arguments: arguments)
+    assert_raises(CompanionOperation::Refused) do
+      CompanionOperation.start!(device: @device, agent: @agent, kind: "move", arguments: arguments)
+    end
+    allow_mutations(source_write: true)
+    assert CompanionOperation.start!(device: @device, agent: @agent, kind: "move", arguments: arguments)
+  end
+
+  test "input waits before dispatch and is bound to epoch revision and current grants" do
+    allow_mutations
+    operation = CompanionOperation.start!(device: @device, agent: @agent, kind: "write",
+      arguments: { "volume" => "destination", "path" => "fixture", "input_size" => 7 })
+    assert_not operation.dispatch!
+    assert_raises(CompanionOperation::Refused) { operation.attach_input!("wrong-size") }
+    operation.attach_input!("PRIVATE")
+    assert_not_includes operation.attributes.to_json, "PRIVATE"
+    assert_raises(CompanionOperation::Refused) { operation.attach_input!("PRIVATE") }
+    assert operation.dispatch!
+    assert_nil operation.take_input!(epoch: "other", revision: 1)
+    assert_nil operation.take_input!(epoch: "fixture-epoch", revision: 2)
+    @device.update!(paused: true)
+    assert_nil operation.take_input!(epoch: "fixture-epoch", revision: 1)
+    @device.update!(paused: false)
+    assert_equal "PRIVATE", operation.take_input!(epoch: "fixture-epoch", revision: 1)
+    assert_nil operation.reload.take_input!(epoch: "fixture-epoch", revision: 1)
+  end
+
+  test "execute requires explicit computer grant and keeps argv only in temporary input" do
+    allow_mutations
+    args = { "input_size" => 34, "timeout_seconds" => 300 }
+    assert_raises(CompanionOperation::Refused) do
+      CompanionOperation.start!(device: @device, agent: @agent, kind: "execute", arguments: args)
+    end
+    allow_mutations(execute: true)
+    operation = CompanionOperation.start!(device: @device, agent: @agent, kind: "execute", arguments: args)
+    assert_in_delta 300, operation.deadline - Time.current, 1
+    assert_raises(CompanionOperation::Refused) do
+      CompanionOperation.start!(device: @device, agent: @agent, kind: "execute",
+        arguments: args.merge("argv" => [ "secret argument" ]))
+    end
+    assert_raises(CompanionOperation::Refused) do
+      CompanionOperation.start!(device: @device, agent: @agent, kind: "execute",
+        arguments: args.merge("timeout_seconds" => 301))
+    end
+  end
+
   test "persists before dispatch then stores content separately and consumes once" do
     operation = start_read
     assert_equal "pending", operation.state

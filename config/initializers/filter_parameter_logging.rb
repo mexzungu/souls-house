@@ -62,5 +62,5 @@ Rails.application.config.filter_parameters += [ /\A(?:phone_number|pairing_phone
 
 # Companion device credentials and temporary file bodies never enter logs.
 Rails.application.config.filter_parameters += [
-  /\A(?:device_credential|credential_digest|previous_credential_digest|body_base64)\z/
+  /\A(?:device_credential|credential_digest|previous_credential_digest|body_base64|argv|stdin|stdin_base64)\z/
 ]

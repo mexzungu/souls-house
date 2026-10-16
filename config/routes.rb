@@ -342,13 +342,16 @@ Rails.application.routes.draw do
       namespace :companion do
         post :enroll, to: "enrollments#create"
         post :session, to: "sessions#create"
+        post :revoke, to: "revocations#create"
       end
       resources :companion_devices, only: :update do
         resources :operations, only: [ :create, :show ], controller: "companion_operations" do
           get :body, on: :member
+          put :input, on: :member
         end
       end
       post "companion/operations/:id/result", to: "companion_results#create"
+      get "companion/operations/:id/input", to: "companion_inputs#show"
 
       # Host runners on house-ordered VMs: telemetry (#192) and commands (#238).
       namespace :host_runner do

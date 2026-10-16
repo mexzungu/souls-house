@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_16_123000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -756,6 +756,16 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.datetime "updated_at", null: false
     t.index ["companion_operation_id"], name: "index_companion_operation_bodies_on_companion_operation_id", unique: true
     t.index ["expires_at"], name: "index_companion_operation_bodies_on_expires_at"
+  end
+
+  create_table "companion_operation_inputs", force: :cascade do |t|
+    t.bigint "companion_operation_id", null: false
+    t.binary "data", null: false
+    t.datetime "expires_at", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["companion_operation_id"], name: "index_companion_operation_inputs_on_companion_operation_id", unique: true
+    t.index ["expires_at"], name: "index_companion_operation_inputs_on_expires_at"
   end
 
   create_table "companion_operations", force: :cascade do |t|
@@ -2611,6 +2621,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
   add_foreign_key "companion_enrollment_grants", "agents", column: "minting_agent_id"
   add_foreign_key "companion_enrollment_grants", "users", column: "created_by_user_id"
   add_foreign_key "companion_operation_bodies", "companion_operations"
+  add_foreign_key "companion_operation_inputs", "companion_operations"
   add_foreign_key "companion_operations", "agents"
   add_foreign_key "companion_operations", "companion_devices"
   add_foreign_key "conversation_compactions", "chats"
