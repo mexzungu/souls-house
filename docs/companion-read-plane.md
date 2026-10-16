@@ -35,8 +35,11 @@ An exact lost-response retry can recover for 60 seconds; another rotation
 during that window conflicts. Previous credentials are not accepted for result
 uploads or general device authentication. Recovery responses are encrypted in
 the database. Rotation limits stale snapshot copies; it does **not** neutralize
-a currently stolen credential or an execute-granted actor. Reuse detection and
-physical cleanup of expired encrypted recovery records remain follow-up work.
+a currently stolen credential or an execute-granted actor. Use of the retained
+previous credential after its recovery window raises a safe audit event without
+automatic revocation. Only the immediately previous digest is retained, not a
+complete historical reuse ledger. Expired encrypted recovery records are swept.
+Paused sessions return HTTP 423 without rotating; revoked credentials return 401.
 
 ## Connection and operations
 
@@ -64,12 +67,18 @@ The originating resident can GET the operation and GET its `/body` once.
 Delivery rechecks epoch, revision, live account/resident grants, pause, revoke
 and deadline. Contents are held separately from safe audit metadata, expired
 for access after at most ten minutes and deleted by an expiry job. A stopped
-job queue can delay physical deletion; database backups are not erased by this
-job. Operation deadline can make contents unavailable sooner.
+job queue can delay physical deletion. Bodies are plaintext PostgreSQL bytea,
+not application-encrypted: WAL and database backups can retain their contents
+after row deletion. This job does not erase those copies. Expired encrypted
+enrollment/session recovery responses are also swept every minute.
+Operation deadline can make contents unavailable sooner.
 
 Owner/admin human API PATCH `/companion_devices/:id` with `control` equal to
 `pause`, `resume`, or `revoke` cancels active work on pause/revoke and emits a
-safe audit event. There is no remote widening or policy-edit endpoint in S1.
+safe audit event. After commit, pause/revoke forcibly disconnect the device's
+Cable connections, with reconnect disabled. Paused devices cannot subscribe.
+Replacing an existing live epoch is separately audited. There is no remote
+widening or policy-edit endpoint in S1.
 
 ## Linux boundary and remaining gates
 

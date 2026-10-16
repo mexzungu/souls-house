@@ -10,6 +10,11 @@
 #     schedule: at 5am every day
 
 production:
+  companion_sweep:
+    class: CompanionSweepJob
+    queue: default
+    schedule: every minute
+
   # Says when production stops following master (DeployAlarm).
   deploy_alarm_check:
     class: DeployAlarmCheckJob

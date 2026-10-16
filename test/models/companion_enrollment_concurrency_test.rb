@@ -90,6 +90,44 @@ class CompanionEnrollmentConcurrencyTest < ActiveSupport::TestCase
     assert_nil redeemer.value
   end
 
+  test "stale credential refusal commits its safe audit before raising" do
+    device, credential = CompanionEnrollmentGrant.enroll!(@token, "concurrent-request")
+    response = CompanionDevice.create_session!(credential, "session-request")
+    travel 61.seconds
+
+    assert_raises(CompanionDevice::InvalidCredential) do
+      CompanionDevice.create_session!(credential, "session-request")
+    end
+    # With no enclosing test transaction, another connection must observe the
+    # committed audit even though the caller received an authentication error.
+    data = in_thread do
+      AuditLog.where(action: "companion.device.stale_credential", auditable: device).sole.data
+    end.value
+    assert_equal({ "device_id" => device.obfuscated_id }, data)
+    assert_nil device.reload.revoked_at
+    assert_equal device, CompanionDevice.authenticate(response.fetch("device_credential"))
+  end
+
+  test "sweep waiting for rotation rechecks expiry and preserves the new response" do
+    device, credential = CompanionEnrollmentGrant.enroll!(@token, "concurrent-request")
+    response = CompanionDevice.create_session!(credential, "session-request")
+    travel 61.seconds
+    rotator = in_thread do
+      CompanionDevice.transaction do
+        CompanionDevice.create_session!(response.fetch("device_credential"), "new-request")
+          .tap { @ready.push(true); @release.pop }
+      end
+    end
+    @ready.pop(timeout: 5) or flunk "rotation never ran"
+    sweeper = in_thread { CompanionSweepJob.perform_now }
+    wait_until_blocked
+    @release.push(true)
+    expected = rotator.value
+    sweeper.value
+    assert_equal expected, JSON.parse(device.reload.session_response)
+    assert_equal expected, CompanionDevice.create_session!(response.fetch("device_credential"), "new-request")
+  end
+
   private
 
   def in_thread(&block)

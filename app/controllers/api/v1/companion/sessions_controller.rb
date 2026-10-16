@@ -11,6 +11,8 @@ module Api
           value = bearer.delete_prefix("Bearer ") if bearer.is_a?(String) && bearer.start_with?("Bearer ")
           result = CompanionDevice.create_session!(value, params[:request_id])
           render json: result, status: :created
+        rescue CompanionDevice::Paused
+          render json: { error: "Device paused", code: "paused" }, status: :locked
         rescue CompanionDevice::InvalidCredential
           render json: { error: "Invalid device credential" }, status: :unauthorized
         rescue CompanionDevice::RetryConflict

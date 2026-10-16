@@ -38,4 +38,21 @@ class CompanionChannelTest < ActionCable::Channel::TestCase
     assert subscription.rejected?
   end
 
+  test "paused devices cannot subscribe" do
+    @device.update!(paused: true)
+    subscribe
+    assert subscription.rejected?
+    assert_nil @device.reload.connection_epoch
+  end
+
+  test "replacing a live epoch records safe takeover metadata" do
+    @device.update!(connection_epoch: SecureRandom.uuid)
+    assert_difference -> { AuditLog.where(action: "companion.device.epoch_takeover").count } do
+      subscribe
+    end
+    assert subscription.confirmed?
+    assert_equal({ "device_id" => @device.obfuscated_id },
+      AuditLog.where(action: "companion.device.epoch_takeover").last.data)
+  end
+
 end

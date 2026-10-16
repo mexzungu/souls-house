@@ -43,6 +43,7 @@ class CompanionDeviceTest < ActiveSupport::TestCase
     assert_raises(CompanionDevice::InvalidCredential) { CompanionDevice.create_session!(@credential, "session-2") }
     assert_raises(CompanionDevice::RetryConflict) { CompanionDevice.create_session!(result["device_credential"], "session-2") }
     assert_nil @device.reload.revoked_at
+    assert_not AuditLog.where(action: "companion.device.stale_credential", auditable: @device).exists?
     assert_equal result, CompanionDevice.create_session!(@credential, "session-1")
     assert_equal @device, CompanionDevice.authenticate(result["device_credential"])
   end
@@ -50,7 +51,12 @@ class CompanionDeviceTest < ActiveSupport::TestCase
   test "only current credential with fresh request can rotate after recovery window" do
     result = CompanionDevice.create_session!(@credential, "session-1")
     travel 61.seconds
-    assert_raises(CompanionDevice::InvalidCredential) { CompanionDevice.create_session!(@credential, "session-1") }
+    assert_difference -> { AuditLog.where(action: "companion.device.stale_credential", auditable: @device).count }, 1 do
+      assert_raises(CompanionDevice::InvalidCredential) { CompanionDevice.create_session!(@credential, "session-1") }
+    end
+    audit = AuditLog.where(action: "companion.device.stale_credential", auditable: @device).sole
+    assert_equal({ "device_id" => @device.obfuscated_id }, audit.data)
+    assert_nil @device.reload.revoked_at
     assert_raises(CompanionDevice::RetryConflict) { CompanionDevice.create_session!(result["device_credential"], "session-1") }
     next_result = CompanionDevice.create_session!(result["device_credential"], "session-2")
     assert_equal @device, CompanionDevice.authenticate(next_result["device_credential"])
@@ -86,7 +92,8 @@ class CompanionDeviceTest < ActiveSupport::TestCase
     result = CompanionDevice.create_session!(@credential, "session-1")
     @device.update!(paused: true)
     assert_nil CompanionDevice.authenticate(result["device_credential"])
-    assert_raises(CompanionDevice::InvalidCredential) { CompanionDevice.create_session!(@credential, "session-1") }
+    assert_raises(CompanionDevice::Paused) { CompanionDevice.create_session!(@credential, "session-1") }
+    assert_raises(CompanionDevice::Paused) { CompanionDevice.create_session!(result["device_credential"], "session-1") }
     assert_nil CompanionCableTicket.redeem(result["cable_ticket"])
     @device.update!(paused: false)
     @account.update_columns(disabled_at: Time.current)

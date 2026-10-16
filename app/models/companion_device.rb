@@ -6,6 +6,7 @@ class CompanionDevice < ApplicationRecord
   RECOVERY_WINDOW = 60.seconds
 
   class InvalidCredential < StandardError; end
+  class Paused < StandardError; end
   class RetryConflict < StandardError; end
 
   belongs_to :account
@@ -68,14 +69,26 @@ class CompanionDevice < ApplicationRecord
     device = where(credential_digest: supplied_digest).or(where(previous_credential_digest: supplied_digest)).first
     raise InvalidCredential unless device
 
-    device.with_lock do
-      raise InvalidCredential unless device.active?
+    response = device.with_lock do
+      raise InvalidCredential unless device.revoked_at.nil? && !device.account.reload.disabled?
 
       current = ActiveSupport::SecurityUtils.secure_compare(device.credential_digest, supplied_digest)
+      previous = device.previous_credential_digest == supplied_digest
+      raise InvalidCredential unless current || previous
+
       recovering = device.session_retry_until && device.session_retry_until > Time.current
+      if previous && !recovering
+        AuditLog.create!(account: device.account, auditable: device, action: "companion.device.stale_credential",
+          data: { device_id: device.obfuscated_id })
+        # Refuse outside this transaction, or raising would roll back the audit.
+        next nil
+      end
+      raise InvalidCredential unless current || device.session_request_id == request_id
+      raise Paused if device.paused?
+
       if recovering
         if device.session_request_id == request_id &&
-            (current || device.previous_credential_digest == supplied_digest)
+            (current || previous)
           return JSON.parse(device.session_response)
         end
         raise RetryConflict if current
@@ -98,6 +111,9 @@ class CompanionDevice < ApplicationRecord
       )
       response
     end
+    raise InvalidCredential unless response
+
+    response
   end
 
   private

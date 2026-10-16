@@ -9,8 +9,12 @@ class CompanionChannel < ApplicationCable::Channel
     return reject unless device
 
     device.with_lock do
-      return reject unless device.revoked_at.nil? && !device.account.reload.disabled?
+      return reject unless device.revoked_at.nil? && !device.paused? && !device.account.reload.disabled?
 
+      if device.connection_epoch.present?
+        AuditLog.create!(account: device.account, auditable: device,
+          action: "companion.device.epoch_takeover", data: { device_id: device.obfuscated_id })
+      end
       CompanionOperation.where(companion_device: device, state: CompanionOperation::ACTIVE_STATES).update_all(state: "lost", outcome: "changed")
       @epoch = SecureRandom.uuid
       device.update!(connection_epoch: @epoch)

@@ -19,7 +19,14 @@ module Api
           end
           CompanionOperation.where(companion_device: device, state: CompanionOperation::ACTIVE_STATES)
             .update_all(state: "cancelled", outcome: "changed") unless params[:control] == "resume"
-          CompanionChannel.broadcast_to(device, { type: params[:control] == "revoke" ? "revoke" : "pause" }) unless params[:control] == "resume"
+          unless params[:control] == "resume"
+            control = params[:control]
+            ActiveRecord.after_all_transactions_commit do
+              CompanionChannel.broadcast_to(device, { type: control })
+              ActionCable.server.remote_connections.where(current_user: nil, current_app_session: nil,
+                current_companion_device: device).disconnect(reconnect: false)
+            end
+          end
           audit_human_action("companion_#{params[:control]}", device, account: account)
         end
         head :no_content

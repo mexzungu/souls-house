@@ -2,6 +2,8 @@ require "test_helper"
 
 class Api::V1::CompanionOperationsTest < ActionDispatch::IntegrationTest
 
+  include ActionCable::TestHelper
+
   setup do
     @agent = agents(:research_assistant)
     @key = ApiKey.generate_for(users(:user_1), name: "Fixture", agent: @agent)
@@ -59,6 +61,13 @@ class Api::V1::CompanionOperationsTest < ActionDispatch::IntegrationTest
       patch path, params: { account_id: @agent.account.to_param, control: control },
         headers: bearer(human.raw_token), as: :json
       assert_response :no_content
+      internal = "action_cable/#{@device.to_gid_param}"
+      if control == "resume"
+        assert_no_broadcasts internal
+      else
+        assert_broadcast_on internal, { type: "disconnect", reconnect: false }
+      end
+      pubsub_adapter.clear
       @device.reload
       assert_equal control == "pause", @device.paused? unless control == "revoke"
     end
