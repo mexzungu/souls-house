@@ -1,7 +1,8 @@
 # Finds quiet rooms and judges each once per state with StalledThreadClassifier.
 #
-# Every verdict becomes a StalledThreadSweep row an admin can read; this is
-# shadow mode: nothing is posted and nobody is woken.
+# Every verdict becomes a StalledThreadSweep row an admin can read. With
+# Setting#stalled_sweep_wake off (shadow, the default) that is all; on, a
+# verdict naming a resident goes to StalledThreadWake.
 #
 # Two switches: the site interval (Setting#stalled_sweep_minutes, 0 = off)
 # and each account's own opt-in (Account#stalled_sweep_enabled). No room in an
@@ -32,10 +33,12 @@ class StalledThreadSweeper
     interval.present?
   end
 
-  def initialize(now: Time.current, interval: self.class.interval, decide: UtilityInference.method(:decide))
+  def initialize(now: Time.current, interval: self.class.interval, decide: UtilityInference.method(:decide),
+    wake: StalledThreadWake.enabled?)
     @now = now
     @interval = interval
     @decide = decide
+    @wake = wake
   end
 
   def call
@@ -93,27 +96,41 @@ class StalledThreadSweeper
     return if state[:residents_in_room].any? { |r| r[:run_in_progress] == true }
 
     verdict = StalledThreadClassifier.call(state, decide: @decide)
-    record(chat, message, state, verdict)
+    record(chat, message, snapshot, state, verdict)
   rescue UtilityInference::InputTooLong, UtilityInference::InvalidResponse => error
     record_error(chat, message, error)
   end
 
   private
 
-  def record(chat, message, state, verdict)
-    residents = chat.agents.reorder("chat_agents.id").to_a
+  # Scores are tied to the residents the snapshot seated, by position, so
+  # a wake targets exactly the agent that was scored, whatever its name and
+  # whoever has joined or left since.
+  def record(chat, message, snapshot, state, verdict)
+    seated = snapshot.seated_agents
     scores = verdict.wake.each_with_index.map do |(resident, score), index|
-      { agent_id: residents[index]&.to_param, name: resident[:name], score: score }
+      { agent_id: seated[index]&.to_param, name: resident[:name], score: score }
     end
-    would_wake = verdict.wake_residents.map { |resident| resident[:name] }
+    positive = verdict.wake.each_with_index.select { |(_, score), _| score >= StalledThreadClassifier::WAKE_THRESHOLD }
+      .sort_by { |(_, score), _| -score }.map { |_, index| seated[index] }.compact
+    would_wake = positive.map(&:name)
     outcome = if would_wake.any? then "would_wake" elsif verdict.person_holds? then "person_holds" else "quiet" end
-    StalledThreadSweep.create!(
+    sweep = StalledThreadSweep.create!(
       account: chat.account, chat: chat, message: message, outcome: outcome,
-      scores: scores, person_holds: verdict.person_holds, would_wake: would_wake,
-      quiet_minutes: state[:minutes_since_last_message], prompt_version: PROMPT_VERSION
+      scores: scores, person_holds: verdict.person_holds, would_wake: would_wake, would_wake_agent_ids: positive.map(&:id),
+      quiet_minutes: state[:minutes_since_last_message], prompt_version: PROMPT_VERSION,
+      human_message_id: last_human_message_id(chat)
     )
+    StalledThreadWake.new(sweep).call if would_wake.any? && @wake
+    sweep
   rescue ActiveRecord::RecordNotUnique
     nil
+  end
+
+  # The chain a wake belongs to (StalledThreadWake): the room's last message
+  # from a person, the same boundary the handoff loop cap uses.
+  def last_human_message_id(chat)
+    chat.messages.where(role: "user").where.not(user_id: nil).maximum(:id)
   end
 
   def record_error(chat, message, error)

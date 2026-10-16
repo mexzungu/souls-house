@@ -53,6 +53,7 @@ class Admin::SettingsController < ApplicationController
       :safeguard_conversations_enabled,
       :follow_through_scope,
       :stalled_sweep_minutes,
+      :stalled_sweep_wake,
       :new_residents_on_vm,
       :vm_resident_limit,
       :field_ocr_enabled,

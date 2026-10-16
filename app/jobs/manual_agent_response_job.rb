@@ -9,10 +9,17 @@ class ManualAgentResponseJob < ApplicationJob
       return
     end
     agent.reload
-    # A follow-through nudge and a released pending wake are deferred wakes:
+    # A follow-through nudge, a stalled-thread wake and a released pending
+    # wake are deferred wakes:
     # a pause after either was reserved still stops it before it reaches the
     # runtime. (The wake's claim checks this again, with its sources.)
-    if (interaction&.follow_through_of_id || interaction&.released_pending_wake) && agent.paused?
+    if (interaction&.follow_through_of_id || interaction&.stalled_thread_sweep_id || interaction&.released_pending_wake) && agent.paused?
+      cancel_unclaimed(interaction)
+      return
+    end
+    # A stalled-thread wake also stops if waking, the sweep or the account's
+    # opt-in was switched off since it was reserved (checked again at claim).
+    if interaction&.stalled_thread_sweep_id && StalledThreadWake.refusal_reason(chat: chat, agent: agent)
       cancel_unclaimed(interaction)
       return
     end

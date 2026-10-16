@@ -114,6 +114,12 @@ class StalledThreadSnapshot
     end
   end
 
+  # The residents seated in the room as of `at`, in seat order: the order of
+  # state[:residents_in_room] and so of the classifier's positional answers.
+  def seated_agents
+    @seated_agents ||= members
+  end
+
   def state
     return if last_message.nil?
 
@@ -205,7 +211,7 @@ class StalledThreadSnapshot
   end
 
   def residents
-    @residents ||= members.map do |agent|
+    @residents ||= seated_agents.map do |agent|
       {
         name: agent.name,
         paused: live? ? agent.paused? : "unknown",

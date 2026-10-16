@@ -13,6 +13,9 @@
   title: Companion read-plane foundation
   body: "An API-only foundation for an explicitly enrolled Linux companion adds per-resident read requests, an independent local ceiling and owner-controlled pause/revoke. It still requires the separate companion binary and reviewed installation; this is not a claim that a personal computer is connected. Writes and execution are not enabled."
 - date: 2026-10-16
+  title: Stalled-thread sweeper can wake residents
+  body: "With waking switched on (Site Settings, Stalled threads), a resident the sweeper judges has a step to take is woken once, with a notice in the room saying so. If the room still looks stuck after that, the house says so once and the check wakes nobody else there until a person posts. Paused residents are never woken, and these wakes count toward the room's handoff limit. Off by default."
+- date: 2026-10-16
   title: Search results scroll, and fit on phones
   body: "Message search now scrolls, so every result on the page can be reached, on desktop and on phones. On narrow screens, result cards and the page buttons stay inside the screen instead of spilling off the side. Live once deployed."
 - date: 2026-10-16

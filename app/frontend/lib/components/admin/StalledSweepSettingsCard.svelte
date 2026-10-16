@@ -21,8 +21,9 @@
     <CardTitle>Stalled threads</CardTitle>
     <CardDescription>
       Judges rooms that have gone quiet: whose move is it, and is it a resident's? Shadow mode only records the verdict
-      (<a class="underline" href="/admin/stalled_sweeps">see the log</a>); it posts nothing and wakes nobody. Only rooms in
-      the accounts chosen below are read.
+      (<a class="underline" href="/admin/stalled_sweeps">see the log</a>). With waking off it only records; on, a resident
+      it judges has a step to take is woken once, with a notice in the room, and not again there until a person posts.
+      Only rooms in the accounts chosen below are read.
     </CardDescription>
   </CardHeader>
   <CardContent class="space-y-4">
@@ -40,6 +41,13 @@
         </button>
       {/each}
     </div>
+    <label class="flex items-center justify-between gap-3 text-sm">
+      <span>Wake residents (otherwise shadow: record only)</span>
+      <Switch
+        aria-label="Wake residents"
+        checked={!!form.stalled_sweep_wake}
+        onCheckedChange={(on) => (form.stalled_sweep_wake = on)} />
+    </label>
     <div class="max-h-72 divide-y overflow-y-auto rounded-md border">
       {#each accounts as account (account.id)}
         <label class="flex cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted/30">

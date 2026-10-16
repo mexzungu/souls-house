@@ -87,8 +87,8 @@ class MessageHandoff < ApplicationRecord
 
     chat.lock!
     cap = chat.account.resident_handoff_cap
-    counted = since_last_human_message(chat)
-      .where("reason IS NULL OR reason NOT IN (?)", [ LOOP_CAP_REASON, HANDOFFS_OFF_REASON ]).count
+    # Stalled-thread sweeper wakes share this budget (StalledThreadWake).
+    counted = counted_since_last_human_message(chat) + StalledThreadWake.wakes_in_chain(chat).count
     capped = []
     handoffs = recipients.map do |recipient_id, source|
       handoff = new(message: message, chat: chat, requester_agent_id: message.agent_id,
@@ -106,6 +106,11 @@ class MessageHandoff < ApplicationRecord
     end
     announce_loop_cap!(chat, message, capped, cap) if capped.any?
     handoffs
+  end
+
+  # Handoffs since the last person's message that used the loop budget.
+  def self.counted_since_last_human_message(chat)
+    since_last_human_message(chat).where("reason IS NULL OR reason NOT IN (?)", [ LOOP_CAP_REASON, HANDOFFS_OFF_REASON ]).count
   end
 
   # Handoffs written since the room's last message from a person.
