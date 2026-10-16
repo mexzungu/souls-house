@@ -63,6 +63,7 @@ module AgentRuntimeInteraction::LiveActivity
   def claim_dispatch!
     return claim_released_wake! if released_pending_wake
     return claim_handoff! if message_handoffs.exists?
+    return claim_stalled_sweep! if stalled_thread_sweep_id
     return claim_dispatch_unchecked! unless message_dispatch
 
     message_dispatch.with_lock do
@@ -112,6 +113,25 @@ module AgentRuntimeInteraction::LiveActivity
         true
       end
       handoffs.zip(reasons).each { |handoff, reason| handoff.refuse_claim!(reason) } if refused
+      false
+    end
+  end
+
+  # A run the stalled-thread sweeper woke starts only while every gate that
+  # allowed it still stands (StalledThreadWake.refusal_reason): waking and the
+  # sweep switched on, the account opted in, the resident seated, available
+  # and not paused. The agent row is locked for the check, so a pause either
+  # lands first and stops the run, or lands after the claim. Lock order:
+  # agent, then this interaction.
+  def claim_stalled_sweep!
+    agent.with_lock do
+      next claim_dispatch_unchecked! unless StalledThreadWake.refusal_reason(chat: chat, agent: agent)
+
+      with_lock do
+        next false unless dispatch_claimed_at.nil? && !execution_state.in?(TERMINAL_STATES)
+
+        finish_execution!("cancelled")
+      end
       false
     end
   end

@@ -17,6 +17,12 @@ class ManualAgentResponseJob < ApplicationJob
       cancel_unclaimed(interaction)
       return
     end
+    # A stalled-thread wake also stops if waking, the sweep or the account's
+    # opt-in was switched off since it was reserved (checked again at claim).
+    if interaction&.stalled_thread_sweep_id && StalledThreadWake.refusal_reason(chat: chat, agent: agent)
+      cancel_unclaimed(interaction)
+      return
+    end
     agent.require_conversation_runtime!
     ExternalAgentResponseRequest.new(
       agent: agent, chat: chat, requested_by: "souls.house",

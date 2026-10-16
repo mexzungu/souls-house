@@ -67,8 +67,8 @@
             <td>
               {#if sweep.outcome === 'would_wake'}
                 {sweep.woken.length ? `Woke ${sweep.woken.join(', ')}` : `Would wake ${sweep.would_wake.join(', ')}`}
-                {#each Object.entries(sweep.held || {}) as [name, reason]}
-                  <p class="text-muted-foreground">{name} held: {reason.replaceAll('_', ' ')}</p>
+                {#each sweep.held || [] as hold}
+                  <p class="text-muted-foreground">{hold.name} held: {hold.reason.replaceAll('_', ' ')}</p>
                 {/each}
                 {#if sweep.stopped}<p class="text-muted-foreground">Automation stopped in this room</p>{/if}
               {:else if sweep.outcome === 'person_holds'}

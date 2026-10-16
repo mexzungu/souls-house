@@ -2294,8 +2294,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_111100) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.bigint "human_message_id"
+    t.jsonb "would_wake_agent_ids", default: [], null: false
     t.jsonb "woken_agent_ids", default: [], null: false
-    t.jsonb "held", default: {}, null: false
+    t.jsonb "held", default: [], null: false
     t.boolean "stopped", default: false, null: false
     t.index ["account_id"], name: "index_stalled_thread_sweeps_on_account_id"
     t.index ["chat_id", "human_message_id"], name: "index_stalled_thread_sweeps_on_chat_id_and_human_message_id"

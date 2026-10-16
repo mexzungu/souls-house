@@ -96,23 +96,28 @@ class StalledThreadSweeper
     return if state[:residents_in_room].any? { |r| r[:run_in_progress] == true }
 
     verdict = StalledThreadClassifier.call(state, decide: @decide)
-    record(chat, message, state, verdict)
+    record(chat, message, snapshot, state, verdict)
   rescue UtilityInference::InputTooLong, UtilityInference::InvalidResponse => error
     record_error(chat, message, error)
   end
 
   private
 
-  def record(chat, message, state, verdict)
-    residents = chat.agents.reorder("chat_agents.id").to_a
+  # Scores are tied to the residents the snapshot seated, by position, so
+  # a wake targets exactly the agent that was scored, whatever its name and
+  # whoever has joined or left since.
+  def record(chat, message, snapshot, state, verdict)
+    seated = snapshot.seated_agents
     scores = verdict.wake.each_with_index.map do |(resident, score), index|
-      { agent_id: residents[index]&.to_param, name: resident[:name], score: score }
+      { agent_id: seated[index]&.to_param, name: resident[:name], score: score }
     end
-    would_wake = verdict.wake_residents.map { |resident| resident[:name] }
+    positive = verdict.wake.each_with_index.select { |(_, score), _| score >= StalledThreadClassifier::WAKE_THRESHOLD }
+      .sort_by { |(_, score), _| -score }.map { |_, index| seated[index] }.compact
+    would_wake = positive.map(&:name)
     outcome = if would_wake.any? then "would_wake" elsif verdict.person_holds? then "person_holds" else "quiet" end
     sweep = StalledThreadSweep.create!(
       account: chat.account, chat: chat, message: message, outcome: outcome,
-      scores: scores, person_holds: verdict.person_holds, would_wake: would_wake,
+      scores: scores, person_holds: verdict.person_holds, would_wake: would_wake, would_wake_agent_ids: positive.map(&:id),
       quiet_minutes: state[:minutes_since_last_message], prompt_version: PROMPT_VERSION,
       human_message_id: last_human_message_id(chat)
     )
