@@ -103,6 +103,7 @@ class ExternalAgentTelegramRequest
   def request_text
     [
       Notices::Renderer.section_for(agent),
+      SubagentPolicyRenderer.section_for(agent),
       safeguard_notice,
       <<~TEXT
       souls.house received a Telegram direct message for you.
@@ -131,6 +132,7 @@ class ExternalAgentTelegramRequest
   def request_delta_text
     [
       Notices::Renderer.section_for(agent),
+      SubagentPolicyRenderer.section_for(agent),
       <<~TEXT
       New Telegram DMs from #{subscription.subscriber_name} (thread #{subscription.to_param}), oldest first:
       #{messages_prompt}
@@ -217,18 +219,14 @@ class ExternalAgentTelegramRequest
     SafeguardNoticeRenderer.for_resident(pending_safeguard_detection) if pending_safeguard_detection
   end
 
+  # Confirmed freshness only, and only the detection this trigger carried
+  # (SafeguardRoll; spec §5.4). A queued turn (202) is acknowledged later by
+  # ResidentTurnCompletion with the same rule.
   def acknowledge_safeguard_roll!(result)
     detection = pending_safeguard_detection
-    return unless detection && result[:status] == 200
+    return unless detection
 
-    body = result[:body].to_h
-    roll_reason = body["session_roll_reason"] || body.dig("telemetry", "session", "roll_reason")
-    session_outcome = body.dig("telemetry", "session", "outcome")
-
-    if roll_reason == "safeguard-detected" || session_outcome.in?(%w[fresh rolled fresh_fallback])
-      detection.update!(session_rolled_at: Time.current)
-    end
-    subscription.update!(pending_safeguard_detection: nil)
+    SafeguardRoll.acknowledge_telegram!(subscription: subscription, detection_id: detection.id, result: result)
   end
 
 end

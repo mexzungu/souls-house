@@ -10,8 +10,11 @@ class Agent < ApplicationRecord
   include Agent::Initiation
   include Agent::Memory
   include Agent::Predecessor
+  include Agent::Subagents
+  include Agent::ModelSwitching
   include Agent::RuntimeAvailability
   include Agent::SessionPolicy
+  include Agent::HostedSetup
 
   validates :turn_timeout_minutes,
     numericality: { only_integer: true, greater_than_or_equal_to: 1, less_than_or_equal_to: 1440 }
@@ -25,6 +28,8 @@ class Agent < ApplicationRecord
   end
 
   belongs_to :account
+  has_one :placement, class_name: "AgentPlacement", dependent: :destroy, inverse_of: :agent
+  belongs_to :github_resident_import, optional: true, inverse_of: :agent
   has_one :house_inference_grant, dependent: :nullify
   has_one :memory_vault, class_name: "Mnemodyne::Vault", dependent: :restrict_with_error, inverse_of: :agent
   belongs_to :outbound_api_key, class_name: "ApiKey", optional: true
@@ -113,6 +118,34 @@ class Agent < ApplicationRecord
   after_update :create_model_change_notice, if: :saved_change_to_model_id?
   after_update_commit :enqueue_model_change_orientation, if: :saved_change_to_model_id?
   after_create_commit :apply_default_service_accesses
+  after_save :refresh_integration_presentation, if: -> {
+    (saved_changes.keys & %w[id account_id name active github_resident_import_id]).any?
+  }
+  after_destroy :refresh_integration_presentation
+  after_save :refresh_guest_directory, if: -> {
+    (saved_changes.keys & %w[id account_id name colour icon active runtime]).any?
+  }
+  # The join uses delete_all, so the snapshot must precede association callbacks.
+  before_destroy :snapshot_guest_directory, prepend: true
+  after_destroy -> { GuestDirectory.refresh!(@guest_directory_account_ids) },
+    unless: -> { destroyed_by_association&.active_record == Account }
+
+  def snapshot_guest_directory
+    @guest_directory_account_ids = [ account_id, *guest_memberships.pluck(:account_id) ]
+  end
+
+  def refresh_guest_directory
+    GuestDirectory.refresh!([ account_id, account_id_before_last_save, *guest_memberships.pluck(:account_id) ])
+  end
+  private :snapshot_guest_directory, :refresh_guest_directory
+
+  def refresh_integration_presentation
+    account_ids = [ account_id, account_id_before_last_save ].compact.uniq
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(account_ids)
+    end
+  end
+  private :refresh_integration_presentation
   broadcasts_to :account
 
   encrypts :trigger_bearer_token
@@ -148,6 +181,8 @@ class Agent < ApplicationRecord
                    :persistent_session?, :persistent_wake_session?, :scheduled_wakes_enabled?,
                        :heartbeat_wakes_per_day, :session_idle_timeout_minutes, :session_max_age_minutes,
                        :session_context_budget_tokens, :turn_timeout_minutes,
+                       :subagents_enabled?, :subagent_models,
+                       :switchable_model_ids, :resident_may_switch_model?,
                   except: SENSITIVE_JSON_ATTRIBUTES do |hash, options|
     # Keep credentials out even if a caller supplies runtime serialization options
     # that would otherwise override the configured `except` list.
@@ -193,6 +228,13 @@ class Agent < ApplicationRecord
   def provisioning? = runtime == "provisioning"
 
   def external? = runtime == "external"
+
+  # Sharing screens offer live residents. A retired one (a discarded VM, a
+  # resident switched off) stays listed only while it still holds the grant,
+  # so the switch that takes it away is still there.
+  def offered_for_sharing?(granted:)
+    active? || granted
+  end
 
   def offline? = runtime == "offline"
 
@@ -278,7 +320,7 @@ class Agent < ApplicationRecord
   end
 
   def apply_default_service_accesses
-    return if portability_custody.present?
+    return if portability_custody.present? || github_resident_import_id.present?
     account.service_connections.where(enabled_for_new_agents: true).find_each do |connection|
       agent_service_accesses.find_or_create_by!(service_connection: connection) do |access|
         access.enabled = true

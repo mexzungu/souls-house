@@ -37,6 +37,8 @@ module Agents
     end
 
     def spawn_without_portability_gate!
+      RuntimeLocation.require_local!(agent)
+      agent.github_resident_import&.require_approval!
       raise SandboxError, "agent has no supported harness" unless agent.reload.hosted?
       ensure_memory_not_suspended!
       raise SandboxError, "agent uuid missing" if agent.uuid.blank?
@@ -81,8 +83,14 @@ module Agents
     end
 
     def with_runtime
-      raise SandboxError, "agent has no supported harness" unless agent.reload.hosted?
+      # Checked before the remote branch too: a suspended vault stops a VM
+      # resident's turns exactly as it stops a local one's.
       ensure_memory_not_suspended!
+      # Started and stopped on its VM by explicit commands, never cold-started.
+      return yield if RemoteRuntime.dispatchable?(agent)
+
+      RuntimeLocation.require_local!(agent)
+      raise SandboxError, "agent has no supported harness" unless agent.reload.hosted?
       cold_start = Agents::Config.cold_start?
       return yield unless cold_start
 
@@ -100,6 +108,8 @@ module Agents
     end
 
     def recreate_without_portability_gate!
+      RuntimeLocation.require_local!(agent)
+      agent.github_resident_import&.require_approval!
       raise SandboxError, "agent has no supported harness" unless agent.reload.hosted?
       ensure_memory_not_suspended!
       if container_exists?
@@ -199,6 +209,7 @@ module Agents
     end
 
     def start_without_portability_gate!
+      agent.github_resident_import&.require_approval!
       ensure_memory_not_suspended!
       update_restart_policy!
       docker_system("start", agent.container_name, out: File::NULL, err: File::NULL) || raise(SandboxError, "failed to start #{agent.container_name}")
@@ -211,6 +222,100 @@ module Agents
 
     def stopped?
       container_exists? && !running?
+    end
+
+    # Never starts or recreates a container. Each rename is atomic; updating the
+    # boot source first also preserves the new manifest across a later restart.
+    def refresh_service_manifest!(yaml:)
+      return false unless running?
+
+      verify_resources!
+      script = <<~'SHELL'
+        exec >/dev/null 2>&1
+        set -eu
+        umask 077
+        source_stage=
+        trap 'rm -f -- "$source_stage"' EXIT
+        trap 'exit 1' HUP INT TERM
+        source_stage=$(mktemp /run/.helixkit-source.yml.XXXXXX)
+        cat > "$source_stage"
+        mv -fT -- "$source_stage" /run/helixkit-source.yml
+        # Open the root-owned source before dropping privileges. Root must not
+        # write into the agent-owned live directory, even through a stage.
+        gosu agent sh -c '
+          set -eu
+          umask 077
+          live_stage=
+          trap '\''rm -f -- "$live_stage"'\'' EXIT
+          trap '\''exit 1'\'' HUP INT TERM
+          live_stage=$(mktemp /run/helixkit/.services.yml.XXXXXX)
+          cat > "$live_stage"
+          mv -fT -- "$live_stage" /run/helixkit/services.yml
+        ' < /run/helixkit-source.yml
+      SHELL
+
+      begin
+        _stdout, _stderr, status = Open3.capture3(
+          "docker", "exec", "-i", "-u", "0", agent.container_name,
+          "sh", "-c", script, stdin_data: yaml
+        )
+        raise SandboxError unless status.success?
+      rescue StandardError
+        begin
+          return false unless running?
+        rescue StandardError
+          # An unverifiable state is not a safe stopped-container fallback.
+        end
+        raise SandboxError, "Failed to refresh service manifest", cause: nil
+      end
+      true
+    end
+
+    # Verification only. No SQL writes, interactive approvals or project code.
+    # A site operator grants trust through Chaos's supported interactive screen.
+    def imported_runtime_trusted?
+      return true unless agent.github_resident_import
+      verify_resources!
+      chaos_volume = Agents::Resources.new(agent).volumes.fetch(:chaos)
+      unless volume_exists?(chaos_volume)
+        docker_system("volume", "create", *Agents::Resources.new(agent).labels, chaos_volume) ||
+          raise(SandboxError, "failed to create Chaos home")
+        return false
+      end
+      check = <<~PYTHON
+        from pathlib import Path
+        import sys
+        try:
+            import github_import_approval
+            import imported_home
+            import os
+            if os.environ.get('SOULSHOUSE_HOME_SYNC_STRATEGY') == 'standard':
+                import standard_home_sync
+                assert callable(imported_home.standard_sync_configuration)
+            entrypoint = Path('/usr/local/bin/entrypoint.sh').read_text()
+            assert entrypoint.index('github_import_approval.py') < entrypoint.index('runtime_hooks.py')
+            assert entrypoint.index('--runtime-trust-check') < entrypoint.index('home_sync_loop.py')
+        except (ImportError, OSError, ValueError, AssertionError):
+            print('unsupported-managed-import-runtime')
+            sys.exit(79)
+        try:
+            imported_home.main(['imported_home.py', '--runtime-trust-check'])
+        except (ValueError, KeyError, OSError):
+            sys.exit(78)
+      PYTHON
+      result = docker_capture("run", "--rm",
+        "-v", "#{Agents::Volume.new(agent).volume_name}:#{IDENTITY_PATH}:ro",
+        "-v", "#{chaos_volume}:/home/agent/.chaos:ro",
+        "-e", "SOULSHOUSE_HOME_PROFILE=portable_v1",
+        "-e", "SOULSHOUSE_HOME_ROOT=#{IDENTITY_PATH}",
+        "-e", "SOULSHOUSE_PORTABLE_HOME_ID=#{agent.portable_home_id}",
+        "-e", "SOULSHOUSE_HOME_SYNC_STRATEGY=#{agent.github_resident_import.sync_strategy}",
+        "-e", "SOULSHOUSE_HOME_SYNC_CONFIGURATION=#{agent.github_resident_import.sync_configuration.to_json}",
+        "-e", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST=#{managed_import_oauth_trust_required? ? '1' : '0'}",
+        "--entrypoint", "python3", agent.container_image,
+        "-c", check)
+      raise SandboxError, "Runtime image does not support managed GitHub imports" if result[:stdout].to_s.include?("unsupported-managed-import-runtime")
+      result[:ok]
     end
 
     def stop_if_idle!
@@ -252,9 +357,39 @@ module Agents
       false
     end
 
+    # How many times the kernel OOM-killed a process in this resident's
+    # container between two times, from Docker's "oom" events. Docker emits
+    # one per kill in the container's cgroup, even when PID 1 survives. The
+    # daemon keeps only its most recent events in memory, so a single kill
+    # early in a long run on a busy host can have scrolled out; nil when
+    # Docker can't answer at all.
+    #
+    # Docker's --since/--until take whole seconds, so the query asks for the
+    # enclosing seconds and the events are then kept only if their
+    # nanosecond time falls inside [from, to]: a kill just before the run
+    # started or just after it ended belongs to some other run.
+    def oom_kills_between(from, to)
+      result = docker_capture(
+        "events", "--since", from.to_i.to_s, "--until", (to.to_i + 1).to_s,
+        "--filter", "container=#{agent.container_name}", "--filter", "event=oom",
+        "--format", "{{.TimeNano}}"
+      )
+      return nil unless result[:ok]
+
+      from_ns, to_ns = epoch_nanoseconds(from), epoch_nanoseconds(to)
+      result[:stdout].lines.count do |line|
+        at = Integer(line.strip, exception: false)
+        at && at >= from_ns && at <= to_ns
+      end
+    end
+
     private :spawn_without_portability_gate!, :start_without_portability_gate!, :recreate_without_portability_gate!
 
     private
+
+    def epoch_nanoseconds(time)
+      (time.to_r * 1_000_000_000).to_i
+    end
 
     def ensure_memory_not_suspended!
       if agent.memory_vault&.suspended_at?
@@ -467,6 +602,7 @@ module Agents
         "--network", Agents::Config.network,
         "--restart", Agents::Config.restart_policy,
         "--memory", "#{agent.container_memory_mb}m",
+        "--pids-limit", agent.container_pids_limit.to_s,
         "--cpu-shares", agent.container_cpu_shares.to_s,
         "-v", "#{Agents::Volume.new(agent).volume_name}:/home/agent/identity",
         "-v", "#{Agents::Resources.new(agent).volumes.fetch(:chaos)}:/home/agent/.chaos",
@@ -538,12 +674,17 @@ module Agents
       agent.update!(endpoint_url: "http://#{host}:#{port}")
     end
 
+    # A resident's first boot on a new image can take ~40s (tailnet, home import,
+    # settings preparation); at 30s Lume's rollout on 2026-10-14 was failed and
+    # left paused although the container came up healthy 11s later.
+    HEALTH_WAIT_SECONDS = 90
+
     def wait_for_health!
-      30.times do
+      HEALTH_WAIT_SECONDS.times do
         return true if healthy?
         sleep 1
       end
-      raise SandboxError, "container did not become healthy within 30s"
+      raise SandboxError, "container did not become healthy within #{HEALTH_WAIT_SECONDS}s"
     end
 
     def agent_slug
@@ -562,28 +703,31 @@ module Agents
       chaos_selection_for(agent).fetch(:model)
     end
 
-    def self.chaos_selection_for(agent)
-      if HouseInference::Offering.find(agent.model_id)
-        return { provider: "house", model: agent.model_id }
+    # `model_id` defaults to the resident's own; a conversation that selected
+    # another model passes it here (see Agents::ModelSelection).
+    def self.chaos_selection_for(agent, model_id: agent.model_id)
+      model_id = model_id.to_s
+      if HouseInference::Offering.find(model_id)
+        return { provider: "house", model: model_id }
       end
 
-      subscription_provider = subscription_provider_for(agent)
+      subscription_provider = subscription_provider_for(agent, model_id: model_id)
       if subscription_provider && agent.provider_auth_mode(subscription_provider) == "oauth_account"
         return {
           provider: subscription_provider,
-          model: Chat.model_config(agent.model_id.to_s).fetch(:provider_model_id)
+          model: Chat.model_config(model_id).fetch(:provider_model_id)
         }
       end
 
-      selection = ResolvesProvider.resolve_provider(agent.model_id.to_s, account: agent.account)
+      selection = ResolvesProvider.resolve_provider(model_id, account: agent.account)
       {
         provider: CHAOS_PROVIDER_IDS.fetch(selection.fetch(:provider)),
         model: selection.fetch(:model_id)
       }
     end
 
-    def self.subscription_provider_for(agent)
-      model_id = agent.model_id.to_s
+    def self.subscription_provider_for(agent, model_id: agent.model_id)
+      model_id = model_id.to_s
       return unless Chat.model_config(model_id)&.dig(:provider_model_id)
 
       provider = case model_id
@@ -616,6 +760,17 @@ module Agents
                "-e", "TZ=Europe/Madrid" ]
       # Default off. Only the Anthropic-subscription clamp combination reads it.
       args += [ "-e", "SOULSHOUSE_IMPORTED_CLAMP_OMIT_FORCED_LOGIN=1" ] if Agents::Config.imported_clamp_omit_forced_login?
+      if (request = agent.github_resident_import)
+        request.require_approval!
+        args += [ "-e", "SOULSHOUSE_GITHUB_IMPORT_ID=#{request.id}",
+          "-e", "SOULSHOUSE_GITHUB_IMPORT_FINGERPRINT=#{request.approved_credential_fingerprint}",
+          "-e", "SOULSHOUSE_GITHUB_IMPORT_REPOSITORY=#{request.repository}",
+          "-e", "SOULSHOUSE_GITHUB_IMPORT_BRANCH=#{request.branch}",
+          "-e", "SOULSHOUSE_HOME_SYNC_STRATEGY=#{request.sync_strategy}",
+          "-e", "SOULSHOUSE_HOME_SYNC_CONFIGURATION=#{request.sync_configuration.to_json}",
+          "-e", "SOULSHOUSE_GITHUB_IMPORT_CONNECTION=#{request.service_connection.public_id}" ]
+        args += [ "-e", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST=1" ] if managed_import_oauth_trust_required?
+      end
       args
     end
 
@@ -632,6 +787,11 @@ module Agents
       agent.account.ai_provider_keys.filter_map do |name, value|
         value.present? ? [ "-e", "#{name}=#{value}" ] : nil
       end.flatten
+    end
+
+    def managed_import_oauth_trust_required?
+      provider = self.class.subscription_provider_for(agent)
+      provider.in?(%w[openai xai]) && agent.provider_auth_mode(provider) == "oauth_account"
     end
 
   end

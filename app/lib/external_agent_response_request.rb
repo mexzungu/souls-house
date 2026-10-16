@@ -1,5 +1,19 @@
 class ExternalAgentResponseRequest
 
+  # How a transcript names a message's author. Shared with the mid-run
+  # messages a running resident is shown (AgentRuntimeInteraction).
+  def self.speaker_for(message)
+    if message.agent
+      message.agent.name
+    elsif message.user
+      message.user.email_address
+    elsif message.role == "system"
+      "souls.house (platform)"
+    else
+      message.role
+    end
+  end
+
   TRANSCRIPT_MESSAGE_LIMIT = 30
   TRANSCRIPT_BYTE_BUDGET = 80_000
   TRANSCRIPT_SEPARATOR = "\n\n"
@@ -37,11 +51,14 @@ class ExternalAgentResponseRequest
 
   def perform
     return notify_unreachable if agent.offline? || agent_unhealthy?
+    return notify_model_unavailable unless selection.ok?
 
     endpoint_url = Agents::Endpoint.url_for(agent)
     session_id = "#{agent.uuid}-#{chat.id}"
+    @safeguard_roll = SafeguardRoll.snapshot_for(agent: agent, chat: chat)
     request = request_text
-    delta = request_delta_text
+    # A safeguard roll starts a fresh session: send the full request, not a delta.
+    delta = @safeguard_roll ? nil : request_delta_text
     auth_mode = agent.provider_auth_mode(provider)
 
     attributes = {
@@ -54,7 +71,9 @@ class ExternalAgentResponseRequest
       endpoint_url: endpoint_url,
       request_text: request,
       last_included_message_id: computed_last_included_message_id,
-      provider_auth_mode: auth_mode
+      provider_auth_mode: auth_mode,
+      provider: provider,
+      model: selection.model
     }
     invoke = -> {
       ChaosTriggerClient.new(endpoint_url, agent.trigger_bearer_token).request_response(
@@ -63,15 +82,16 @@ class ExternalAgentResponseRequest
         session_id: session_id,
         request: request,
         request_delta: delta,
-        trigger_payload: memory_trigger_payload,
+        trigger_payload: trigger_payload,
         persistent_session: agent.persistent_session?,
         session_policy: agent.runtime_session_policy,
         provider: provider,
-        model: Agents::Sandbox.chaos_model_for(agent),
-        reasoning_effort: agent.reasoning_effort,
+        model: selection.model,
+        reasoning_effort: selection.reasoning_effort,
         auth_mode: auth_mode,
         activity: (@interaction&.activity_configuration! unless ResidentTurn.enabled?),
         interaction: @interaction,
+        completion_context: @safeguard_roll&.completion_context || {},
         runtime_timeout_secs: agent.runtime_timeout_secs
       )
     }
@@ -84,6 +104,8 @@ class ExternalAgentResponseRequest
     else
       AgentRuntimeInteraction.record_trigger!(**attributes, &invoke)
     end
+    # A queued resident turn (202) is acknowledged by ResidentTurnCompletion.
+    SafeguardRoll.acknowledge_conversation!(@safeguard_roll.completion_context, result) if @safeguard_roll
     if auth_mode == "oauth_account"
       case result.dig(:body, "error_kind")
       when "auth_expired"
@@ -95,16 +117,37 @@ class ExternalAgentResponseRequest
     result
   end
 
+  def trigger_payload
+    payload = memory_trigger_payload
+    payload = payload.merge(roll_session: true) if @safeguard_roll
+    payload
+  end
+
   def memory_trigger_payload
     vault = Mnemodyne::Provision.call(agent)
     return {} unless vault && !vault.suspended_at? && !vault.erasure_requested_at?
-    message = full_window_messages.reverse.find { |item| item.role.in?(%w[user assistant]) && item.content.present? }
+    # A labelled safeguard script is not what the room is about; don't recall on it.
+    message = full_window_messages.reverse.find { |item| item.role.in?(%w[user assistant]) && item.content.present? && !item.safeguard_labelled? }
     return {} unless message
     { memory: { enabled: true, query: message.content.to_s.first(2_000) } }
   end
 
+  # Resolved once per execution; a change made while this turn runs applies
+  # to the next one.
+  def selection
+    @selection ||= Agents::ModelSelection.for(agent, chat: chat)
+  end
+
   def provider
-    @provider ||= Agents::Sandbox.chaos_provider_for(agent)
+    selection.provider
+  end
+
+  # The selected model can no longer be used. Say so in the room rather than
+  # running on a model nobody chose.
+  def notify_model_unavailable
+    @interaction&.finish_execution!("failed")
+    ConversationModelEvent.unavailable!(chat: chat, agent: agent, selection: selection)
+    { status: 409, error: "selected model unavailable", body: { "status" => "model_unavailable" } }
   end
 
   def surface_subscription_auth_failure!
@@ -151,7 +194,11 @@ class ExternalAgentResponseRequest
   def request_text
     parts = [
       Notices::Renderer.section_for(agent),
+      SubagentPolicyRenderer.section_for(agent),
+      selection.prompt_section,
+      safeguard_notice_text,
       trigger_intro_text,
+      queued_wake_text,
       rhythm_invitation_context,
       "Requested by: #{requested_by}.",
       confirmation_text,
@@ -167,7 +214,27 @@ class ExternalAgentResponseRequest
     parts.compact_blank.join("\n\n")
   end
 
+  # The run a follow-through nudge continues, when this run is one.
+  # A run released from a PendingWake says so, so the resident knows the
+  # knock was held rather than lost, and by whom.
+  def queued_wake_text
+    return nil unless @interaction&.id
+
+    PendingWake.find_by(released_interaction_id: @interaction.id)&.prompt_note
+  end
+
+  def follow_through_source
+    @interaction&.follow_through_of
+  end
+
+  # The stalled-thread sweep that woke this run, when one did.
+  def stalled_sweep_source
+    @interaction&.stalled_thread_sweep
+  end
+
   def trigger_intro_text
+    return FollowThroughCheck.new(follow_through_source).nudge_text if follow_through_source
+    return stalled_sweep_source.nudge_text if stalled_sweep_source
     if rhythm_invitation
       return "A scheduled rhythm has opened conversation #{chat.to_param}. Its opening was saved by the creator earlier; they have not necessarily just typed a message or pressed the agent button."
     end
@@ -179,6 +246,7 @@ class ExternalAgentResponseRequest
   end
 
   def confirmation_text
+    return "No person pressed anything for this run. It continues work you had already taken on, under whatever authorisation you had then; it adds none." if follow_through_source || stalled_sweep_source
     return "This is the creator's standing invitation, not a fresh instruction or an expansion of permissions. No separate confirmation is needed merely to reply; nothing to bring forward is a valid outcome." if rhythm_invitation
 
     if recent_human_message?
@@ -189,6 +257,8 @@ class ExternalAgentResponseRequest
   end
 
   def response_expectation_text
+    return "Close the gap the check found: finish the step, or say in the room what is blocking it, or confirm in one line that it already happened. Do not post just to acknowledge this nudge." if follow_through_source
+    return "If the room shows a step that is yours, take it or say what blocks it. If it doesn't, stay quiet or say so in one line. Do not post just to acknowledge this wake." if stalled_sweep_source
     return "Decide whether there is anything worth bringing forward from this invitation. A reply may be useful; quiet is also valid. Do not manufacture a finding to justify the rhythm." if rhythm_invitation
 
     if recent_human_message?
@@ -236,11 +306,19 @@ class ExternalAgentResponseRequest
     <<~TEXT.strip
       Conversation metadata:
       - id: #{chat.to_param}
-      - title: #{chat.title_or_default}
+      - title: #{chat.title_or_default}#{room_line}
       - agents: #{agents.any? ? agents.join(", ") : "_none recorded_"}
       - humans_seen_in_transcript: #{humans.any? ? humans.join(", ") : "_none in stored messages_"}
       #{account_line}
     TEXT
+  end
+
+  # The room is a hint about what the conversation is for, not an instruction.
+  # Only residents at home see it, and only once the account has rooms.
+  def room_line
+    return "" unless chat.account_id == agent.account_id && chat.account.rooms.exists?
+
+    "\n- room: #{chat.room&.name || Room::MAIN}"
   end
 
   # Say plainly when the resident is a guest in the room's account, so context
@@ -283,14 +361,17 @@ class ExternalAgentResponseRequest
     TEXT
   end
 
+  def safeguard_notice_text
+    return unless @safeguard_roll&.notice?
+
+    detections = SafeguardDetection.where(id: @safeguard_roll.detection_ids).includes(:message).order(created_at: :desc, id: :desc)
+    SafeguardNoticeRenderer.for_resident_conversation(detections)
+  end
+
   def format_transcript_line(message)
-    speaker = if message.agent
-      message.agent.name
-    elsif message.user
-      message.user.email_address
-    else
-      message.role
-    end
+    return format_safeguard_transcript_line(message) if message.safeguard_labelled?
+
+    speaker = self.class.speaker_for(message)
 
     # IDs distinguish stored turns from ordinary "Name:" addresses in a body
     # and let residents verify attribution through the conversation API.
@@ -298,11 +379,11 @@ class ExternalAgentResponseRequest
     if (occurrence = message.rhythm_occurrence)
       line = "[Scheduled rhythm opening: #{occurrence.rhythm_title.to_json}; #{occurrence.scheduled_for.iso8601}; manual=#{occurrence.manual}]\n#{line}"
     end
-    return line unless message.attachments.attached?
+    return line unless message.attachments.attached? || message.audio_recording.attached?
 
     attachments = message.attachments_for_api.map do |attachment|
       <<~ATTACHMENT.strip
-        - filename: #{attachment.fetch(:filename)}
+        - filename: #{attachment.fetch(:filename)}#{" (voice recording; the message text is its edited transcript)" if attachment[:kind] == "voice_recording"}
           content_type: #{attachment.fetch(:content_type)}
           byte_size: #{attachment.fetch(:byte_size)}
           authenticated_download_path: #{attachment.fetch(:download_path)}
@@ -313,6 +394,19 @@ class ExternalAgentResponseRequest
       #{line}
       Attachments (fetch with `curl -L -H "Authorization: Bearer $SOULSHOUSE_BEARER_TOKEN" "$SOULSHOUSE_APP_URL<authenticated_download_path>"`):
       #{attachments.join("\n")}
+    TEXT
+  end
+
+  # spec §6: a labelled message is souls.house's line, delimited, and never
+  # reads as prior speech in the resident's name.
+  def format_safeguard_transcript_line(message)
+    resident = message.agent&.name || "the resident"
+    whose = message.agent_id == agent.id ? "your" : "#{resident}'s"
+    <<~TEXT.strip
+      souls.house [#{message.obfuscated_id}] (could not reliably attribute to #{resident}; possible provider safeguard response — not #{whose} confirmed speech):
+      <<<
+      #{message.content.to_s.strip}
+      >>>
     TEXT
   end
 
@@ -332,7 +426,7 @@ class ExternalAgentResponseRequest
     return @full_window_entries if defined?(@full_window_entries)
 
     candidates = chat.messages.kept
-      .includes(:user, :agent, attachments_attachments: :blob)
+      .includes(:user, :agent, :safeguard_detection, attachments_attachments: :blob, audio_recording_attachment: :blob)
       .order(:created_at)
       .last(TRANSCRIPT_MESSAGE_LIMIT)
     entries = []
@@ -387,7 +481,7 @@ class ExternalAgentResponseRequest
 
     @delta_messages = if prior_cursor_message_id
       chat.messages.kept
-        .includes(:user, :agent, attachments_attachments: :blob)
+        .includes(:user, :agent, :safeguard_detection, attachments_attachments: :blob, audio_recording_attachment: :blob)
         .where("id > ?", prior_cursor_message_id)
         .order(:id)
         .to_a
@@ -409,7 +503,10 @@ class ExternalAgentResponseRequest
 
     parts = [
       Notices::Renderer.section_for(agent),
+      SubagentPolicyRenderer.section_for(agent),
+      selection.prompt_section,
       trigger_intro_text,
+      queued_wake_text,
       rhythm_invitation_context,
       "Requested by: #{requested_by}.",
       confirmation_text,

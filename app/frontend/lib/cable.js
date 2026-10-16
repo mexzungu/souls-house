@@ -110,11 +110,30 @@ export function subscribeToModel(model, id, props) {
     {
       connected() {
         logging.debug(`Sync connected: ${model}:${id}`);
-        if (model === 'Chat' || model === 'Account' || model === 'ReplyAttention') {
+        if (
+          model === 'Chat' ||
+          model === 'Account' ||
+          model === 'ReplyAttention' ||
+          model === 'RoomActivity' ||
+          model === 'FieldActivity' ||
+          model === 'FieldTweetStream' ||
+          model === 'GuestDirectory' ||
+          model === 'RoomNavigation' ||
+          model === 'RhythmActivity' ||
+          model === 'IntegrationStatus' ||
+          model === 'FieldRecording'
+        ) {
           // Broadcasts are not replayed. Catch up changes missed before the
           // subscription or during a disconnect, without needing another change.
+          // A FieldRecording that finished transcribing meanwhile would
+          // otherwise sit on "Transcribing…" until a manual refresh, and a
+          // room's spinner would keep turning for a run that has ended.
           reloadProps(props);
-          if (model === 'Chat') window.dispatchEvent(new CustomEvent('runtime-activity-refresh'));
+          if (model === 'Chat') {
+            window.dispatchEvent(new CustomEvent('runtime-activity-refresh'));
+            // Older loaded history is not part of that reload (chat-history.svelte.js).
+            window.dispatchEvent(new CustomEvent('chat-sync-connected', { detail: { id } }));
+          }
         }
       },
 
@@ -127,6 +146,13 @@ export function subscribeToModel(model, id, props) {
 
         // Handle streaming updates specially - don't reload, just update in place
         if (handleStreamingUpdate(data)) {
+          return;
+        }
+
+        // A resident's handoff receipt moved: patched in place by the room's
+        // history, which also reaches older messages a reload would miss.
+        if (data.action === 'handoff_receipts') {
+          if (browser) window.dispatchEvent(new CustomEvent('handoff-receipts', { detail: data }));
           return;
         }
 

@@ -5,30 +5,16 @@ class Chats::AgentAssignmentsController < ApplicationController
   # POST /accounts/:account_id/chats/:chat_id/agent_assignment
   def create
     if @chat.manual_responses?
-      redirect_back_or_to account_chat_path(current_account, @chat),
+      redirect_back_or_to chat_view_path(@chat),
         alert: "This chat is already assigned to a resident"
       return
     end
 
     agent = current_account.conversation_agents.eligible_for_conversation.find(params[:agent_id])
-
-    previous_model = @chat.model_label || @chat.model_id || "an AI model"
-
-    @chat.transaction do
-      @chat.agents << agent
-      @chat.update!(manual_responses: true)
-
-      @chat.messages.create!(
-        role: "user",
-        content: "[System Notice] This conversation is now being handled by #{agent.name}. " \
-                 "The previous messages were with #{previous_model}, a base AI model that had no system prompt, " \
-                 "identity, or memories. You are now taking over this conversation with your " \
-                 "full capabilities and personality."
-      )
-    end
+    @chat.assign_agent!(agent)
 
     audit("assign_agent_to_chat", @chat, agent_id: agent.id)
-    redirect_to account_chat_path(current_account, @chat)
+    redirect_to chat_view_path(@chat)
   end
 
 end
