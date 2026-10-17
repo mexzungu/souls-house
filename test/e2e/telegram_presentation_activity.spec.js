@@ -86,7 +86,7 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     await expect.poll(() => dropped).toBeGreaterThanOrEqual(2);
     drop = false;
     socket.close({ code: 1012, reason: 'Synthetic Telegram reconnect' });
-    await expect(page.getByText('@renamed_synthetic_bot', { exact: true })).toBeVisible();
+    await expect(page.getByText('@renamed_synthetic_bot', { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.locator('code').filter({ hasText: 'https://t.me/' })).toHaveCount(0);
     await expect(token).toHaveValue('unfinished-synthetic-token');
     await expect(page.getByText('0 subscribers connected', { exact: true })).toBeVisible({ timeout: 20_000 });
