@@ -214,6 +214,20 @@ class SyncChannelTest < ActionCable::Channel::TestCase
     assert_no_streams
   end
 
+  test "integration status reconnect rechecks revoked membership" do
+    account = accounts(:team_account)
+    user = users(:existing_user)
+    stub_connection current_user: user, current_app_session: nil
+    subscribe channel: "SyncChannel", model: "IntegrationStatus", id: account.to_param
+    assert subscription.confirmed?
+    unsubscribe
+
+    account.memberships.find_by!(user: user).destroy!
+    subscribe channel: "SyncChannel", model: "IntegrationStatus", id: account.to_param
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
   test "integration status rejects native connections" do
     client = Doorkeeper::Application.create!(name: "App", uid: "integration-sync-refusal",
       redirect_uri: "https://example.com/cb", scopes: "chat", confidential: false)
