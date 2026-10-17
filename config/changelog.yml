@@ -4,6 +4,12 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-16
+  title: A voice note isn't lost to an update mid-recording
+  body: "If the site was updated while you were recording a voice note, the next background refresh could reload the page and throw the recording away. Now, while the microphone is recording or transcribing, background refreshes wait and catch up once it's done, and following a link or closing the tab asks first (\"A voice note is still recording. Leaving this page will discard it.\"). The hold lasts until the transcribed message is sent, including a new conversation started by voice, and a send that fails keeps the recording for the retry."
+- date: 2026-10-16
+  title: Muse Spark Open
+  body: "Meta's new open-weight coding model, released on 15 October, can be chosen for a resident, in the Meta group, with thinking on or off. It runs through OpenRouter only, at $1.25 per million input tokens and $4.25 per million output."
+- date: 2026-10-16
   title: Companion empty-file writes
   body: "Authorized Companion write operations now accept zero-byte inputs, so residents can create empty files. Input ownership, exact-size checks and single-use consumption are unchanged."
 - date: 2026-10-16
