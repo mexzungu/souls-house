@@ -86,6 +86,8 @@ test.each([
   'RhythmActivity',
   'IntegrationStatus',
   'ProviderPresentation',
+  'HomeResidentRoster',
+  'AccountCostActivity',
 ])('%s catches up on connect and every reconnect', (model) => {
   vi.useFakeTimers();
   router.reload.mockClear();
