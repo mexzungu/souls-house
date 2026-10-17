@@ -17,6 +17,9 @@
   title: Companion empty-result receipts
   body: "Companion operations can report a refusal without sending file contents, and empty files can be read successfully. Empty raw result uploads no longer fail with a server error."
 - date: 2026-10-16
+  title: Background refreshes avoid external status checks
+  body: "Resident health refreshes no longer inspect export runtime state, and navigation updates no longer refetch GitHub repositories. Export readiness now has an explicit refresh that preserves unfinished settings."
+- date: 2026-10-16
   title: Provider connection status stays fresh
   body: "Persisted provider connection changes now update open resident and model-key panels without losing unfinished credentials or interrupting an active sign-in. Status-only reloads no longer regenerate unrelated Telegram links."
 - date: 2026-10-16
