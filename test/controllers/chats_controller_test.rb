@@ -874,6 +874,39 @@ class ChatsControllerTest < ActionDispatch::IntegrationTest
     assert_includes results.sole.fetch("snippet"), "Ruby on Rails"
   end
 
+  test "search paginates matching messages newest first within the current account" do
+    # Search has a fixed limit of 20, so 41 matches exercise a partial third page.
+    newest_at = 1.hour.ago
+    messages = 41.times.map do |i|
+      @chat.messages.create!(
+        content: "Pagy regression match #{i}", role: "user", user: @user,
+        created_at: newest_at - i.minutes, suppress_automatic_dispatch: true
+      )
+    end
+    other_user = User.create!(email_address: "pagedsearchother@example.com")
+    other_chat = other_user.personal_account.chats.create!(model_id: "openrouter/auto")
+    other_chat.messages.create!(
+      content: "Pagy regression match from another account", role: "user", user: other_user,
+      created_at: newest_at + 1.minute, suppress_automatic_dispatch: true
+    )
+
+    [ [ 1, 0, 20, nil, 2 ], [ 2, 20, 20, 1, 3 ], [ 3, 40, 1, 2, nil ] ].each do |page, offset, size, previous_page, next_page|
+      @inertia_props = nil # The helper memoizes props across requests.
+      get search_account_chats_path(@account), params: { q: "Pagy regression match", page: page }
+
+      assert_response :success
+      props = inertia_shared_props
+      assert_equal messages.slice(offset, size).map(&:to_param), props.fetch("results").pluck("id"),
+        "Search page #{page} should contain only its ordered account-scoped matches"
+      assert_equal({
+        "count" => 41, "page" => page, "pages" => 3, "last" => 3,
+        "from" => offset + 1, "to" => offset + size,
+        "prev" => previous_page, "next" => next_page,
+        "series" => [ "1", "2", "3" ], "per_page" => "20"
+      }, props.fetch("pagination"))
+    end
+  end
+
   test "search with empty query returns no results" do
     @chat.messages.create!(content: "Anything at all", role: "user", user: @user)
 
