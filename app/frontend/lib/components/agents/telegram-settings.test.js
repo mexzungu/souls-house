@@ -10,6 +10,7 @@ const configuration = { configured: true, username: 'synthetic_bot' };
 function settingsProps() {
   return {
     agent: { id: 'resident', name: 'Resident', telegram_configured: true, telegram_bot_username: 'synthetic_bot' },
+    accountId: 'home',
     form: writable({ agent: { telegram_bot_username: 'synthetic_bot', telegram_bot_token: '' }, processing: false }),
     telegramConfiguration: configuration,
     telegramDeepLink: link,
@@ -40,7 +41,12 @@ test('only an explicit click requests the deep-link prop and disables duplicate 
   const request = await reveal();
   expect(router.reload).toHaveBeenCalledOnce();
   expect(request).toEqual(
-    expect.objectContaining({ only: ['telegram_deep_link'], preserveState: true, preserveScroll: true })
+    expect.objectContaining({
+      only: ['telegram_deep_link'],
+      preserveState: true,
+      preserveScroll: true,
+      preserveUrl: true,
+    })
   );
   expect(screen.getByRole('button', { name: 'Revealing...' })).toBeDisabled();
   await finish(request);
@@ -70,6 +76,37 @@ test('same configuration and count updates preserve a revealed link and typed us
   expect(screen.getByLabelText('Bot token')).toBe(token);
   expect(get(props.form).agent.telegram_bot_token).toBe('synthetic-unsaved-token');
   expect(router.reload).toHaveBeenCalledOnce();
+});
+
+test('active counts enable and disable test send without replacing settings or invoking actions', async () => {
+  const props = {
+    ...settingsProps(),
+    telegramSubscriberCount: 0,
+    onsendTestNotification: vi.fn(),
+    onregisterWebhook: vi.fn(),
+  };
+  const view = render(TelegramSettings, props);
+  const button = screen.getByRole('button', { name: 'Send test message' });
+  expect(button).toBeDisabled();
+  await view.rerender({ ...props, telegramSubscriberCount: 1 });
+  expect(button).toBeEnabled();
+  await view.rerender({ ...props, telegramSubscriberCount: 0 });
+  expect(button).toBeDisabled();
+  expect(props.onsendTestNotification).not.toHaveBeenCalled();
+  expect(props.onregisterWebhook).not.toHaveBeenCalled();
+  expect(router.reload).not.toHaveBeenCalled();
+});
+
+test('configuration-only catch-up renders current status and username even while the Agent prop stays stale', async () => {
+  const props = settingsProps();
+  const view = render(TelegramSettings, props);
+  await view.rerender({ ...props, telegramConfiguration: { configured: true, username: 'reconnected_bot' } });
+  expect(screen.getByText('@reconnected_bot')).toBeInTheDocument();
+  expect(screen.queryByText('@synthetic_bot')).not.toBeInTheDocument();
+  await view.rerender({ ...props, telegramConfiguration: { configured: false, username: null } });
+  expect(screen.getByText('Create a Telegram bot')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Reveal registration link' })).not.toBeInTheDocument();
+  expect(router.reload).not.toHaveBeenCalled();
 });
 
 test.each(['username', 'configured', 'identity'])(
@@ -126,4 +163,17 @@ test('a late reveal for the previous resident is ignored even when the bot confi
   await finish(request);
   expect(screen.queryByText(link)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Reveal registration link' })).toBeEnabled();
+});
+
+test('a pending reveal is fenced after account navigation and destruction', async () => {
+  const props = settingsProps();
+  const view = render(TelegramSettings, props);
+  const oldRequest = await reveal();
+  await view.rerender({ ...props, accountId: 'other-account' });
+  await finish(oldRequest);
+  expect(screen.queryByText(link)).not.toBeInTheDocument();
+  const request = await reveal();
+  view.unmount();
+  await finish(request);
+  expect(screen.queryByText(link)).not.toBeInTheDocument();
 });

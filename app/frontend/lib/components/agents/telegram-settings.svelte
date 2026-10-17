@@ -5,10 +5,11 @@
   import { Label } from '$lib/components/shadcn/label';
   import { siteName } from '$lib/branding';
   import { router } from '@inertiajs/svelte';
+  import { onDestroy } from 'svelte';
   let {
     form,
     agent,
-    telegramDeepLink,
+    accountId,
     telegramConfiguration = null,
     telegramSubscriberCount,
     sendingTestNotification,
@@ -20,15 +21,17 @@
   let visibleLink = $state(null);
   let revealing = $state(false);
   let revealGeneration = 0;
-  const configurationKey = $derived(JSON.stringify([
-    agent.id, telegramConfiguration?.configured ?? agent.telegram_configured,
-    telegramConfiguration?.username ?? agent.telegram_bot_username,
-  ]));
+  const configured = $derived(telegramConfiguration ? telegramConfiguration.configured : agent.telegram_configured);
+  const username = $derived(telegramConfiguration ? telegramConfiguration.username : agent.telegram_bot_username);
+  const configurationKey = $derived(JSON.stringify([accountId, agent.id, configured, username]));
   $effect(() => {
     configurationKey;
     revealGeneration++;
     visibleLink = null;
     revealing = false;
+  });
+  onDestroy(() => {
+    revealGeneration++;
   });
 
   function revealLink() {
@@ -38,6 +41,7 @@
       only: ['telegram_deep_link'],
       preserveState: true,
       preserveScroll: true,
+      preserveUrl: true,
       onSuccess: (page) => {
         if (generation === revealGeneration) visibleLink = page.props.telegram_deep_link;
       },
@@ -69,7 +73,7 @@
     </div>
   </div>
 
-  {#if !agent.telegram_configured}
+  {#if !configured}
     <div class="rounded-lg border bg-muted/20 p-5">
       <h3 class="font-semibold">Create a Telegram bot</h3>
       <ol class="mt-4 space-y-4 text-sm">
@@ -115,7 +119,7 @@
   {:else}
     <div class="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
       <CheckCircle class="text-emerald-600" size={20} weight="fill" />
-      Telegram is connected as <span class="font-medium">@{agent.telegram_bot_username}</span>
+      Telegram is connected as <span class="font-medium">@{username}</span>
     </div>
   {/if}
 
@@ -127,7 +131,7 @@
         type="text"
         bind:value={$form.agent.telegram_bot_username}
         placeholder="e.g. my_agent_bot"
-        required={!agent.telegram_configured} />
+        required={!configured} />
       <p class="text-xs text-muted-foreground">Enter the username without the leading @.</p>
     </div>
 
@@ -137,19 +141,17 @@
         id="telegram_bot_token"
         type="password"
         bind:value={$form.agent.telegram_bot_token}
-        placeholder={agent.telegram_configured
-          ? 'Leave blank to keep the current token'
-          : 'Paste the token from BotFather'}
-        required={!agent.telegram_configured} />
+        placeholder={configured ? 'Leave blank to keep the current token' : 'Paste the token from BotFather'}
+        required={!configured} />
       <p class="text-xs text-muted-foreground">
-        {agent.telegram_configured
+        {configured
           ? 'Leave this blank unless you want to replace the current token.'
           : 'The token is encrypted when stored and is never shown again.'}
       </p>
     </div>
   </div>
 
-  {#if agent.telegram_configured}
+  {#if configured}
     <div class="rounded-lg bg-muted/50 p-4 space-y-2">
       <p class="text-sm font-medium">Your registration link</p>
       <p class="text-xs text-muted-foreground">

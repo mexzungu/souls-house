@@ -28,12 +28,40 @@ class TelegramPresentationPartialsTest < ActionDispatch::IntegrationTest
   end
 
   test "link is optional on full visits and minted only by explicit partial reveal" do
-    get edit_account_agent_path(@account, @agent), headers: { "X-Inertia" => "true", "X-Inertia-Version" => ViteRuby.digest }
-    assert_response :success
-    assert_not response.parsed_body.fetch("props").key?("telegram_deep_link")
-    get edit_account_agent_path(@account, @agent), headers: partial("telegram_deep_link")
-    assert_response :success
-    assert_match %r{\Ahttps://t.me/synthetic_bot\?start=[A-Za-z0-9]+\z}, response.parsed_body.dig("props", "telegram_deep_link")
+    keys = []
+    listener = ->(*args) { keys << ActiveSupport::Notifications::Event.new(*args).payload[:key].to_s }
+    ActiveSupport::Notifications.subscribed(listener, "cache_write.active_support") do
+      get edit_account_agent_path(@account, @agent), headers: { "X-Inertia" => "true", "X-Inertia-Version" => ViteRuby.digest }
+      assert_response :success
+      assert_not response.parsed_body.fetch("props").key?("telegram_deep_link")
+      assert_not keys.any? { |key| key.include?("telegram_deep_link:") }
+      get edit_account_agent_path(@account, @agent), headers: partial("telegram_deep_link")
+      assert_response :success
+      assert_match %r{\Ahttps://t.me/synthetic_bot\?start=[A-Za-z0-9]+\z}, response.parsed_body.dig("props", "telegram_deep_link")
+      assert_equal 1, keys.count { |key| key.include?("telegram_deep_link:") }
+    end
+  end
+
+  test "explicit reveals stay scoped to the current account and require authentication" do
+    keys = []
+    listener = ->(*args) { keys << ActiveSupport::Notifications::Event.new(*args).payload[:key].to_s }
+    ActiveSupport::Notifications.subscribed(listener, "cache_write.active_support") do
+      get edit_account_agent_path(@account, agents(:other_account_agent)), headers: partial("telegram_deep_link")
+      assert_response :not_found
+      delete logout_path
+      get edit_account_agent_path(@account, @agent), headers: partial("telegram_deep_link")
+      assert_response :redirect
+    end
+    assert_not keys.any? { |key| key.include?("telegram_deep_link:") }
+  end
+
+  test "explicit reveal clears an unconfigured bot without minting a token" do
+    @agent.update_columns(telegram_bot_token: nil)
+    @agent.stub :telegram_deep_link_for, ->(*) { flunk "unconfigured bot minted a link" } do
+      get edit_account_agent_path(@account, @agent), headers: partial("telegram_deep_link")
+      assert_response :success
+      assert_nil response.parsed_body.dig("props", "telegram_deep_link")
+    end
   end
 
   private

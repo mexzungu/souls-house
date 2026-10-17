@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('Telegram summaries arrive live without revealing links or replacing credential drafts', async ({
   page,
   request,
+  browser,
 }) => {
   test.setTimeout(120_000);
   const runId = `telegram-live-${Date.now()}`;
@@ -21,14 +22,20 @@ test('Telegram summaries arrive live without revealing links or replacing creden
   };
   let socket;
   let drop = false;
+  let dropped = 0;
   let confirmed = false;
+  let secondContext;
   await page.routeWebSocket('**/cable', (cable) => {
     socket = cable;
     cable.connectToServer().onMessage((raw) => {
       const message = JSON.parse(raw);
       const model = message.identifier && JSON.parse(message.identifier).model;
       if (message.type === 'confirm_subscription' && model === 'TelegramPresentation') confirmed = true;
-      if (!(drop && model === 'TelegramPresentation' && message.message)) cable.send(raw);
+      if (drop && model === 'TelegramPresentation' && message.message) {
+        dropped++;
+      } else {
+        cable.send(raw);
+      }
     });
   });
   const reloads = [];
@@ -48,6 +55,11 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     await page.goto(`/accounts/${setup.account_param}/agents/${agent.id}/edit?tab=integrations`);
     await expect.poll(() => confirmed).toBe(true);
     await page.getByRole('button', { name: 'Settings', exact: true }).last().click();
+    secondContext = await browser.newContext({ storageState: await page.context().storageState() });
+    const second = await secondContext.newPage();
+    await second.goto(page.url());
+    await second.getByRole('button', { name: 'Settings', exact: true }).last().click();
+    await expect(second.getByText('0 subscribers connected', { exact: true })).toBeVisible();
     const username = page.getByLabel('Bot username', { exact: true });
     const token = page.getByLabel('Bot token', { exact: true });
     await username.fill('unfinished_username');
@@ -57,6 +69,8 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     expect(reveals).toBe(0);
     await mutate('subscribe');
     await expect(page.getByText('1 subscriber connected', { exact: true })).toBeVisible();
+    await expect(second.getByText('1 subscriber connected', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send test message', exact: true })).toBeEnabled();
     await expect(username).toHaveValue('unfinished_username');
     await expect(token).toHaveValue('unfinished-synthetic-token');
     expect(reloads.at(-1).sort()).toEqual(['telegram_configuration', 'telegram_subscriber_count'].sort());
@@ -64,15 +78,20 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     await page.getByRole('button', { name: 'Reveal registration link', exact: true }).click();
     await expect(page.locator('code').filter({ hasText: 'https://t.me/synthetic_bot?start=' })).toBeVisible();
     expect(reveals).toBe(1);
+    drop = true;
+    // update_columns deliberately leaves Agent's broad stream quiet. Catch-up
+    // must adopt this configuration without ever refreshing the stale Agent prop.
     await mutate('rename');
+    await mutate('block');
+    await expect.poll(() => dropped).toBeGreaterThanOrEqual(2);
+    drop = false;
+    socket.close({ code: 1012, reason: 'Synthetic Telegram reconnect' });
     await expect(page.getByText('@renamed_synthetic_bot', { exact: true })).toBeVisible();
     await expect(page.locator('code').filter({ hasText: 'https://t.me/' })).toHaveCount(0);
     await expect(token).toHaveValue('unfinished-synthetic-token');
-    drop = true;
-    await mutate('block');
-    drop = false;
-    socket.close({ code: 1012, reason: 'Synthetic Telegram reconnect' });
     await expect(page.getByText('0 subscribers connected', { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(second.getByText('0 subscribers connected', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Send test message', exact: true })).toBeDisabled();
     await expect(username).toHaveValue('unfinished_username');
     await page.waitForLoadState('networkidle');
     const beforeQuiet = reloads.length;
@@ -81,6 +100,7 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     expect(reloads).toHaveLength(beforeQuiet);
     expect(reveals).toBe(1);
   } finally {
+    await secondContext?.close();
     expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
   }
 });

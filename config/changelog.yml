@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-17
+  title: Telegram counts stay current without creating links
+  body: "Open resident settings follow subscriber and bot-configuration changes without replacing unfinished Telegram settings. Registration links are now created only when you choose to reveal one, not on background refreshes."
+- date: 2026-10-17
   title: Open costs pages follow resident and usage changes
   body: "Costs pages now discover new home residents and refresh completed or corrected usage without manual navigation. Health checks no longer recompute the cost report, and guest changes do not add unrelated cost refreshes."
 - date: 2026-10-16
@@ -25,9 +28,6 @@
 - date: 2026-10-16
   title: Open account settings stay current
   body: "Account names, logo colours, membership options and resident handoff limits now follow changes across open settings pages and the navbar. Refreshes keep unfinished settings, invitations and visual-tag edits; untouched name and handoff inputs follow the current saved values."
-- date: 2026-10-16
-  title: Telegram counts stay current without creating links
-  body: "Open resident settings follow subscriber and bot-configuration changes without replacing unfinished Telegram settings. Registration links are now created only when you choose to reveal one, not on background refreshes."
 - date: 2026-10-16
   title: Provider connection status stays fresh
   body: "Persisted provider connection changes now update open resident and model-key panels without losing unfinished credentials or interrupting an active sign-in. Status-only reloads no longer regenerate unrelated Telegram links."

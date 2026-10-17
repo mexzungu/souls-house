@@ -11,7 +11,6 @@
     form,
     agent,
     account,
-    telegramDeepLink = null,
     telegramConfiguration = null,
     telegramSubscriberCount = 0,
     sendingTestNotification = false,
@@ -21,9 +20,15 @@
     onregisterWebhook,
   } = $props();
   let selectedIntegration = $state(null);
-  const telegramAgent = $derived(telegramConfiguration
-    ? { ...agent, telegram_configured: telegramConfiguration.configured, telegram_bot_username: telegramConfiguration.username }
-    : agent);
+  const telegramAgent = $derived(
+    telegramConfiguration
+      ? {
+          ...agent,
+          telegram_configured: telegramConfiguration.configured,
+          telegram_bot_username: telegramConfiguration.username,
+        }
+      : agent
+  );
 
   function openTelegram() {
     selectedIntegration = 'telegram';
@@ -66,7 +71,7 @@
     {form}
     agent={telegramAgent}
     {telegramConfiguration}
-    {telegramDeepLink}
+    accountId={account.id}
     {telegramSubscriberCount}
     {sendingTestNotification}
     {registeringWebhook}

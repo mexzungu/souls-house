@@ -34,7 +34,6 @@
   let {
     agent,
     house_allowance: houseAllowance = null,
-    telegram_deep_link: telegramDeepLink = null,
     telegram_configuration: telegramConfiguration = null,
     telegram_subscriber_count: telegramSubscriberCount = 0,
     grouped_models = {},
@@ -62,13 +61,7 @@
   } = $props();
 
   useSync({
-    [`Agent:${agent.id}`]: [
-      'agent',
-      'memories',
-      'interactions',
-      'interactions_pagination',
-      'cost_report',
-    ],
+    [`Agent:${agent.id}`]: ['agent', 'memories', 'interactions', 'interactions_pagination', 'cost_report'],
   });
 
   const updateIntegrationSync = createDynamicSync();
@@ -247,7 +240,6 @@
             {form}
             {agent}
             {account}
-            {telegramDeepLink}
             {telegramConfiguration}
             {telegramSubscriberCount}
             {sendingTestNotification}

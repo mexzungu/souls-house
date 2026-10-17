@@ -36,11 +36,61 @@ class TelegramPresentationTest < ActiveSupport::TestCase
       subscription.update!(telegram_username: "synthetic", telegram_chat_id: 987654321)
       subscription.request_runtime_reset!
       subscription.touch
+      subscription.telegram_messages.create!(role: "user", text: "Synthetic incoming message", sent_at: Time.current)
       subscription.update!(blocked: false)
       blocked = create_subscription(blocked: true, user: users(:regular_user), telegram_chat_id: 123456789)
       blocked.update!(telegram_username: "another")
       blocked.destroy!
     end
+  end
+
+  test "inactive reassignment stays quiet and simultaneous membership changes notify only affected residents" do
+    subscription = create_subscription(blocked: true)
+    assert_no_broadcasts(stream(@agent)) do
+      assert_no_broadcasts(stream(@other)) { subscription.update!(agent: @other) }
+    end
+    assert_no_broadcasts(stream(@other)) do
+      assert_broadcasts(stream(@agent), 1) { subscription.update!(agent: @agent, blocked: false) }
+    end
+    assert_no_broadcasts(stream(@other)) do
+      assert_broadcasts(stream(@agent), 1) { subscription.update!(agent: @other, blocked: true) }
+    end
+  end
+
+  test "null blocked is inactive just like the SQL active predicate" do
+    subscription = nil
+    assert_no_broadcasts(stream(@agent)) do
+      subscription = create_subscription(blocked: nil)
+      subscription.update!(blocked: true)
+      subscription.update!(blocked: nil)
+    end
+    assert_equal 0, @agent.telegram_subscriptions.active.count
+    assert_broadcasts(stream(@agent), 1) { subscription.update!(blocked: false) }
+    assert_equal 1, @agent.telegram_subscriptions.active.count
+    assert_broadcasts(stream(@agent), 1) { subscription.update!(blocked: nil) }
+    assert_equal 0, @agent.telegram_subscriptions.active.count
+  end
+
+  test "a later touch cannot erase a count hint and rolled back block reassignment and destroy stay silent" do
+    subscription = create_subscription
+    assert_broadcasts(stream(@agent), 1) do
+      TelegramSubscription.transaction do
+        subscription.mark_blocked!
+        subscription.touch
+      end
+    end
+    subscription.update!(blocked: false)
+    assert_no_broadcasts(stream(@agent)) do
+      assert_no_broadcasts(stream(@other)) do
+        TelegramSubscription.transaction do
+          subscription.update!(agent: @other, blocked: true)
+          subscription.destroy!
+          raise ActiveRecord::Rollback
+        end
+      end
+    end
+    assert_equal 1, @agent.telegram_subscriptions.active.count
+    assert_equal 0, @other.telegram_subscriptions.active.count
   end
 
   test "outer commit defers hints and outer or savepoint rollback drops them" do
