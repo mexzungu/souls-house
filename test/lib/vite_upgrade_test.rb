@@ -3,6 +3,7 @@ require "tmpdir"
 require "fileutils"
 require "active_support/all"
 require "action_view"
+require "rails/engine"
 require "vite_rails"
 
 class ViteUpgradeTest < Minitest::Test
