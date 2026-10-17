@@ -24,6 +24,7 @@ Rails.application.routes.draw do
         post :account_cost_fixture, to: "/test_support/e2e#account_cost_fixture"
         post :glossary_fixture, to: "/test_support/e2e#glossary_fixture"
         post :provider_presentation_fixture, to: "/test_support/e2e#provider_presentation_fixture"
+        post :telegram_presentation_fixture, to: "/test_support/e2e#telegram_presentation_fixture"
         post :room_navigation_fixture, to: "/test_support/e2e#room_navigation_fixture"
         post :expired_subscription_fixture, to: "/test_support/e2e#expired_subscription_fixture"
         post :audio_blob, to: "/test_support/e2e#audio_blob"

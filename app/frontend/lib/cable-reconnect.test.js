@@ -86,6 +86,7 @@ test.each([
   'RhythmActivity',
   'IntegrationStatus',
   'ProviderPresentation',
+  'TelegramPresentation',
   'HomeResidentRoster',
   'GlossaryActivity',
   'AccountCostActivity',

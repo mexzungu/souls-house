@@ -97,6 +97,30 @@ module TestSupport
       head :ok
     end
 
+    # Synthetic persisted state only; never registers a real Telegram webhook.
+    def telegram_presentation_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      agent = account.agents.find(params.fetch(:agent_id))
+      case params.fetch(:operation)
+      when "prepare", "rename"
+        username = params[:operation] == "prepare" ? "synthetic_bot" : "renamed_synthetic_bot"
+        agent.update_columns(telegram_bot_username: username, telegram_bot_token: "SYNTHETIC-TEST-TOKEN")
+        TelegramPresentation.refresh!(agent.id)
+      when "subscribe"
+        user = account.memberships.find_by!(role: "owner").user
+        agent.telegram_subscriptions.create!(user: user, telegram_chat_id: agent.id, blocked: false)
+      when "block"
+        agent.telegram_subscriptions.first!.mark_blocked!
+      when "bookkeeping"
+        agent.telegram_subscriptions.first!.request_runtime_reset!
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
     # Persisted presentation only: never starts a runtime or provider sign-in.
     def provider_presentation_fixture
       account = Account.find(params.fetch(:account_id))
