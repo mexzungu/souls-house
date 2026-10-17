@@ -87,6 +87,7 @@ test.each([
   'IntegrationStatus',
   'ProviderPresentation',
   'HomeResidentRoster',
+  'GlossaryActivity',
   'AccountCostActivity',
 ])('%s catches up on connect and every reconnect', (model) => {
   vi.useFakeTimers();

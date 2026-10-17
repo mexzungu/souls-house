@@ -8,6 +8,29 @@ module TestSupport
 
     PASSWORD = "password123"
 
+    # Synthetic persisted names only; no inference or resident wake.
+    def glossary_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "create"
+        create_agent!(account, "Glossary arrival", "teal")
+      when "rename"
+        account.agents.find_by!(name: "Glossary arrival").update!(name: "Glossary renamed")
+      when "health"
+        account.agents.find_by!(name: "Glossary renamed").update!(health_state: "healthy", last_health_check_at: Time.current)
+      when "site_name"
+        previous = Setting.instance.site_name
+        Setting.instance.update!(site_name: params.fetch(:name))
+        RefreshGlossarySettingsJob.perform_now
+        return render json: { previous: previous }
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
     # Local records only; no resident runtime or provider is contacted.
     def account_cost_fixture
       account = Account.find(params.fetch(:account_id))
