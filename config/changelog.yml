@@ -7,6 +7,9 @@
   title: Integration chat counts stay current
   body: "Open integration views now refresh their chat totals when connector chats arrive, are removed or change sync coverage. Ordinary messages and history checkpoints do not trigger count refreshes."
 - date: 2026-10-17
+  title: Glossaries stay up to date
+  body: "Open glossaries follow shared term changes, home resident names and the site's name without a reload. Unsent words stay in the input while updates arrive."
+- date: 2026-10-17
   title: Open costs pages follow resident and usage changes
   body: "Costs pages now discover new home residents and refresh completed or corrected usage without manual navigation. Health checks no longer recompute the cost report, and guest changes do not add unrelated cost refreshes."
 - date: 2026-10-16

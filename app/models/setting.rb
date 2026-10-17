@@ -14,6 +14,7 @@ class Setting < ApplicationRecord
   # Field OCR covers only files brought in after it was (last) turned on.
   before_save { self.field_ocr_enabled_at = Time.current if field_ocr_enabled_changed?(to: true) }
   after_save :refresh_tweet_streams, if: :tweet_stream_changed?
+  after_save :refresh_glossaries, if: :saved_change_to_site_name?
 
   validates :max_accounts, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
   validates :resident_turn_limit, numericality: { only_integer: true, greater_than_or_equal_to: 0, less_than_or_equal_to: 1_000 }
@@ -54,6 +55,10 @@ class Setting < ApplicationRecord
   end
 
   private
+
+  def refresh_glossaries
+    self.class.current_transaction.after_commit { RefreshGlossarySettingsJob.perform_later }
+  end
 
   def tweet_stream_changed?
     return true if (saved_changes.keys & TWEET_STREAM_COLUMNS).any?

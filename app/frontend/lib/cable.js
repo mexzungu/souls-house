@@ -125,6 +125,7 @@ export function subscribeToModel(model, id, props) {
           model === 'IntegrationStatus' ||
           model === 'ProviderPresentation' ||
           model === 'HomeResidentRoster' ||
+          model === 'GlossaryActivity' ||
           model === 'AccountCostActivity' ||
           model === 'FieldRecording'
         ) {

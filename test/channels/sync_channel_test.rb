@@ -258,6 +258,48 @@ class SyncChannelTest < ActionCable::Channel::TestCase
     assert_no_streams
   end
 
+  test "glossary activity subscribes only to the accessible account marker" do
+    stub_connection current_user: @user, current_app_session: nil
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: @account.to_param
+    assert subscription.confirmed?
+    assert_equal [ "GlossaryActivity:#{@account.to_param}" ], subscription.streams
+  end
+
+  test "glossary activity rejects foreign accounts" do
+    stub_connection current_user: @user, current_app_session: nil
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: accounts(:existing_user_account).to_param
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
+  test "glossary activity rejects pending membership" do
+    stub_connection current_user: users(:unconfirmed_user), current_app_session: nil
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: accounts(:another_team).to_param
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
+  test "glossary activity rejects native connections" do
+    stub_connection current_user: @user, current_app_session: Object.new
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: @account.to_param
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
+  test "glossary activity rejects all even for administrators" do
+    stub_connection current_user: @admin, current_app_session: nil
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: "all"
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
+  test "glossary activity rejects collections" do
+    stub_connection current_user: @user, current_app_session: nil
+    subscribe channel: "SyncChannel", model: "GlossaryActivity", id: "#{@account.to_param}:agents"
+    assert subscription.rejected?
+    assert_no_streams
+  end
+
   test "tweet stream subscribes only to the accessible account marker" do
     stub_connection current_user: @user, current_app_session: nil
     subscribe channel: "SyncChannel", model: "FieldTweetStream", id: @account.to_param
