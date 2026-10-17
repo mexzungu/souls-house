@@ -67,6 +67,7 @@ class Agents::PortabilityController < ApplicationController
       raise Agents::Portability::Error, "Resident has pending or uncertain execution" if ResidentTurn.pending.where(agent: agent).exists? || agent.agent_runtime_interactions.where(finished_at: nil).exists?
       transport = Agents::Portability::Transport.new(agent)
       transport.stopped!
+      previous_active = agent.active?
       agent.update_columns(active: true)
       begin
         Agents::Sandbox.new(agent).spawn!
@@ -84,6 +85,7 @@ class Agents::PortabilityController < ApplicationController
       end
       # The failure paths intentionally use direct columns, not orientation callbacks.
       agent.refresh_provider_presentation if activation_error
+      HomeResidentRoster.refresh!([ agent.account_id ]) if agent.active? != previous_active
     end
     raise Agents::Portability::Error, activation_error if activation_error
     redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other
