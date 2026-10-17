@@ -20,7 +20,11 @@ test('connector chat counts follow real events and reconnect without replacing d
   };
   const otherContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
   const resident = await otherContext.newPage();
-  const draftView = await page.context().newPage();
+  // Playwright's per-page WebSocket interception installs a context binding.
+  // Independent contexts avoid overlapping page bindings breaking WebSocket
+  // construction in another tab ("binding is not a function").
+  const draftContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL });
+  const draftView = await draftContext.newPage();
   const readers = await Promise.all(
     [page, resident, draftView].map(async (view) => {
       const state = { markers: [], reloads: [], confirmations: 0, cable: null, drop: false };
@@ -48,7 +52,7 @@ test('connector chat counts follow real events and reconnect without replacing d
   try {
     await mutate('prepare');
     const base = `/accounts/${setup.account_param}`;
-    for (const view of [page, resident]) {
+    for (const view of [page, resident, draftView]) {
       await view.goto('/login');
       await view.getByLabel(/email/i).fill(setup.primary_user.email);
       await view.getByLabel(/password/i).fill(setup.password);
@@ -135,7 +139,7 @@ test('connector chat counts follow real events and reconnect without replacing d
     }
     await page.screenshot({ path: testInfo.outputPath('comms-counts-reconnected.png'), fullPage: true });
   } finally {
-    await draftView.close();
+    await draftContext.close();
     await otherContext.close();
     expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
   }
