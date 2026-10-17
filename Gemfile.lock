@@ -428,14 +428,14 @@ GEM
     uri (1.1.2)
     useragent (0.16.11)
     vcr (6.4.0)
-    vite_rails (3.0.19)
+    vite_rails (3.11.1)
       railties (>= 5.1, < 9)
       vite_ruby (~> 3.0, >= 3.2.2)
-    vite_ruby (3.9.2)
+    vite_ruby (3.11.1)
       dry-cli (>= 0.7, < 2)
       logger (~> 1.6)
       mutex_m
-      rack-proxy (~> 0.6, >= 0.6.1)
+      rack-proxy (>= 0.6.1)
       zeitwerk (~> 2.2)
     web-console (4.3.0)
       actionview (>= 8.0.0)
@@ -519,7 +519,7 @@ DEPENDENCIES
   thruster
   tzinfo-data
   vcr
-  vite_rails (~> 3.0)
+  vite_rails (~> 3.11)
   web-console
   webmock
   x
