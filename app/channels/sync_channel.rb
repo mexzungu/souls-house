@@ -39,6 +39,14 @@ class SyncChannel < ApplicationCable::Channel
       model: Account,
       collections: []
     },
+    "HomeResidentRoster" => {
+      model: Account,
+      collections: []
+    },
+    "AccountCostActivity" => {
+      model: Account,
+      collections: []
+    },
     "GuestDirectory" => {
       model: Account,
       collections: []

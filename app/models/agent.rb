@@ -172,6 +172,9 @@ class Agent < ApplicationRecord
   def refresh_integration_presentation
     account_ids = [ account_id, account_id_before_last_save ].compact.uniq
     if destroyed? || (saved_changes.keys & %w[id account_id name active github_resident_import_id]).any?
+      if destroyed? || (saved_changes.keys & %w[id account_id name active]).any?
+        HomeResidentRoster.refresh!(destroyed? ? [ account_id ] : account_ids)
+      end
       ActiveRecord.after_all_transactions_commit do
         IntegrationStatus.refresh!(account_ids)
       end

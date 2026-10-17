@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-17
+  title: Open costs pages follow resident and usage changes
+  body: "Costs pages now discover new home residents and refresh completed or corrected usage without manual navigation. Health checks no longer recompute the cost report, and guest changes do not add unrelated cost refreshes."
 - date: 2026-10-16
   title: A voice note isn't lost to an update mid-recording
   body: "If the site was updated while you were recording a voice note, the next background refresh could reload the page and throw the recording away. Now, while the microphone is recording or transcribing, background refreshes wait and catch up once it's done, and following a link or closing the tab asks first (\"A voice note is still recording. Leaving this page will discard it.\"). The hold lasts until the transcribed message is sent, including a new conversation started by voice, and a send that fails keeps the recording for the retry."
