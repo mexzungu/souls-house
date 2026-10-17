@@ -13,10 +13,11 @@
   let refreshGeneration = 0;
   let cancelRefresh;
   let controller;
+  let exportUrl = $derived(portability?.export_url);
 
   $effect(() => {
     // A preserved component can move to another resident without unmounting.
-    portability?.export_url;
+    exportUrl;
     invalidateRefresh();
   });
 

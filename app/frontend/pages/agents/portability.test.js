@@ -259,4 +259,28 @@ describe('explicit portability lifecycle actions', () => {
     unmount();
     expect(cancelNext).toHaveBeenCalledOnce();
   });
+
+  test.each(['same object', 'replacement object'])(
+    'same-resident parent refresh with %s preserves a pending explicit status refresh',
+    async (update) => {
+      const { rerender } = render(EditResident, { ...editProps, active_tab: 'portability' });
+      await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+      const refresh = router.reload.mock.calls[0][0];
+      const cancel = vi.fn();
+      refresh.onCancelToken({ cancel });
+
+      // A broad Agent health refresh updates the parent, not the resident identity.
+      await rerender({
+        ...editProps,
+        agent: { ...editProps.agent, active: true },
+        portability: update === 'same object' ? portability : { ...portability },
+      });
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Refreshing status…' })).toBeDisabled();
+      expect(router.reload).toHaveBeenCalledTimes(1);
+      refresh.onFinish();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeEnabled());
+    }
+  );
 });
