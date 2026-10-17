@@ -8,6 +8,36 @@ module TestSupport
 
     PASSWORD = "password123"
 
+    # Local records only; no resident runtime or provider is contacted.
+    def account_cost_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "create"
+        agent = create_agent!(account, "Live cost resident", "teal")
+        return render json: { id: agent.to_param }
+      end
+      agent = account.agents.find_by!(name: "Live cost resident")
+      case params.fetch(:operation)
+      when "finish"
+        agent.agent_runtime_interactions.create!(trigger_kind: "wake", started_at: Time.current).record_result!(
+          status: 200, body: { "status" => "ok", "telemetry" => {
+            "schema_version" => 1, "runtime" => { "provider" => "openai", "model" => "gpt-6-astra" },
+            "usage" => { "scope" => "trigger", "complete" => true,
+              "uncached_input_tokens" => 1_000_000, "cache_creation_input_tokens" => 0,
+              "cache_read_input_tokens" => 1_000_000, "output_tokens" => 1_000_000 }
+          } }
+        )
+      when "correct_usage"
+        agent.agent_runtime_interactions.last.update!(uncached_input_tokens: 2_000_000)
+      when "health"
+        agent.update!(last_health_check_at: Time.current, health_state: "healthy")
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
     def guest_directory_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")

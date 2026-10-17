@@ -9,10 +9,14 @@
   // account lanes may recompute the report; roster catch-up discovers new homes.
   const updateCostsSync = createDynamicSync();
   $effect(() => {
-    updateCostsSync(account?.id ? {
-      [`HomeResidentRoster:${account.id}`]: ['agents', 'cost_report'],
-      [`AccountCostActivity:${account.id}`]: ['cost_report'],
-    } : {});
+    updateCostsSync(
+      account?.id
+        ? {
+            [`HomeResidentRoster:${account.id}`]: ['agents', 'cost_report'],
+            [`AccountCostActivity:${account.id}`]: ['cost_report'],
+          }
+        : {}
+    );
   });
 
   function dollars(value) {
