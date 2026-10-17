@@ -69,8 +69,11 @@ test('connector chat counts follow real events and reconnect without replacing d
     await resident.goto(`${base}/residents/${setup.agents[0].id}/edit`);
     await resident.getByLabel('Display name', { exact: true }).fill('Unsubmitted count-refresh draft');
     for (const reader of readers) await expect.poll(() => reader.confirmations).toBe(1);
+    // All page/nav subscriptions do an initial catch-up. Let that shared
+    // debounce finish before checking the count marker's narrower prop set.
+    await Promise.all([page, resident, draftView].map((view) => view.waitForLoadState('networkidle')));
 
-    const assertCounts = async (synced, total) => {
+    const assertCounts = async (synced, total, reconnected = false) => {
       await expect(row.getByTestId('telegram-status')).toContainText(`${synced} of ${total} chats synced`);
       await expect
         .poll(() => {
@@ -90,11 +93,21 @@ test('connector chat counts follow real events and reconnect without replacing d
       await expect(draftView.getByRole('radio', { name: /The whole account/ })).toBeChecked();
       await expect(row.getByRole('button', { name: 'Hide details for Connector counts', exact: true })).toBeVisible();
       await expect(resident.getByLabel('Display name', { exact: true })).toHaveValue('Unsubmitted count-refresh draft');
-      expect(readers[0].reloads.at(-1).partial.split(',').sort()).toEqual([
-        'can_manage_account',
-        'connections',
-        'services',
-      ]);
+      const accountProps = ['can_manage_account', 'connections', 'services'];
+      // Closing the socket reconnects every navbar/page stream, not just
+      // IntegrationStatus. Their intentional catch-ups share one debounce.
+      if (reconnected)
+        accountProps.push(
+          'account',
+          'accounts',
+          'current_room',
+          'expired_subscriptions',
+          'is_account_admin',
+          'reply_attention',
+          'room_activity',
+          'rooms'
+        );
+      expect(readers[0].reloads.at(-1).partial.split(',').sort()).toEqual(accountProps.sort());
       expect(readers[1].reloads.at(-1).partial).toBe('service_connections');
       expect(readers[1].confirmations).toBe(1);
       expect(readers[2].confirmations).toBe(1);
@@ -131,7 +144,7 @@ test('connector chat counts follow real events and reconnect without replacing d
     await expect(row.getByTestId('telegram-status')).toContainText('0 of 0 chats synced');
     readers[0].cable.close({ code: 1012, reason: 'Synthetic missed-count reconnect' });
     await expect.poll(() => readers[0].confirmations, { timeout: 20_000 }).toBe(2);
-    await assertCounts(1, 1);
+    await assertCounts(1, 1, true);
     readers[0].drop = false;
     for (const reader of readers) {
       expect(reader.markers.length).toBeGreaterThanOrEqual(4);
