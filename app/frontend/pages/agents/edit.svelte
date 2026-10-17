@@ -68,7 +68,6 @@
       'interactions',
       'interactions_pagination',
       'cost_report',
-      'portability',
     ],
   });
 

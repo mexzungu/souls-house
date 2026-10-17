@@ -8,6 +8,36 @@ module TestSupport
 
     PASSWORD = "password123"
 
+    # Local records only; no resident runtime or provider is contacted.
+    def account_cost_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "create"
+        agent = create_agent!(account, "Live cost resident", "teal")
+        return render json: { id: agent.to_param }
+      end
+      agent = account.agents.find_by!(name: "Live cost resident")
+      case params.fetch(:operation)
+      when "finish"
+        agent.agent_runtime_interactions.create!(trigger_kind: "wake", started_at: Time.current).record_result!(
+          status: 200, body: { "status" => "ok", "telemetry" => {
+            "schema_version" => 1, "runtime" => { "provider" => "openai", "model" => "gpt-6-astra" },
+            "usage" => { "scope" => "trigger", "complete" => true,
+              "uncached_input_tokens" => 1_000_000, "cache_creation_input_tokens" => 0,
+              "cache_read_input_tokens" => 1_000_000, "output_tokens" => 1_000_000 }
+          } }
+        )
+      when "correct_usage"
+        agent.agent_runtime_interactions.last.update!(uncached_input_tokens: 2_000_000)
+      when "health"
+        agent.update!(last_health_check_at: Time.current, health_state: "healthy")
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
     def guest_directory_fixture
       account = Account.find(params.fetch(:account_id))
       raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
@@ -30,6 +60,14 @@ module TestSupport
         account.guest_memberships.find_by!(agent: visitor).destroy!
       when "delete"
         visitor.destroy!
+      when "candidate_arrive"
+        create_agent!(home, "New candidate", "blue")
+      when "candidate_offline"
+        home.agents.find_by!(name: "New candidate").update!(active: false)
+      when "candidate_return"
+        home.agents.find_by!(name: "New candidate").update!(active: true)
+      when "candidate_bookkeeping"
+        home.agents.find_by!(name: "New candidate").touch
       else
         return head :unprocessable_entity
       end
@@ -298,6 +336,47 @@ module TestSupport
         recording.update_columns(status: "failed", failure_reason: "The transcriber couldn't read this file.")
       end
       render json: { recording_param: recording.to_param }
+    end
+
+    # Synthetic stored state only: no enrolment service, vendor, recognition
+    # gate overrides or inferred consent. Normal callbacks provide the hints.
+    def field_voice_lifecycle_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      recording = account.field_recordings.find(params.fetch(:recording_param))
+      speaker = recording.speakers.order(:position).first!
+      if params[:operation] == "setup"
+        voice = account.field_voices.create!(name: "Synthetic lifecycle voice")
+        speaker.name_as!(voice, by: account.users.first!)
+        return head :ok
+      end
+
+      voice = account.field_voices.kept.find_by!(name: "Synthetic lifecycle voice")
+      raise ActiveRecord::RecordNotFound unless speaker.field_voice_id == voice.id
+
+      case params.fetch(:operation)
+      when "remember"
+        voice.with_lock do
+          generation = voice.print_generation + 1
+          voice.update_columns(print_generation: generation)
+          FieldVoiceprint.create!(account:, field_voice: voice, generation:,
+            print: "synthetic-not-a-biometric-print", sample_ms: 12_000,
+            consented_by: account.users.first!, consented_at: Time.current,
+            consent_text_version: FieldVoiceprints::CONSENT_TEXT_VERSION)
+        end
+      when "metadata"
+        voice.voiceprint.update!(sample_ms: 21_000)
+      when "preview"
+        FieldVoiceEnrolment.create!(account:, field_voice: voice, field_recording_speaker: speaker,
+          start_generation: voice.print_generation, decision_generation: speaker.decision_generation,
+          sample_ms: 12_000, consent_text_version: FieldVoiceprints::CONSENT_TEXT_VERSION,
+          expires_at: 1.hour.from_now,
+          sample: { io: file_fixture_audio, filename: "synthetic-sample.mp3", content_type: "audio/mpeg" })
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
     end
 
     def stone_fixture

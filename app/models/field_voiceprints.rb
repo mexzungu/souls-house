@@ -29,18 +29,24 @@ module FieldVoiceprints
     days.match?(/\A\d+\z/) ? days.to_i : nil
   end
 
-  # Forget every print in an account. Never gated.
+  # Forget every print in an account. Never gated. Keep one lock/transaction
+  # per voice; presentation coalescing must not broaden these locks.
   def forget_all!(account)
     account.field_voices.find_each(&:forget!)
   end
 
-  # The restore reset (lib/tasks/field.rake). Never gated.
+  # The restore reset (lib/tasks/field.rake). Never gated. Operator-only:
+  # readers refresh/reconnect after restore, rather than cross-account live
+  # fan-out. delete_all deliberately skips print presentation callbacks too.
   def reset_all!
     counts = { prints: FieldVoiceprint.count, enrolments: FieldVoiceEnrolment.count,
                recognitions: FieldRecordingSpeaker.where.not(recognised_voice_id: nil).count, voices: FieldVoice.count }
     FieldVoice.update_all("print_generation = print_generation + 1")
     FieldVoiceprint.delete_all
-    FieldVoiceEnrolment.find_each(&:destroy!)
+    FieldVoiceEnrolment.find_each do |enrolment|
+      enrolment.skip_broadcast = true
+      enrolment.destroy!
+    end
     FieldRecordingSpeaker.where.not(recognised_voice_id: nil)
       .update_all(recognised_voice_id: nil, recognition_confidence: nil, recognition_print_generation: nil)
     counts

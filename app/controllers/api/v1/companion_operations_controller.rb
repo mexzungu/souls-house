@@ -38,7 +38,7 @@ module Api
         return head :unsupported_media_type unless request.media_type == "application/octet-stream"
         return head :content_too_large if request.content_length.to_i > CompanionOperation::MAX_BODY
 
-        data = request.body.read(CompanionOperation::MAX_BODY + 1)
+        data = request.body.read(CompanionOperation::MAX_BODY + 1) || "".b
         return head :content_too_large if data.bytesize > CompanionOperation::MAX_BODY
 
         operation = find_operation

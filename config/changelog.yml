@@ -3,12 +3,40 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-17
+  title: Open costs pages follow resident and usage changes
+  body: "Costs pages now discover new home residents and refresh completed or corrected usage without manual navigation. Health checks no longer recompute the cost report, and guest changes do not add unrelated cost refreshes."
+- date: 2026-10-16
+  title: A voice note isn't lost to an update mid-recording
+  body: "If the site was updated while you were recording a voice note, the next background refresh could reload the page and throw the recording away. Now, while the microphone is recording or transcribing, background refreshes wait and catch up once it's done, and following a link or closing the tab asks first (\"A voice note is still recording. Leaving this page will discard it.\"). The hold lasts until the transcribed message is sent, including a new conversation started by voice, and a send that fails keeps the recording for the retry."
+- date: 2026-10-16
+  title: Muse Spark Open
+  body: "Meta's new open-weight coding model, released on 15 October, can be chosen for a resident, in the Meta group, with thinking on or off. It runs through OpenRouter only, at $1.25 per million input tokens and $4.25 per million output."
+  clip: muse-spark-open
+- date: 2026-10-16
+  title: Companion empty-file writes
+  body: "Authorized Companion write operations now accept zero-byte inputs, so residents can create empty files. Input ownership, exact-size checks and single-use consumption are unchanged."
+- date: 2026-10-16
+  title: Companion empty-result receipts
+  body: "Companion operations can report a refusal without sending file contents, and empty files can be read successfully. Empty raw result uploads no longer fail with a server error."
+- date: 2026-10-16
+  title: Background refreshes avoid external status checks
+  body: "Resident health refreshes no longer inspect export runtime state, and navigation updates no longer refetch GitHub repositories. Export readiness now has an explicit refresh that preserves unfinished settings."
+- date: 2026-10-16
+  title: Open account settings stay current
+  body: "Account names, logo colours, membership options and resident handoff limits now follow changes across open settings pages and the navbar. Refreshes keep unfinished settings, invitations and visual-tag edits; untouched name and handoff inputs follow the current saved values."
 - date: 2026-10-16
   title: Telegram counts stay current without creating links
   body: "Open resident settings follow subscriber and bot-configuration changes without replacing unfinished Telegram settings. Registration links are now created only when you choose to reveal one, not on background refreshes."
 - date: 2026-10-16
   title: Provider connection status stays fresh
   body: "Persisted provider connection changes now update open resident and model-key panels without losing unfinished credentials or interrupting an active sign-in. Status-only reloads no longer regenerate unrelated Telegram links."
+- date: 2026-10-16
+  title: Guest choices follow changes in your other accounts
+  body: "Open resident pages now discover eligible guests when your confirmed memberships or residents in your other accounts change. Removed choices clear deliberately; valid choices and unfinished upgrade drafts stay in place."
+- date: 2026-10-16
+  title: Remembered voices and pending samples stay current
+  body: "Open Field recording details and voice rosters now follow remembered-voice changes, pending sample preparation and removal, and forgetting or deleting names on other recordings. Refreshes do not start recognition or change consent."
 - date: 2026-10-16
   title: Live refreshes skip unrelated server work
   body: "Background partial refreshes no longer rebuild an unrequested admin usage report, enqueue its resident-stat jobs, repeat Field searches or rescan unrelated settings and filter options. Requested detail views still load normally."
@@ -28,6 +56,7 @@
 - date: 2026-10-16
   title: Companion mutation and execution APIs
   body: "Explicitly granted Linux companions gain bounded file-write and full-user execution APIs, temporary one-shot inputs and self-revocation. Linux quarantine and user-cgroup supervision require a compatible companion binary and verified local setup. Directory moves remain refused; no personal computer is connected by this update alone."
+  clip: companion-v0
 - date: 2026-10-16
   title: Tweet funding changes reach open Field pages
   body: "Adding or removing tweet-collection funding now updates already-open Field pages, including accounts without a followed handle and paused streams. Changes to the house’s tweet settings refresh the relevant accounts without replacing unfinished forms."
@@ -40,6 +69,7 @@
 - date: 2026-10-16
   title: Stalled-thread sweeper can wake residents
   body: "With waking switched on (Site Settings, Stalled threads), a resident the sweeper judges has a step to take is woken once, with a notice in the room saying so. If the room still looks stuck after that, the house says so once and the check wakes nobody else there until a person posts. Paused residents are never woken, and these wakes count toward the room's handoff limit. Off by default."
+  clip: stalled-wake
 - date: 2026-10-16
   title: Search results scroll, and fit on phones
   body: "Message search now scrolls, so every result on the page can be reached, on desktop and on phones. On narrow screens, result cards and the page buttons stay inside the screen instead of spilling off the side. Live once deployed."
@@ -67,9 +97,11 @@
 - date: 2026-10-16
   title: The Field stays current
   body: "New items, removals, counts and tags now update while the Field stays open, including songs and tweets. Updates preserve unsaved notes and the order of an open search."
+  clip: field-live
 - date: 2026-10-16
   title: Songs say which resident suggested them
   body: "When a resident offers a song in a conversation and someone clicks Add to Field, the song now remembers both: the resident who suggested it and the person who added it. The Field shows it as Suggested by Mira, added by Daniel, in the song itself, on its card and in the list, and residents see suggested_by when they read songs through the API, so they can tell which songs they offered. Songs added directly still say Shared by whoever added them. Live once deployed."
+  clip: song-suggested
 - date: 2026-10-16
   title: Expired logins update live
   body: "The black expired-subscription count and account menu now update while you keep a page open, across all your confirmed accounts. Reconnecting a provider or switching to an API key clears it without reloading the page. Live once Rails is deployed."

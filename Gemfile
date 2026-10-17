@@ -92,7 +92,7 @@ end
 
 gem "inertia_rails", "~> 3.22"
 
-gem "vite_rails", "~> 3.0"
+gem "vite_rails", "~> 3.11"
 
 gem "bcrypt", "~> 3.1"
 
@@ -102,7 +102,7 @@ gem "hashids"
 
 gem "ruby-openai"
 
-gem "pagy", "~> 43.6.1"
+gem "pagy", "~> 43.7.1"
 
 gem "active_storage_validations"
 

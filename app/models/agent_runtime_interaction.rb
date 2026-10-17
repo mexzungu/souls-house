@@ -8,6 +8,11 @@ class AgentRuntimeInteraction < ApplicationRecord
   LOCAL_USAGE_SCOPES = %w[invocation trigger].freeze
   RUNTIME_OUTPUT_CAPTURE_LIMIT = 4_000
   ACTIVE_WINDOW = 12.minutes
+  COST_ACTIVITY_FIELDS = %w[
+    finished_at telemetry_schema_version usage_scope input_tokens uncached_input_tokens
+    cache_creation_input_tokens cache_read_input_tokens cached_input_tokens
+    output_tokens reasoning_output_tokens provider_request_count usage_complete
+  ].freeze
 
   belongs_to :agent
   belongs_to :chat, optional: true
@@ -22,6 +27,9 @@ class AgentRuntimeInteraction < ApplicationRecord
     saved_changes.keys.intersect?(%w[id execution_state agent_id message_dispatch_id])
   }
   after_destroy :broadcast_rhythm_activity_after_commit
+  after_save :refresh_account_cost_activity, if: -> {
+    saved_changes.keys.intersect?(COST_ACTIVITY_FIELDS)
+  }
   after_update_commit :enqueue_follow_through_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
   after_update_commit :enqueue_pending_wake_release, if: -> { saved_change_to_finished_at? && finished_at.present? && trigger_kind == "conversation" }
   after_update_commit :enqueue_oom_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
@@ -34,6 +42,12 @@ class AgentRuntimeInteraction < ApplicationRecord
   validates :trigger_kind, presence: true
   validates :started_at, presence: true
   validates :provider_auth_mode, inclusion: { in: Agent::PROVIDER_AUTH_MODES }
+
+  def refresh_account_cost_activity
+    # Read the persisted home, not a stale association or a guest conversation.
+    AccountCostActivity.refresh!(Agent.where(id: agent_id).pluck(:account_id))
+  end
+  private :refresh_account_cost_activity
 
   scope :recent, -> { order(created_at: :desc) }
   scope :timeline_order, -> { order(Arel.sql("COALESCE(finished_at, started_at, created_at) ASC"), :id) }
