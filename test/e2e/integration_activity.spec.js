@@ -42,7 +42,11 @@ test('connector chat counts follow real events and reconnect without replacing d
       });
       view.on('response', async (result) => {
         const partial = result.request().headers()['x-inertia-partial-data'];
-        if (partial?.split(',').some((key) => ['connections', 'service_connections'].includes(key))) {
+        if (
+          result.ok() &&
+          result.headers()['content-type']?.includes('application/json') &&
+          partial?.split(',').some((key) => ['connections', 'service_connections'].includes(key))
+        ) {
           state.reloads.push({ partial, body: await result.json() });
         }
       });
@@ -71,6 +75,17 @@ test('connector chat counts follow real events and reconnect without replacing d
     for (const reader of readers) await expect.poll(() => reader.confirmations).toBe(1);
     // All page/nav subscriptions do an initial catch-up. Let that shared
     // debounce finish before checking the count marker's narrower prop set.
+    // networkidle alone can precede the subscription's debounced request.
+    for (const [index, prop] of ['connections', 'service_connections', 'connections'].entries()) {
+      await expect
+        .poll(() => {
+          const comms = readers[index].reloads
+            .at(-1)
+            ?.body.props[prop]?.find((connection) => connection.label === 'Connector counts')?.comms;
+          return comms && [comms.synced_chats, comms.chats];
+        })
+        .toEqual([0, 0]);
+    }
     await Promise.all([page, resident, draftView].map((view) => view.waitForLoadState('networkidle')));
 
     const assertCounts = async (synced, total, reconnected = false) => {
