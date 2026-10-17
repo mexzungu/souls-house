@@ -32,7 +32,21 @@
   let open = $state(false);
   let agreed = $state(false);
   let busy = $state(false);
+  let refreshing = $state(false);
   let error = $state('');
+
+  // Expiry is clock-derived, not a live event. Ask only for the server's
+  // current speaker presentation; leave the recording and its drafts alone.
+  function refreshPreview() {
+    if (refreshing) return;
+    refreshing = true;
+    router.reload({
+      only: ['speakers'],
+      preserveState: true,
+      preserveScroll: true,
+      onFinish: () => (refreshing = false),
+    });
+  }
 
   // Unticked every time it opens.
   $effect(() => {
@@ -89,6 +103,12 @@
     <p>This is what will be remembered as {isMe ? 'you' : name}.</p>
     <audio src={pending.sample_url} controls preload="metadata" class="w-full h-9"></audio>
     <p class="text-xs text-muted-foreground">{sampleSeconds} s of clear speech</p>
+    <p class="text-xs text-muted-foreground">
+      Preview snapshot: it may have expired since this page last updated. Refresh to check its current availability.
+    </p>
+    <Button size="sm" variant="ghost" disabled={busy || refreshing} onclick={refreshPreview}>
+      {refreshing ? 'Refreshing preview…' : 'Refresh preview'}
+    </Button>
     <div class="flex gap-1">
       <Button size="sm" variant="outline" disabled={busy} onclick={useIt}>Use it</Button>
       <Button size="sm" variant="ghost" disabled={busy} onclick={notThem}>Not them</Button>

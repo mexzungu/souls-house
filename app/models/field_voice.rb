@@ -79,6 +79,10 @@ class FieldVoice < ApplicationRecord
   # before the voice is discarded, and each is re-rendered.
   def delete_identity!
     account.with_lock do
+      # Snapshot every bulk-cleared association before forget removes guesses.
+      affected_recording_ids = FieldRecordingSpeaker.where(field_voice_id: id)
+        .or(FieldRecordingSpeaker.where(suggested_voice_id: id))
+        .or(FieldRecordingSpeaker.where(recognised_voice_id: id)).distinct.pluck(:field_recording_id)
       recordings = FieldRecording.where(id: speakers.select(:field_recording_id)).order(:id).lock.to_a
       lock!
       forget_locked!
@@ -88,18 +92,21 @@ class FieldVoice < ApplicationRecord
         suggestion_quote: nil, suggestion_quote_ms: nil, suggestion_source: nil, suggested_at: nil)
       discard!
       recordings.each { |recording| recording.update!(transcript_text: recording.render_transcript_text) if recording.ready? }
+      FieldRecordingActivity.refresh!(affected_recording_ids)
     end
   end
 
   private
 
   def forget_locked!
+    recognised_recording_ids = FieldRecordingSpeaker.where(recognised_voice_id: id).distinct.pluck(:field_recording_id)
     update_columns(print_generation: print_generation + 1, updated_at: Time.current)
     FieldVoiceprint.where(field_voice_id: id).destroy_all
     FieldVoiceEnrolment.where(field_voice_id: id).find_each(&:destroy!)
     FieldRecordingSpeaker.where(recognised_voice_id: id)
       .update_all(recognised_voice_id: nil, recognition_confidence: nil, recognition_print_generation: nil,
         recognition_decision_generation: nil)
+    FieldRecordingActivity.refresh!(recognised_recording_ids)
   end
 
   def name_unique_among_kept

@@ -1,5 +1,191 @@
 import { expect, test } from '@playwright/test';
 
+// Observe/drop actual server frames, never manufacture refreshes or page props.
+async function observeLifecycle(page) {
+  const state = { socket: null, drop: false, frames: [], dropped: [], confirmations: [], reloads: [] };
+  await page.routeWebSocket('**/cable', (socket) => {
+    state.socket = socket;
+    socket.connectToServer().onMessage((raw) => {
+      const message = JSON.parse(raw);
+      const model = message.identifier && JSON.parse(message.identifier).model;
+      if (message.type === 'confirm_subscription') state.confirmations.push(model);
+      if (message.message && ['FieldVoiceActivity', 'FieldRecording'].includes(model)) {
+        state.frames.push({ model, payload: message.message });
+      }
+      if (state.drop && message.message) {
+        state.dropped.push(model);
+      } else {
+        socket.send(raw);
+      }
+    });
+  });
+  page.on('request', (req) => {
+    const props = req.headers()['x-inertia-partial-data'];
+    if (props) state.reloads.push(props.split(','));
+  });
+  return state;
+}
+
+async function loginLifecycle(page, setup) {
+  await page.goto('/login');
+  await page.getByLabel(/email/i).fill(setup.primary_user.email);
+  await page.getByLabel(/password/i).fill(setup.password);
+  await page.getByRole('button', { name: /log in/i }).click();
+  await expect(page).toHaveURL(/\/$/);
+}
+
+test('remembered lifecycle and missed socket events preserve roster and recording drafts', async ({
+  page,
+  browser,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const runId = `voice-lifecycle-${Date.now()}`;
+  const setupResponse = await request.post('/test/e2e/setup', { data: { run_id: runId } });
+  expect(setupResponse.ok()).toBe(true);
+  const setup = await setupResponse.json();
+  let editorContext;
+  let detail;
+  try {
+    const recordingResponse = await request.post('/test/e2e/field_recording_fixture', {
+      data: { account_id: setup.account_id, title: 'Synthetic lifecycle recording', speakers_ready: true },
+    });
+    expect(recordingResponse.ok()).toBe(true);
+    const fixture = await recordingResponse.json();
+    const produce = async (operation) => {
+      const response = await request.post('/test/e2e/field_voice_lifecycle_fixture', {
+        data: { account_id: setup.account_id, recording_param: fixture.recording_param, operation },
+      });
+      expect(response.ok()).toBe(true);
+    };
+    await produce('setup');
+    const base = `/accounts/${setup.account_param}/field`;
+    const rosterSocket = await observeLifecycle(page);
+    await loginLifecycle(page, setup);
+    await page.goto(`${base}/voices`);
+    await expect.poll(() => rosterSocket.confirmations).toContain('FieldVoiceActivity');
+    const row = page.getByTestId('voice-row');
+    await expect(row).toContainText('Name only');
+    await row.getByRole('button', { name: 'Rename', exact: true }).click();
+    const rename = page.getByRole('textbox', { name: 'Name', exact: true });
+    await rename.fill('Unfinished lifecycle rename');
+
+    detail = await page.context().newPage();
+    const detailSocket = await observeLifecycle(detail);
+    await detail.goto(`${base}/recordings/${fixture.recording_param}`);
+    const initialProps = JSON.parse(await detail.locator('#app').getAttribute('data-page')).props;
+    expect(initialProps.recognition_enabled).toBe(false);
+    await expect.poll(() => detailSocket.confirmations).toContain('FieldRecording');
+    await expect.poll(() => detailSocket.confirmations).toContain('FieldVoiceActivity');
+    await detail.getByTestId('add-recording-notes').click();
+    const notes = detail.locator('#recording-notes');
+    await notes.fill('Unfinished lifecycle meeting notes');
+    await detail.getByTestId('transcript-line').first().click();
+    const line = detail.getByTestId('line-editor');
+    await line.fill('Unfinished lifecycle transcript correction');
+    const draftsSurvive = async () => {
+      await expect(rename).toHaveValue('Unfinished lifecycle rename');
+      await expect(notes).toHaveValue('Unfinished lifecycle meeting notes');
+      await expect(line).toHaveValue('Unfinished lifecycle transcript correction');
+    };
+
+    // A separately authenticated, already-open browser context performs forget.
+    editorContext = await browser.newContext();
+    const editor = await editorContext.newPage();
+    await loginLifecycle(editor, setup);
+    await editor.goto(`${base}/voices`);
+    await expect(editor.getByTestId('voice-row')).toContainText('Name only');
+    await page.waitForLoadState('networkidle');
+    await detail.waitForLoadState('networkidle');
+    rosterSocket.reloads.length = 0;
+    detailSocket.reloads.length = 0;
+    const confirmations = [rosterSocket.confirmations.length, detailSocket.confirmations.length];
+
+    const detailRefresh = () =>
+      detail.waitForResponse((response) =>
+        (response.request().headers()['x-inertia-partial-data'] || '').split(',').includes('speakers')
+      );
+    let refreshed = detailRefresh();
+    await produce('remember');
+    expect((await refreshed).ok()).toBe(true);
+    await expect(row).toContainText('Voice remembered (12 s sample');
+    await expect(editor.getByTestId('voice-forget')).toBeVisible();
+    await draftsSurvive();
+    await page.waitForLoadState('networkidle');
+    await detail.waitForLoadState('networkidle');
+    expect(rosterSocket.reloads).toHaveLength(1);
+    expect(rosterSocket.reloads[0].sort()).toEqual(['voices', 'recognise_voices', 'can_change_setting'].sort());
+    expect(detailSocket.reloads).toHaveLength(1);
+    expect(detailSocket.reloads[0].sort()).toEqual(
+      ['recording', 'speakers', 'voices', 'members_without_voice', 'my_voice_id', 'recognition_enabled'].sort()
+    );
+
+    refreshed = detailRefresh();
+    await produce('metadata');
+    expect((await refreshed).ok()).toBe(true);
+    await expect(row).toContainText('Voice remembered (21 s sample');
+    await draftsSurvive();
+
+    // Pending state uses normal fixture storage/callbacks, but the unconfigured
+    // house gate must still redact it. This is NOT browser proof of preview UI.
+    refreshed = detailRefresh();
+    await produce('preview');
+    const props = (await (await refreshed).json()).props;
+    expect(props.speakers.every((speaker) => speaker.pending_enrolment === null)).toBe(true);
+    await expect(detail.getByTestId('voice-preview')).toHaveCount(0);
+    await draftsSurvive();
+
+    refreshed = detailRefresh();
+    editor.once('dialog', (dialog) => dialog.accept());
+    await editor.getByTestId('voice-forget').click();
+    expect((await refreshed).ok()).toBe(true);
+    await expect(row).toContainText('Name only');
+    await expect(editor.getByTestId('voice-forget')).toHaveCount(0);
+    await expect(detail.getByTestId('speaker-card').first()).toContainText('Synthetic lifecycle voice');
+    await draftsSurvive();
+    await page.waitForLoadState('networkidle');
+    await detail.waitForLoadState('networkidle');
+    // Prop refreshes have not churned the dynamic subscriptions.
+    expect([rosterSocket.confirmations.length, detailSocket.confirmations.length]).toEqual(confirmations);
+
+    // Lose the only print-created event on BOTH readers, then reconnect with
+    // no further write. Assert loss before closing so this cannot pass by luck.
+    rosterSocket.drop = detailSocket.drop = true;
+    const beforeReconnect = [rosterSocket.reloads.length, detailSocket.reloads.length];
+    await produce('remember');
+    await expect.poll(() => rosterSocket.dropped).toContain('FieldVoiceActivity');
+    await expect.poll(() => detailSocket.dropped).toContain('FieldRecording');
+    await expect(editor.getByTestId('voice-forget')).toBeVisible();
+    await expect(row).toContainText('Name only');
+    expect([rosterSocket.reloads.length, detailSocket.reloads.length]).toEqual(beforeReconnect);
+    rosterSocket.drop = detailSocket.drop = false;
+    refreshed = detailRefresh();
+    rosterSocket.socket.close({ code: 1012, reason: 'Synthetic lifecycle reconnect' });
+    detailSocket.socket.close({ code: 1012, reason: 'Synthetic lifecycle reconnect' });
+    expect((await refreshed).ok()).toBe(true);
+    await expect(row).toContainText('Voice remembered (12 s sample', { timeout: 20_000 });
+    await expect.poll(() => rosterSocket.confirmations.length).toBeGreaterThan(confirmations[0]);
+    await expect.poll(() => detailSocket.confirmations.length).toBeGreaterThan(confirmations[1]);
+    await draftsSurvive();
+    await page.waitForLoadState('networkidle');
+    await detail.waitForLoadState('networkidle');
+    expect(rosterSocket.reloads.length - beforeReconnect[0]).toBe(1);
+    expect(detailSocket.reloads.length - beforeReconnect[1]).toBe(1);
+
+    for (const { model, payload } of [...rosterSocket.frames, ...detailSocket.frames]) {
+      expect(payload).toEqual(
+        model === 'FieldRecording' ? { action: 'refresh', prop: 'field_recording' } : { action: 'refresh' }
+      );
+    }
+    await page.screenshot({ path: testInfo.outputPath('voice-lifecycle-roster-draft.png'), fullPage: true });
+    await detail.screenshot({ path: testInfo.outputPath('voice-lifecycle-recording-drafts.png'), fullPage: true });
+  } finally {
+    await editorContext?.close();
+    await detail?.close();
+    expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
+  }
+});
+
 test('voice roster and open speaker picker catch changes without replacing drafts', async ({
   page,
   request,
@@ -75,9 +261,9 @@ test('voice roster and open speaker picker catch changes without replacing draft
     await expect(renameDraft).toHaveValue('Unfinished roster rename');
     await page.waitForLoadState('networkidle');
     // Existing FieldRecording broadcasts_to :account hints add two layout props.
-    expect([...reloads.at(-1)].sort()).toEqual([
-      'voices', 'recognise_voices', 'can_change_setting', 'accounts', 'expired_subscriptions',
-    ].sort());
+    expect([...reloads.at(-1)].sort()).toEqual(
+      ['voices', 'recognise_voices', 'can_change_setting', 'accounts', 'expired_subscriptions'].sort()
+    );
 
     drop = true;
     await editor.getByRole('button', { name: 'Rename', exact: true }).click();
