@@ -126,6 +126,7 @@ export function subscribeToModel(model, id, props) {
           model === 'ProviderPresentation' ||
           model === 'TelegramPresentation' ||
           model === 'HomeResidentRoster' ||
+          model === 'GlossaryActivity' ||
           model === 'AccountCostActivity' ||
           model === 'FieldRecording'
         ) {

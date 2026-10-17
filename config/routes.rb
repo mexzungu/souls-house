@@ -22,6 +22,7 @@ Rails.application.routes.draw do
         post :tweet_stream_fixture, to: "/test_support/e2e#tweet_stream_fixture"
         post :guest_directory_fixture, to: "/test_support/e2e#guest_directory_fixture"
         post :account_cost_fixture, to: "/test_support/e2e#account_cost_fixture"
+        post :glossary_fixture, to: "/test_support/e2e#glossary_fixture"
         post :provider_presentation_fixture, to: "/test_support/e2e#provider_presentation_fixture"
         post :telegram_presentation_fixture, to: "/test_support/e2e#telegram_presentation_fixture"
         post :room_navigation_fixture, to: "/test_support/e2e#room_navigation_fixture"
