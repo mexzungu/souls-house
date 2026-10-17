@@ -11,7 +11,7 @@
     form,
     agent,
     account,
-    telegramDeepLink = null,
+    telegramConfiguration = null,
     telegramSubscriberCount = 0,
     sendingTestNotification = false,
     registeringWebhook = false,
@@ -20,6 +20,15 @@
     onregisterWebhook,
   } = $props();
   let selectedIntegration = $state(null);
+  const telegramAgent = $derived(
+    telegramConfiguration
+      ? {
+          ...agent,
+          telegram_configured: telegramConfiguration.configured,
+          telegram_bot_username: telegramConfiguration.username,
+        }
+      : agent
+  );
 
   function openTelegram() {
     selectedIntegration = 'telegram';
@@ -60,8 +69,9 @@
 {#if selectedIntegration === 'telegram'}
   <TelegramSettings
     {form}
-    {agent}
-    {telegramDeepLink}
+    agent={telegramAgent}
+    {telegramConfiguration}
+    accountId={account.id}
     {telegramSubscriberCount}
     {sendingTestNotification}
     {registeringWebhook}
@@ -134,7 +144,7 @@
           <div>
             <div class="flex flex-wrap items-center gap-2">
               <h3 class="font-semibold">Telegram</h3>
-              {#if agent.telegram_configured}
+              {#if telegramAgent.telegram_configured}
                 <span
                   class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
                   <CheckCircle size={13} weight="fill" />
@@ -152,12 +162,12 @@
           type="button"
           class={[
             'inline-flex h-9 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors',
-            agent.telegram_configured
+            telegramAgent.telegram_configured
               ? 'border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground'
               : 'bg-primary text-primary-foreground shadow hover:bg-primary/90',
           ]}
           onclick={openTelegram}>
-          {agent.telegram_configured ? 'Settings' : 'Set up'}
+          {telegramAgent.telegram_configured ? 'Settings' : 'Set up'}
         </button>
       </div>
     </div>

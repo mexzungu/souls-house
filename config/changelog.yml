@@ -7,6 +7,9 @@
   title: Integration chat counts stay current
   body: "Open integration views now refresh their chat totals when connector chats arrive, are removed or change sync coverage. Ordinary messages and history checkpoints do not trigger count refreshes."
 - date: 2026-10-17
+  title: Telegram counts stay current without creating links
+  body: "Open resident settings follow subscriber and bot-configuration changes without replacing unfinished Telegram settings. Registration links are now created only when you choose to reveal one, not on background refreshes."
+- date: 2026-10-17
   title: Glossaries stay up to date
   body: "Open glossaries follow shared term changes, home resident names and the site's name without a reload. Unsent words stay in the input while updates arrive."
 - date: 2026-10-17
