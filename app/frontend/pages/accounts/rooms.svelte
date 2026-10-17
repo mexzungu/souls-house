@@ -13,6 +13,15 @@
   let { account, rooms = [], room_counts = {}, main_count = 0, resident_room_id = null, can_manage = false } = $props();
 
   let name = $state('');
+  let editingAccount = account.id;
+  let addRequest = 0;
+  $effect(() => {
+    if (editingAccount !== account.id) {
+      editingAccount = account.id;
+      name = '';
+      addRequest += 1;
+    }
+  });
   const errors = $derived($page.props.errors || {});
   const residentRoom = $derived(resident_room_id || MAIN);
 
@@ -20,16 +29,24 @@
   $effect(() => {
     updateSync({
       [`RoomNavigation:${account.id}`]: ['rooms', 'current_room'],
-      [`Account:${account.id}`]: ['room_counts', 'main_count', 'resident_room_id'],
+      [`Account:${account.id}`]: ['room_counts', 'main_count', 'resident_room_id', 'account', 'can_manage'],
     });
   });
 
   function addRoom(event) {
     event.preventDefault();
+    const identity = account.id;
+    const submitted = name;
+    const request = ++addRequest;
     router.post(
-      `/accounts/${account.id}/rooms`,
-      { room: { name } },
-      { preserveScroll: true, onSuccess: () => (name = '') }
+      `/accounts/${identity}/rooms`,
+      { room: { name: submitted } },
+      {
+        preserveScroll: true,
+        onSuccess: () => {
+          if (account.id === identity && addRequest === request && name === submitted) name = '';
+        },
+      }
     );
   }
 

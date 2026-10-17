@@ -79,9 +79,16 @@ test('persisted provider updates preserve credential and active ceremony drafts'
     await mutate('connect');
     await expect(page.getByText('Connected as remote@example.invalid · Synthetic', { exact: true })).toBeVisible();
     await expect(key).toHaveValue('unfinished-synthetic-key');
-    // Existing Agent broadcasts_to :account hints coalesce two layout props.
+    // Existing Account hints also refresh the navbar's current-account projection.
     expect([...reloads.at(-1)].sort()).toEqual(
-      ['subscription_agents', 'can_manage_ai_credentials', 'accounts', 'expired_subscriptions'].sort()
+      [
+        'subscription_agents',
+        'can_manage_ai_credentials',
+        'accounts',
+        'expired_subscriptions',
+        'account',
+        'is_account_admin',
+      ].sort()
     );
     await page.waitForLoadState('networkidle');
     expect(runtimeReads).toBe(initialRuntimeReads);

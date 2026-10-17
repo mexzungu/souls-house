@@ -45,6 +45,9 @@
       // every confirmed account, not only the account currently being viewed.
       for (const account of $page.props?.accounts || []) {
         subs[`Account:${account.id}`] = ['accounts', 'expired_subscriptions'];
+        if (account.id === $page.props?.account?.id) {
+          subs[`Account:${account.id}`].push('account', 'is_account_admin');
+        }
       }
     }
     updateSubscriptionSync(subs);

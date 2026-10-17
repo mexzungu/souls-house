@@ -48,7 +48,7 @@ class AccountsController < ApplicationController
     {
       account: @account,
       can_be_personal: @account.can_be_personal?,
-      members: account_members_json,
+      members: -> { account_members_json },
       can_manage: @account.manageable_by?(Current.user),
       current_user_id: Current.user.id,
       resident_handoff_cap: @account.resident_handoff_cap

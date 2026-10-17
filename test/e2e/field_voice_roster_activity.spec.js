@@ -260,9 +260,17 @@ test('voice roster and open speaker picker catch changes without replacing draft
     await expect(page.getByTestId('voice-row')).toContainText('named in 2 speakers');
     await expect(renameDraft).toHaveValue('Unfinished roster rename');
     await page.waitForLoadState('networkidle');
-    // Existing FieldRecording broadcasts_to :account hints add two layout props.
+    // FieldRecording account hints include the current navbar account projection.
     expect([...reloads.at(-1)].sort()).toEqual(
-      ['voices', 'recognise_voices', 'can_change_setting', 'accounts', 'expired_subscriptions'].sort()
+      [
+        'voices',
+        'recognise_voices',
+        'can_change_setting',
+        'account',
+        'accounts',
+        'expired_subscriptions',
+        'is_account_admin',
+      ].sort()
     );
 
     drop = true;
