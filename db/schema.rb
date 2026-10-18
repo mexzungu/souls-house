@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_16_123000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_18_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -166,6 +166,19 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_123000) do
     t.index ["chat_agent_id"], name: "index_agent_bookmarks_on_chat_agent_id", unique: true
   end
 
+  create_table "agent_import_stages", force: :cascade do |t|
+    t.bigint "agent_id", null: false
+    t.string "role", null: false
+    t.binary "archive", null: false
+    t.string "sha256", null: false
+    t.bigint "bytes", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["agent_id", "role"], name: "index_agent_import_stages_on_agent_id_and_role", unique: true
+    t.check_constraint "bytes > 0", name: "agent_import_stages_positive_bytes"
+    t.check_constraint "role::text = ANY (ARRAY['identity'::character varying::text, 'repo'::character varying::text, 'work'::character varying::text])", name: "agent_import_stages_role"
+  end
+
   create_table "agent_memories", force: :cascade do |t|
     t.bigint "agent_id", null: false
     t.boolean "constitutional", default: false, null: false
@@ -203,10 +216,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_123000) do
     t.binary "seed_archive"
     t.string "seed_sha256"
     t.datetime "seeded_at"
+    t.string "kind"
     t.index ["agent_id"], name: "index_agent_placements_on_agent_id", unique: true
     t.index ["cleanup_requested_at"], name: "index_agent_placements_on_cleanup_requested_at", where: "(cleanup_requested_at IS NOT NULL)"
     t.index ["provider_server_id"], name: "index_agent_placements_on_provider_server_id", unique: true, where: "(provider_server_id IS NOT NULL)"
     t.check_constraint "generation >= 1", name: "agent_placements_positive_generation"
+    t.check_constraint "kind IS NULL OR (kind::text = ANY (ARRAY['birth'::character varying, 'archive_import'::character varying, 'github_import'::character varying]::text[]))", name: "agent_placements_kind"
     t.check_constraint "provider_server_id > 0", name: "agent_placements_positive_server_id"
   end
 
@@ -2585,6 +2600,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_16_123000) do
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "agent_backup_snapshots", "agents"
   add_foreign_key "agent_bookmarks", "chat_agents", on_delete: :cascade
+  add_foreign_key "agent_import_stages", "agents"
   add_foreign_key "agent_memories", "agents"
   add_foreign_key "agent_placements", "agents"
   add_foreign_key "agent_runtime_attempts", "agent_runtime_interactions"

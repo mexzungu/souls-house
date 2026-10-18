@@ -12,6 +12,9 @@ class Agents::PortabilityController < ApplicationController
     render json: { error: "Resident archive unavailable or invalid. Check v1 limits, stopped state and supported profile." }, status: :unprocessable_entity
   end
 
+  STAGED_REFUSAL = "This resident runs on its own server, and starting it there isn't available yet. " \
+                   "It stays imported, inactive and paused.".freeze
+
   def new
     render inertia: "agents/import", props: {
       account: current_account.as_json,
@@ -59,6 +62,9 @@ class Agents::PortabilityController < ApplicationController
   def activate
     agent = current_account.agents.find(params[:id])
     raise Agents::Portability::Error, "Confirm service and hook trust review before activation" unless params[:confirmed].to_s == "true"
+    # A copy staged for its own server is never started here. Activating it
+    # on its server is the next step of docs/2026-10-10-vm-imports.md.
+    raise Agents::Portability::Error, STAGED_REFUSAL if agent.placement&.staged?
     raise Agents::Portability::Error, "Only stopped inactive native residents can activate here" unless !agent.imported_home? && agent.externally_hosted? && !agent.active? && agent.paused?
     activation_error = nil
     agent.with_lock do
@@ -101,7 +107,12 @@ class Agents::PortabilityController < ApplicationController
     raise Agents::Portability::Error unless params[:confirmed].to_s == "true"
     Agents::Portability::Archive.with_upload(params[:archive]) do |archive|
       agent = Agents::Portability::Import.call(archive, account: current_account, user: Current.user, name: params[:name])
-      redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other, notice: "Separate copy restored inactive and paused. Reconnect and review setup before starting."
+      notice = if agent.placement&.staged?
+        "Separate copy staged inactive and paused for its own server. Nothing is ordered until you activate it. Reconnect and review setup before starting."
+      else
+        "Separate copy restored inactive and paused. Reconnect and review setup before starting."
+      end
+      redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other, notice: notice
     end
   end
 

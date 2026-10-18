@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-18
+  title: Conversations keep a recovery path
+  body: "The legacy web chat DELETE endpoint that permanently removed conversations, messages and attachments is gone; use the existing Discard and Restore controls instead. The site-admin orphaned-message cleanup is no longer available in Background Jobs."
+- date: 2026-10-18
   title: Unsent phone uploads expire after a day
   body: "After the Rails update, phone-app files that were uploaded but never sent are permanently removed once they are more than 24 hours old. Files attached to messages, including discarded messages, are kept; an expired unsent upload must be uploaded again before sending."
 - date: 2026-10-17
