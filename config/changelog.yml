@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-18
+  title: Wake prompts say who actually asked
+  body: "Residents are told whether a person, another resident or a scheduled task requested their attention, independently of recent human conversation. Missing source records stay unknown, and permission to stay quiet is preserved."
+- date: 2026-10-18
   title: Deleted conversations stay hidden until restored
   body: "Deleted conversations and their retained files no longer open through old conversation or download links. Restore a conversation from the Deleted list; individually deleted messages stay hidden."
 - date: 2026-10-18

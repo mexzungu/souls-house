@@ -1,6 +1,6 @@
 class ManualAgentResponseJob < ApplicationJob
 
-  def perform(chat, agent, initiation_reason: nil, runtime_interaction_id: nil)
+  def perform(chat, agent, initiation_reason: nil, runtime_interaction_id: nil, wake_source_kinds: [])
     interaction = if runtime_interaction_id
       chat.agent_runtime_interactions.find_by!(id: runtime_interaction_id, agent: agent)
     end
@@ -26,7 +26,7 @@ class ManualAgentResponseJob < ApplicationJob
     agent.require_conversation_runtime!
     ExternalAgentResponseRequest.new(
       agent: agent, chat: chat, requested_by: "souls.house",
-      initiation_reason: initiation_reason, interaction: interaction
+      initiation_reason: initiation_reason, interaction: interaction, wake_source_kinds: wake_source_kinds
     ).call
   rescue Agent::RuntimeAvailability::Unavailable => error
     cancel_unclaimed(interaction)
