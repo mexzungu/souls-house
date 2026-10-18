@@ -6,6 +6,12 @@
 - date: 2026-10-18
   title: Human API mentions reach residents
   body: "A person's explicit @mention in a multi-resident room now requests a wake through the general API just as it does on web and phone, with per-resident acceptance receipts. If mention dispatch is unavailable, the API refuses the send with 503 without saving the message or clearing its draft."
+- date: 2026-10-18
+  title: Deleted conversations stay hidden until restored
+  body: "Deleted conversations and their retained files no longer open through old conversation or download links. Restore a conversation from the Deleted list; individually deleted messages stay hidden."
+- date: 2026-10-18
+  title: Conversations keep a recovery path
+  body: "The legacy web chat DELETE endpoint that permanently removed conversations, messages and attachments is gone; use the existing Discard and Restore controls instead. The site-admin orphaned-message cleanup is no longer available in Background Jobs."
 - date: 2026-10-17
   title: Integration chat counts stay current
   body: "Open integration views now refresh their chat totals when connector chats arrive, are removed or change sync coverage. Ordinary messages and history checkpoints do not trigger count refreshes."

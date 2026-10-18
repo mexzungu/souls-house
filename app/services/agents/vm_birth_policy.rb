@@ -12,7 +12,10 @@ module Agents
   # needs exists: VM backups (no resident is ready before its first verified
   # backup), configured procurement and room under the cap. Any model a local
   # resident can use runs on a VM too (house inference, account API keys,
-  # subscription logins); imported homes are still refused. The reasons are checked in order, so the one a person sees is
+  # subscription logins). An archive import is not refused here: it is staged
+  # with no server, and admitted when it is activated
+  # (docs/2026-10-10-vm-imports.md). GitHub imports are still refused. The
+  # reasons are checked in order, so the one a person sees is
   # the one they can act on soonest. admit! re-checks under the procurement
   # admission lock and commits the placement in the same transaction, so two
   # births can't both take the last slot.
@@ -46,10 +49,13 @@ module Agents
       @setting.new_residents_on_vm?
     end
 
-    # nil means yes. kind is :birth for a new resident and :import for an
-    # archive or GitHub import. model_id, when given, is the new resident's.
+    # nil means yes. kind is :birth for a new resident, :archive_import for an
+    # archive import (staged now, admitted at Activate, so nothing to refuse
+    # yet) and :import for a GitHub import. model_id, when given, is the new
+    # resident's.
     def refusal(kind: :birth, model_id: nil)
       return nil unless enabled?
+      return nil if kind == :archive_import
       return IMPORT_REFUSAL if kind == :import
       return NOT_AVAILABLE_REFUSAL unless vm_backups_available?
       return NOT_CONFIGURED_REFUSAL unless procurement_configured?
@@ -76,7 +82,7 @@ module Agents
         refuse!(kind: :birth, model_id: agent.model_id)
         agent.uuid ||= SecureRandom.uuid_v7
         agent.save!
-        AgentPlacement.create!(agent:, backend: "hetzner_cloud", state: "pending", admitted_by_setting_at: now,
+        AgentPlacement.create!(agent:, backend: "hetzner_cloud", kind: "birth", state: "pending", admitted_by_setting_at: now,
           birth_deadline_at: now + BIRTH_DEADLINE, birth_requested_by: requested_by)
       end
     end
@@ -90,9 +96,10 @@ module Agents
 
     # Every server that might exist counts until its deletion is confirmed:
     # a VM placement that isn't retired, or any placement with a purchase
-    # whose outcome isn't settled.
+    # whose outcome isn't settled. A staged import has no server and no
+    # purchase, so it holds no slot.
     def vm_count
-      AgentPlacement.where(backend: "hetzner_cloud").where.not(state: "retired")
+      AgentPlacement.where(backend: "hetzner_cloud").where.not(state: %w[retired staged])
         .or(AgentPlacement.where(id: CloudProcurementOperation.unresolved.select(:agent_placement_id)))
         .count
     end

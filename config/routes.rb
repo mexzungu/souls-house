@@ -162,7 +162,7 @@ Rails.application.routes.draw do
       post :retry_activation, on: :member
     end
 
-    resources :chats do
+    resources :chats, except: :destroy do
       get :activity, on: :member
       collection do
         get :search
