@@ -61,6 +61,9 @@ group :development, :test do
 
   # Omakase Ruby styling [https://github.com/rails/rubocop-rails-omakase/]
   gem "rubocop-rails-omakase", require: false
+  # Ruby 4 targets and Prism's consolidated translation parser need these floors.
+  gem "rubocop", ">= 1.82.0", require: false
+  gem "rubocop-ast", ">= 1.49.0", require: false
 
   # For testing email sending
   gem "letter_opener"
