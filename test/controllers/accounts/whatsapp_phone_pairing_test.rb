@@ -1,5 +1,6 @@
 require "test_helper"
 require "support/whatsapp_comms_helpers"
+require "stringio"
 
 # WhatsApp's "Link with phone number instead": the owner gives the number of
 # the phone WhatsApp is on, the connector asks WhatsApp for an 8-character
@@ -36,11 +37,12 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
 
   test "the owner's number goes to the connector as E.164 with the attempt, and is kept nowhere" do
     sent = []
-    log_start = File.size?(Rails.root.join("log/test.log")).to_i
     sign_in @owner
-    CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:, request:, seq:) { sent << [ connection.id, phone, attempt, request, seq ]; {} }) do
-      post phone_account_service_connection_pairing_path(@account, @connection.public_id),
-           params: { phone: PHONE, attempt: 1 }, as: :json
+    log = capture_request_log do
+      CommsConnector.stub(:pair_phone, ->(connection, phone, attempt:, request:, seq:) { sent << [ connection.id, phone, attempt, request, seq ]; {} }) do
+        post phone_account_service_connection_pairing_path(@account, @connection.public_id),
+             params: { phone: PHONE, attempt: 1 }, as: :json
+      end
     end
 
     assert_response :accepted
@@ -54,8 +56,26 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     assert_not_includes @connection.credential_payload.to_s, "7700900123"
     assert AuditLog.exists?(action: "request_service_phone_pairing", auditable: @connection)
     assert_not_includes AuditLog.where(auditable: @connection).to_a.to_json, "7700900123"
-    log = File.binread(Rails.root.join("log/test.log"), nil, log_start).to_s
-    assert_includes log, "pairing/phone", "the request was logged"
+    assert_includes log, phone_account_service_connection_pairing_path(@account, @connection.public_id), "the request was logged"
+    assert_match(/"phone"\s*=>\s*"\[FILTERED\]"/, log, "the request's filtered phone parameter was logged")
+    assert_not_includes log, "7700900123"
+    assert_not_includes log, "7700 900123"
+  end
+
+  test "unrelated log output cannot contaminate the captured pairing request" do
+    sign_in @owner
+    unrelated_logger = Rails.logger
+    log = capture_request_log do
+      CommsConnector.stub(:pair_phone, ->(*) { unrelated_logger.info("unrelated WhatsApp SQL: #{PHONE} #{E164}"); {} }) do
+        post phone_account_service_connection_pairing_path(@account, @connection.public_id),
+             params: { phone: PHONE, attempt: 1 }, as: :json
+      end
+    end
+
+    assert_response :accepted
+    assert_includes log, phone_account_service_connection_pairing_path(@account, @connection.public_id), "the request was logged"
+    assert_match(/"phone"\s*=>\s*"\[FILTERED\]"/, log, "the request's filtered phone parameter was logged")
+    assert_not_includes log, "unrelated WhatsApp SQL"
     assert_not_includes log, "7700900123"
     assert_not_includes log, "7700 900123"
   end
@@ -277,6 +297,20 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
   end
 
   private
+
+  def capture_request_log
+    output = StringIO.new
+    logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(output))
+
+    # Parallel workers share test.log, but not this request's in-memory logger.
+    Rails.stub(:logger, logger) do
+      ActionController::Base.stub(:logger, logger) do
+        ActiveRecord::Base.stub(:logger, logger) { yield }
+      end
+    end
+
+    output.string
+  end
 
   def request_phone!(attempt = 1)
     assert @connection.reload.request_phone_pairing!(attempt)
