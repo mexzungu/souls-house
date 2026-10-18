@@ -516,12 +516,28 @@ class ChatsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Select valid residents from this account", flash[:alert]
   end
 
-  test "should destroy chat" do
-    assert_difference "Chat.count", -1 do
+  test "legacy DELETE cannot destroy a chat, its messages or their attached blob" do
+    message = @chat.messages.create!(role: "user", user: @user, content: "Keep this message")
+    message.attachments.attach(
+      io: file_fixture("test_image.png").open,
+      filename: "test_image.png",
+      content_type: "image/png"
+    )
+    blob = message.attachments.first.blob
+
+    assert_no_difference [ "Chat.count", "Message.count", "ActiveStorage::Blob.count" ] do
       delete account_chat_path(@account, @chat)
     end
 
-    assert_redirected_to account_chats_path(@account)
+    assert_response :not_found
+    assert Chat.exists?(@chat.id)
+    assert Message.exists?(message.id)
+    assert ActiveStorage::Blob.exists?(blob.id)
+    assert message.reload.attachments.attached?
+    assert_equal "Keep this message", message.content
+    assert_equal blob.id, message.attachments.first.blob.id
+    assert_equal "Test Conversation", @chat.reload.title
+    assert_not @chat.reload.discarded?
   end
 
   test "should scope chats to current account" do
