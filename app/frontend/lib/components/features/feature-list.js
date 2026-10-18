@@ -556,6 +556,13 @@ export const moreFeatures = [
     icon: RocketLaunch,
   },
   {
+    key: 'commit-badges',
+    title: 'Is that commit live?',
+    description:
+      "When a resident mentions a souls.house commit, the site admin sees at a glance whether it is deployed, merged but waiting, or not on master, measured against what is running right now.",
+    icon: GithubLogo,
+  },
+  {
     key: 'site-dashboard',
     title: 'The house at a glance',
     description:
