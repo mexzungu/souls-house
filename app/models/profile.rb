@@ -25,6 +25,8 @@ class Profile < ApplicationRecord
   validates :theme, inclusion: { in: %w[light dark system] }, allow_nil: true
   validates :timezone, inclusion: { in: ActiveSupport::TimeZone.all.map(&:name) }, allow_blank: true
   validates :chat_colour, inclusion: { in: VALID_CHAT_COLOURS }, allow_nil: true
+  # One hue tints the whole neutral palette; lightness and intensity are fixed in CSS so no hue can be garish.
+  validates :theme_hue, numericality: { only_integer: true, in: 0..359 }, allow_nil: true
   validates_presence_of :first_name, :last_name, if: -> { user&.confirmed? }
 
   # Avatar validations
@@ -33,10 +35,33 @@ class Profile < ApplicationRecord
 
   # Callbacks
   after_initialize :set_default_theme, if: :new_record?
+  after_save :refresh_connection_owner_name, if: -> {
+    (saved_changes.keys & %w[first_name last_name]).any?
+  }
+  after_destroy :refresh_connection_owner_name
+  after_save :refresh_directory_labels, if: -> {
+    (saved_changes.keys & %w[first_name last_name user_id]).any?
+  }
+  after_destroy :refresh_directory_labels
+
+  def refresh_directory_labels
+    user_ids = [ user_id, user_id_before_last_save ].compact
+    GuestDirectory.refresh_personal_labels!(user_ids)
+    FieldVoiceActivity.refresh_for_users!(user_ids) unless destroyed_by_association&.active_record == User
+  end
+  private :refresh_directory_labels
+
+  def refresh_connection_owner_name
+    owner_id = user_id
+    ActiveRecord.after_all_transactions_commit do
+      IntegrationStatus.refresh!(ServiceConnection.where(connected_by_user_id: owner_id).distinct.pluck(:account_id))
+    end
+  end
+  private :refresh_connection_owner_name
 
   # JSON attributes to include theme preferences
   def preferences
-    { "theme" => theme }.compact
+    { "theme" => theme, "theme_hue" => theme_hue }.compact
   end
 
   def full_name

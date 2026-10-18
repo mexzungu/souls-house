@@ -8,6 +8,8 @@
   import ModerationIndicator from '$lib/components/chat/ModerationIndicator.svelte';
   import AudioPlayer from '$lib/components/chat/AudioPlayer.svelte';
   import MessageTelemetry from '$lib/components/chat/MessageTelemetry.svelte';
+  import HandoffReceipts from '$lib/components/chat/HandoffReceipts.svelte';
+  import SongReferenceParagraph from './SongReferenceParagraph.svelte';
   import { Streamdown } from 'svelte-streamdown';
   import CommitRef from '$lib/components/chat/CommitRef.svelte';
   import { commitRefExtensions } from '$lib/commit-refs.js';
@@ -18,6 +20,7 @@
 
   let {
     message,
+    accountId,
     streamingThinking = '',
     isGroupChat = false,
     showMessageTelemetry = false,
@@ -49,6 +52,10 @@
   {/if}
 {/snippet}
 
+{#snippet songParagraph({ token, children })}
+  <SongReferenceParagraph {token} {children} {accountId} messageId={message.id} />
+{/snippet}
+
 {#if message.status === 'failed'}
   <div class="text-red-600 mb-2 text-sm">Failed to generate response</div>
 {:else if message.status === 'pending'}
@@ -73,6 +80,7 @@
     inlineCitation={expressionTag}
     extensions={commitRefExtensions}
     children={commitRefs}
+    paragraph={songParagraph}
     baseTheme="shadcn"
     {shikiTheme}
     shikiPreloadThemes={['catppuccin-latte', 'catppuccin-mocha']}
@@ -110,6 +118,10 @@
       <span>{message.author_name}</span>
       <span>·</span>
     {/if}
+    {#if message.runtime_model_label}
+      <span data-testid="answer-model" title="The model that produced this answer">{message.runtime_model_label}</span>
+      <span>·</span>
+    {/if}
     {#if message.interaction_cost?.amount_usd}
       <span
         class:line-through={message.interaction_cost.applies_to_billing === false}
@@ -142,6 +154,7 @@
     <MessageTelemetry telemetry={message.ruby_llm_telemetry} />
   {/if}
 </div>
+<HandoffReceipts receipts={message.handoff_receipts || []} />
 {#if message.voice_available && !message.streaming}
   <div class="mt-1">
     {#if message.voice_audio_url}

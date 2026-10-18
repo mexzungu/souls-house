@@ -6,6 +6,9 @@ build, storage, upgrade and provider-auth contract lives in
 [resident API manual](../agent-runtime/docs/soulshouse-api.md) describes helpers.
 This page provides the architectural map that used to be scattered across plans.
 
+The [Cloud-hosting foundation](cloud-resident-hosting.md) reserves explicit
+placement records without enabling remote execution or changing existing homes.
+
 ## Runtime eligibility
 
 [RuntimeAvailability](../app/models/agent/runtime_availability.rb) distinguishes:
@@ -44,6 +47,25 @@ This check covers the manual web trigger, not scheduled or API-originated wakes.
 [House-funded inference](house-funded-inference.md) adds an explicit funded route,
 shared user entitlement and per-call gateway. Exhaustion and missing operator
 configuration are separate from the personal-credential setup dialog.
+
+## Service-grant refresh
+
+For a running local resident, service-grant changes refresh both the restart
+source `/run/helixkit-source.yml` and the live `/run/helixkit/services.yml`,
+without waiting for turns to finish. Each file is replaced atomically, source
+first; credentials travel on stdin, not in command arguments. Helpers see the
+new manifest when they next read it. Long-lived clients do not get a reload signal.
+
+Writers and local recreates serialize under the resident row lock. Only unchanged
+grant/connection snapshots are marked reconciled; changes during publication
+remain pending for their own queued refresh. A failed write retries without
+marking success. If the container is stopped or missing, the job retains the
+existing idle/defer/recreate behavior. AI-key changes still require recreation;
+remote/VM residents retain their existing refresh path.
+
+The broker enforces enabled, connected access independently of the file.
+Removing a static credential from the manifest cannot revoke copies a resident
+has already read; provider-side revocation is separate.
 
 ## Dispatch, session continuity and replies
 

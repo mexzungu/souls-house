@@ -1,0 +1,20 @@
+name: Rebuild residents
+# Rebuilds resident images from souls-house master but keeps the Chaos revision
+# the residents already run. Use it to ship agent-runtime changes without
+# adopting an unreviewed Chaos release.
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge_failed_job:
+        description: "Clear the latch of this exact failed host job first (32-character id from its summary)"
+        required: false
+        default: ""
+permissions:
+  contents: read
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-house.yml
+    secrets: inherit
+    with:
+      operation: runtime
+      acknowledge_failed_job: ${{ inputs.acknowledge_failed_job }}

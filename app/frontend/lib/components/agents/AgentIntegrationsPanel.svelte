@@ -1,6 +1,9 @@
 <script>
+  import { serviceIconClass } from '$lib/service-presentation';
+  import ServiceIcon from '$lib/components/service-icon.svelte';
   import TelegramSettings from '$lib/components/agents/telegram-settings.svelte';
-  import { CheckCircle, TelegramLogo, DropboxLogo, GoogleLogo, GithubLogo, Heartbeat } from 'phosphor-svelte';
+  import TailnetAccess from '$lib/components/agents/tailnet-access.svelte';
+  import { CheckCircle, TelegramLogo } from 'phosphor-svelte';
   import { router } from '@inertiajs/svelte';
   import { Button } from '$lib/components/shadcn/button/index.js';
 
@@ -8,7 +11,7 @@
     form,
     agent,
     account,
-    telegramDeepLink = null,
+    telegramConfiguration = null,
     telegramSubscriberCount = 0,
     sendingTestNotification = false,
     registeringWebhook = false,
@@ -17,6 +20,15 @@
     onregisterWebhook,
   } = $props();
   let selectedIntegration = $state(null);
+  const telegramAgent = $derived(
+    telegramConfiguration
+      ? {
+          ...agent,
+          telegram_configured: telegramConfiguration.configured,
+          telegram_bot_username: telegramConfiguration.username,
+        }
+      : agent
+  );
 
   function openTelegram() {
     selectedIntegration = 'telegram';
@@ -57,8 +69,9 @@
 {#if selectedIntegration === 'telegram'}
   <TelegramSettings
     {form}
-    {agent}
-    {telegramDeepLink}
+    agent={telegramAgent}
+    {telegramConfiguration}
+    accountId={account.id}
     {telegramSubscriberCount}
     {sendingTestNotification}
     {registeringWebhook}
@@ -77,57 +90,50 @@
 
     <div class="divide-y rounded-lg border">
       {#each serviceConnections as connection}
-        <div class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div class="flex items-center gap-4">
-            <div
-              class={connection.provider === 'dropbox'
-                ? 'flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white'
-                : connection.provider === 'google_workspace'
-                  ? 'flex size-11 shrink-0 items-center justify-center rounded-xl bg-green-600 text-white'
-                  : connection.provider === 'github'
-                    ? 'flex size-11 shrink-0 items-center justify-center rounded-xl bg-neutral-900 text-white'
-                    : 'flex size-11 shrink-0 items-center justify-center rounded-xl bg-red-500 text-white'}>
-              {#if connection.provider === 'dropbox'}
-                <DropboxLogo size={24} weight="fill" />
-              {:else if connection.provider === 'google_workspace'}
-                <GoogleLogo size={24} weight="bold" />
-              {:else if connection.provider === 'github'}
-                <GithubLogo size={24} weight="fill" />
-              {:else}
-                <Heartbeat size={24} weight="fill" />
-              {/if}
-            </div>
-            <div>
-              <div class="flex flex-wrap items-center gap-2">
-                <h3 class="font-semibold">{connection.label}</h3>
-                <span class="rounded-full bg-muted px-2 py-0.5 text-xs"
-                  >{connection.management_scope === 'personal' ? 'Personal' : 'Account'}</span>
-                {#if connection.enabled}
-                  <span
-                    class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                    <CheckCircle size={13} weight="fill" /> Enabled
-                  </span>
+        <div class="p-5">
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div class="flex items-center gap-4">
+              <div
+                class={`flex size-11 shrink-0 items-center justify-center rounded-xl ${serviceIconClass(connection.provider)}`}>
+                <ServiceIcon provider={connection.provider} size={24} />
+              </div>
+              <div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <h3 class="font-semibold">{connection.label}</h3>
+                  <span class="rounded-full bg-muted px-2 py-0.5 text-xs"
+                    >{connection.management_scope === 'personal' ? 'Personal' : 'Account'}</span>
+                  {#if connection.enabled}
+                    <span
+                      class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                      <CheckCircle size={13} weight="fill" /> Enabled
+                    </span>
+                  {/if}
+                </div>
+                <p class="text-sm text-muted-foreground">{connection.provider_name} · {connection.identity}</p>
+                <p class="mt-1 text-xs text-muted-foreground">
+                  This toggle provisions the complete credential authority: {authorityDescription(connection)}
+                </p>
+                {#each connection.authority_warnings || [] as warning}
+                  <p class="mt-1 text-xs text-amber-700">{warning}</p>
+                {/each}
+                {#if connection.provisioning_status}
+                  <p class="mt-1 text-xs text-muted-foreground">Runtime: {connection.provisioning_status}</p>
                 {/if}
               </div>
-              <p class="text-sm text-muted-foreground">{connection.provider_name} · {connection.identity}</p>
-              <p class="mt-1 text-xs text-muted-foreground">
-                This toggle provisions the complete credential authority: {authorityDescription(connection)}
-              </p>
-              {#each connection.authority_warnings || [] as warning}
-                <p class="mt-1 text-xs text-amber-700">{warning}</p>
-              {/each}
-              {#if connection.provisioning_status}
-                <p class="mt-1 text-xs text-muted-foreground">Runtime: {connection.provisioning_status}</p>
-              {/if}
             </div>
+            <Button
+              type="button"
+              variant={connection.enabled ? 'outline' : 'default'}
+              disabled={connection.enabled ? !connection.can_manage : !connection.can_provision}
+              onclick={() => toggleService(connection, !connection.enabled)}>
+              {connection.enabled ? 'Disable' : 'Enable'}
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant={connection.enabled ? 'outline' : 'default'}
-            disabled={connection.enabled ? !connection.can_manage : !connection.can_provision}
-            onclick={() => toggleService(connection, !connection.enabled)}>
-            {connection.enabled ? 'Disable' : 'Enable'}
-          </Button>
+          {#if connection.provider === 'tailscale' && connection.enabled && connection.tailnet_url}
+            <div class="mt-4">
+              <TailnetAccess url={connection.tailnet_url} agentName={agent.name} />
+            </div>
+          {/if}
         </div>
       {/each}
       <div class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
@@ -138,7 +144,7 @@
           <div>
             <div class="flex flex-wrap items-center gap-2">
               <h3 class="font-semibold">Telegram</h3>
-              {#if agent.telegram_configured}
+              {#if telegramAgent.telegram_configured}
                 <span
                   class="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
                   <CheckCircle size={13} weight="fill" />
@@ -147,7 +153,7 @@
               {/if}
             </div>
             <p class="text-sm text-muted-foreground">
-              Chat with the resident and receive notifications through a Telegram bot.
+              Exchange direct messages with the resident through a Telegram bot.
             </p>
           </div>
         </div>
@@ -156,12 +162,12 @@
           type="button"
           class={[
             'inline-flex h-9 items-center justify-center rounded-md px-4 py-2 text-sm font-medium transition-colors',
-            agent.telegram_configured
+            telegramAgent.telegram_configured
               ? 'border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground'
               : 'bg-primary text-primary-foreground shadow hover:bg-primary/90',
           ]}
           onclick={openTelegram}>
-          {agent.telegram_configured ? 'Settings' : 'Set up'}
+          {telegramAgent.telegram_configured ? 'Settings' : 'Set up'}
         </button>
       </div>
     </div>

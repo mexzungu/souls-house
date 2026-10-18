@@ -68,7 +68,7 @@
   const updateSync = createDynamicSync();
   let syncSignature = null;
   $effect(() => {
-    const signature = chatSyncSignature({ account, chat, recentMessages });
+    const signature = chatSyncSignature({ account, chat });
     if (signature !== syncSignature) {
       syncSignature = signature;
       updateSync(buildChatSubscriptions({ account, chat }));
@@ -163,6 +163,7 @@
       showUsage={showUsageInChat}
       {agentIsResponding}
       {activeRuntimeAgentIds}
+      runtimeInteractions={activity.rows}
       {responseMarker}
       fileUploadConfig={file_upload_config}
       onAgentTrigger={response.refreshMessages}

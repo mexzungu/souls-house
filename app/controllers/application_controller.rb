@@ -5,7 +5,9 @@ class ApplicationController < ActionController::Base
   include Authentication
   include AccountScoping
   include FeatureToggleable
-  allow_browser versions: :modern
+  include RoomSelection
+  # PaperTrail 17 no longer adds this callback itself.
+  before_action :set_paper_trail_whodunnit
 
   rescue_from ActiveRecord::RecordNotFound, with: :record_not_found
 
@@ -15,14 +17,19 @@ class ApplicationController < ActionController::Base
       {
         user: Current.user.as_json,
         account: current_account&.as_json,
-        visual_tags: -> { current_account&.visual_tags&.palette_order&.map(&:as_json) || [] },
-        accounts: Current.user.confirmed_accounts.map(&:as_json),
+        visual_tags: -> { current_account ? VisualTag.palette_with_usage_for(current_account) : [] },
+        rooms: -> { current_account ? current_account.rooms.map(&:as_json) : [] },
+        current_room: -> { current_account ? selected_room_key : RoomSelection::MAIN },
+        accounts: -> { Current.user.confirmed_accounts.map(&:as_json) },
         reply_attention: -> { ReplyExpectation.summary_for(Current.user, account: current_account, chat: @chat) },
-        account_has_whiteboards: current_account&.whiteboards&.active&.exists? || false,
+        room_activity: -> { RoomActivity.summary_for(current_account) },
+        expired_subscriptions: -> { ExpiredProviderSubscriptions.summary_for(Current.user) },
         theme_preference: Current.user&.theme || cookies[:theme],
         site_settings: shared_site_settings,
         is_account_admin: current_account&.manageable_by?(Current.user) || false,
-        token_thresholds: { amber: 100_000, red: 150_000, critical: 200_000 }
+        token_thresholds: { amber: 100_000, red: 150_000, critical: 200_000 },
+        # Site Admin pages only: whether production still follows master.
+        deploy_alarm: -> { site_admin_page? ? DeployAlarm.payload : nil }
       }
     else
       {
@@ -35,6 +42,16 @@ class ApplicationController < ActionController::Base
   wrap_parameters false # Disable default wrapping of parameters in JSON requests (Helpful with Inertia js)
 
   private
+
+  def site_admin_page?
+    self.class.name.to_s.start_with?("Admin::") && Current.user&.is_site_admin?
+  end
+
+  # Who made a versioned change, as "User:12". A Proc, so it is read when the
+  # version is written rather than when the callback runs.
+  def user_for_paper_trail
+    -> { ItemVersion.whodunnit_for(Current.user) }
+  end
 
   def record_not_found
     if request.headers["X-Inertia"]
@@ -75,13 +92,7 @@ class ApplicationController < ActionController::Base
   def audit_with_changes(action, record, **extra_data)
     return unless Current.user
 
-    changes = record.saved_changes.except(:updated_at)
-    data = extra_data.merge(changes)
-    data = ActiveSupport::ParameterFilter
-      .new(Rails.application.config.filter_parameters)
-      .filter(data)
-
-    audit(action, record, **data)
+    audit(action, record, **AuditLog.data_with_changes(record, **extra_data))
   end
 
   # Use this method only when logging actions for a user outside of an authenticated session

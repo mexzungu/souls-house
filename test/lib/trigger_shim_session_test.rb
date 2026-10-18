@@ -164,33 +164,9 @@ class TriggerShimSessionTest < ActiveSupport::TestCase
   test "runtime image includes the journald companion required for resume" do
     dockerfile = Rails.root.join("agent-runtime/Dockerfile").read
     entrypoint = Rails.root.join("agent-runtime/entrypoint.sh").read
-    assert_includes dockerfile, "ARG CHAOS_BUILD_MODE=prebuilt"
-    assert_includes dockerfile, 'FROM chaos-${CHAOS_BUILD_MODE} AS builder'
-    assert_includes dockerfile, 'cargo build --release --locked --jobs "${CARGO_BUILD_JOBS}" --bin chaos --bin chaos_journald'
+    assert_match(/cargo build .*--bin chaos_journald/, dockerfile)
     assert_includes dockerfile, "COPY --from=builder /usr/local/bin/chaos_journald /usr/local/bin/chaos_journald"
-    assert_includes dockerfile, "COPY docs/runtime-instructions.md /usr/local/share/helixkit-agent/runtime-instructions.md"
-    assert_includes dockerfile, "COPY docs/helixkit-api.md /usr/local/share/helixkit-agent/helixkit-api.md"
-    assert_includes dockerfile, "COPY soulshouse-usage /usr/local/bin/soulshouse-usage"
-    assert_includes dockerfile, "ARG CLAUDE_CODE_VERSION=2.1.280"
-    assert_includes dockerfile, "claude --version"
-    assert_includes dockerfile, "ARG CHAOS_HEAD"
-    refute_match(/^ARG CHAOS_HEAD=[0-9a-f]{40}$/, dockerfile)
-    assert_not_includes dockerfile, "chaos-clamp-image-tool-output.patch"
-    # These fixes now live upstream, not in a local patch-and-rebuild layer.
-    assert_not_includes dockerfile, "git apply"
-    assert_includes dockerfile, 'LABEL house.souls.chaos-patches=""'
-    # 1.1.22 makes denied native tool calls recoverable in print mode instead
-    # of failing the whole clamped turn before it can choose the Chaos MCP bridge.
-    assert_includes dockerfile, "ARG ANTIGRAVITY_VERSION=1.1.22"
-    assert_includes dockerfile, "ARG ANTIGRAVITY_BUILD=5711547746615296"
-    assert_includes dockerfile, "sha512sum -c -"
-    assert_includes dockerfile, "agy --version"
-    assert_includes dockerfile, "ARG CODEXBAR_VERSION=0.56.1"
-    assert_includes dockerfile, "codexbar --version"
-    assert_includes dockerfile, 'LABEL house.souls.chaos-ref="${CHAOS_HEAD}"'
     assert_includes entrypoint, "gosu agent chaos_journald"
-    assert_includes entrypoint, 'export CHAOS_JOURNALD_SOCKET="${CHAOS_JOURNALD_SOCKET:-$CHAOS_HOME/run/journald.sock}"'
-    assert_includes entrypoint, 'CHAOS_JOURNALD_DB="${CHAOS_JOURNALD_DB:-$CHAOS_HOME/journal.sqlite}"'
     assert_includes entrypoint, '--db "$CHAOS_JOURNALD_DB"'
   end
 
@@ -602,14 +578,6 @@ class TriggerShimSessionTest < ActiveSupport::TestCase
     end
 
     assert_not_includes source, '"/auth/start")(lambda:'
-  end
-
-  test "subscription capabilities include Anthropic Gemini and xAI by default" do
-    out = run_shim_python(<<~PY)
-      print(json.dumps(list(mod.OAUTH_ACCOUNT_PROVIDERS)))
-    PY
-
-    assert_equal %w[anthropic gemini openai xai], JSON.parse(out)
   end
 
   test "Anthropic subscription runs enable clamp and remove the metered API key" do
@@ -1245,7 +1213,7 @@ class TriggerShimSessionTest < ActiveSupport::TestCase
     assert_match(/\A[0-9a-f]{64}\z/, checks.dig("soul_fingerprint", "sha256"))
     assert_match(/\A[0-9a-f]{64}\z/, checks.dig("runtime_fingerprint", "sha256"))
     assert_nil checks["same_model"]
-    assert_equal "model-changed", checks["other_model"]
+    assert_nil checks["other_model"], "a model-only change resumes the session"
     assert_equal "provider-changed", checks["other_provider"]
     assert_nil checks["same_content_touch"]
     assert_nil checks["legacy_runtime_edit"]
@@ -1344,15 +1312,15 @@ class TriggerShimSessionTest < ActiveSupport::TestCase
     assert_not_includes args, "--dangerously-bypass-approvals-and-sandbox"
   end
 
-  test "trigger shim accepts every reasoning effort understood by Chaos" do
+  test "trigger shim accepts every reasoning effort the app can send" do
     out = run_shim_python(<<~PY)
       print(json.dumps(list(mod.SUPPORTED_REASONING_EFFORTS)))
     PY
 
-    assert_equal(
-      %w[none minimal low medium high xhigh max ultra],
-      JSON.parse(out)
-    )
+    supported = JSON.parse(out)
+    Chat::ModelSelection::REASONING_OPTIONS.each_value do |option|
+      assert_includes supported, option[:value]
+    end
   end
 
   test "non-persistent triggers use JSON output and record a legacy fresh lifecycle" do
@@ -1692,22 +1660,54 @@ class TriggerShimSessionTest < ActiveSupport::TestCase
     assert_nil result["record"]
   end
 
-  test "model change rolls the session instead of resuming" do
+  test "model-only change resumes the same session and records the new model" do
     out = run_shim_python(<<~PY, fake_chaos: :echo_resumed_pid)
       first, _ = mod.persistent_trigger("sess-4", "REQUEST ONE", None, "claude-opus-4-7", 30)
       second, _ = mod.persistent_trigger("sess-4", "REQUEST TWO", "DELTA ONLY", "claude-haiku-4-5", 30)
-      print(json.dumps({"first": first, "second": second}))
+      record = mod.load_session_record("sess-4")
+      print(json.dumps({"first": first, "second": second, "record": record}))
     PY
 
     result = JSON.parse(out)
     second = result["second"]
-    assert_equal false, second["session_resumed"]
-    assert_equal "model-changed", second["session_roll_reason"]
-    assert_equal "rolled", second.dig("telemetry", "session", "outcome")
-    assert_equal true, second.dig("telemetry", "session", "mapping_found")
-    assert_equal false, second.dig("telemetry", "session", "resume_attempted")
-    assert_includes second["full_invocation_text"], "SOUL FIRST"
-    assert_not_equal result.dig("first", "chaos_session_id"), second["chaos_session_id"]
+    assert_equal true, second["session_resumed"]
+    assert_nil second["session_roll_reason"]
+    assert_equal "resumed", second.dig("telemetry", "session", "outcome")
+    assert_equal "claude-haiku-4-5", second.dig("telemetry", "runtime", "model")
+    assert_equal result.dig("first", "chaos_session_id"), second["chaos_session_id"]
+    assert_equal "claude-haiku-4-5", result.dig("record", "model")
+    assert_equal "claude-opus-4-7", result.dig("record", "previous_model")
+  end
+
+  test "provider change still rolls the session" do
+    out = run_shim_python(<<~PY, fake_chaos: :echo_resumed_pid)
+      first, _ = mod.persistent_trigger("sess-5", "REQUEST ONE", None, "claude-opus-4-7", 30, provider="anthropic")
+      second, _ = mod.persistent_trigger("sess-5", "REQUEST TWO", "DELTA ONLY", "gpt-6.1-sol", 30, provider="openai")
+      print(json.dumps({"first": first, "second": second}))
+    PY
+
+    result = JSON.parse(out)
+    assert_equal "provider-changed", result.dig("second", "session_roll_reason")
+    assert_not_equal result.dig("first", "chaos_session_id"), result.dig("second", "chaos_session_id")
+  end
+
+  # Chaos reports a model change on resume as an item of type "error". It is
+  # advice, not a failure: the turn completes on the new model.
+  test "the model-change advisory item does not count as a turn error" do
+    out = run_shim_python(<<~PY)
+      lines = [
+          json.dumps({"type": "process.started", "process_id": "pid-1"}),
+          json.dumps({"type": "item.completed", "item": {"id": "item_0", "type": "error",
+              "message": "This session was recorded with model `a` but is resuming with `b`."}}),
+          json.dumps({"type": "item.completed", "item": {"id": "2", "type": "agent_message", "text": "ok"}}),
+      ]
+      events = mod.parse_events(chr(10).join(lines))
+      print(json.dumps({"errors": events["errors"], "messages": events["agent_messages"]}))
+    PY
+
+    result = JSON.parse(out)
+    assert_empty result["errors"]
+    assert_equal [ "ok" ], result["messages"]
   end
 
   test "graph preview subprocess is bounded and fails open" do

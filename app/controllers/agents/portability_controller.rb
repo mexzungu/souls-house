@@ -12,6 +12,9 @@ class Agents::PortabilityController < ApplicationController
     render json: { error: "Resident archive unavailable or invalid. Check v1 limits, stopped state and supported profile." }, status: :unprocessable_entity
   end
 
+  STAGED_REFUSAL = "This resident runs on its own server, and starting it there isn't available yet. " \
+                   "It stays imported, inactive and paused.".freeze
+
   def new
     render inertia: "agents/import", props: {
       account: current_account.as_json,
@@ -59,6 +62,9 @@ class Agents::PortabilityController < ApplicationController
   def activate
     agent = current_account.agents.find(params[:id])
     raise Agents::Portability::Error, "Confirm service and hook trust review before activation" unless params[:confirmed].to_s == "true"
+    # A copy staged for its own server is never started here. Activating it
+    # on its server is the next step of docs/2026-10-10-vm-imports.md.
+    raise Agents::Portability::Error, STAGED_REFUSAL if agent.placement&.staged?
     raise Agents::Portability::Error, "Only stopped inactive native residents can activate here" unless !agent.imported_home? && agent.externally_hosted? && !agent.active? && agent.paused?
     activation_error = nil
     agent.with_lock do
@@ -67,6 +73,7 @@ class Agents::PortabilityController < ApplicationController
       raise Agents::Portability::Error, "Resident has pending or uncertain execution" if ResidentTurn.pending.where(agent: agent).exists? || agent.agent_runtime_interactions.where(finished_at: nil).exists?
       transport = Agents::Portability::Transport.new(agent)
       transport.stopped!
+      previous_active = agent.active?
       agent.update_columns(active: true)
       begin
         Agents::Sandbox.new(agent).spawn!
@@ -82,6 +89,9 @@ class Agents::PortabilityController < ApplicationController
           activation_error = "Activation failed; resident inactive/paused but runtime exit is UNKNOWN. Operator verification required"
         end
       end
+      # The failure paths intentionally use direct columns, not orientation callbacks.
+      agent.refresh_provider_presentation if activation_error
+      HomeResidentRoster.refresh!([ agent.account_id ]) if agent.active? != previous_active
     end
     raise Agents::Portability::Error, activation_error if activation_error
     redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other
@@ -97,7 +107,12 @@ class Agents::PortabilityController < ApplicationController
     raise Agents::Portability::Error unless params[:confirmed].to_s == "true"
     Agents::Portability::Archive.with_upload(params[:archive]) do |archive|
       agent = Agents::Portability::Import.call(archive, account: current_account, user: Current.user, name: params[:name])
-      redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other, notice: "Separate copy restored inactive and paused. Reconnect and review setup before starting."
+      notice = if agent.placement&.staged?
+        "Separate copy staged inactive and paused for its own server. Nothing is ordered until you activate it. Reconnect and review setup before starting."
+      else
+        "Separate copy restored inactive and paused. Reconnect and review setup before starting."
+      end
+      redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other, notice: notice
     end
   end
 

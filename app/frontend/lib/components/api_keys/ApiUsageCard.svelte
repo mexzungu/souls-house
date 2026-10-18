@@ -9,6 +9,8 @@
     ['POST /api/v1/conversations/:id/messages', 'Post a message'],
     ['GET/POST /api/v1/whiteboards', 'List/create whiteboards'],
     ['GET/PATCH /api/v1/whiteboards/:id', 'Read/update whiteboard'],
+    ['GET/POST /api/v1/field/files', 'List/upload Field files'],
+    ['GET/DELETE /api/v1/field/files/:id', 'Read/delete a Field file (download at /download)'],
   ];
 </script>
 
@@ -37,6 +39,9 @@
   <div class="mt-4 pt-4 border-t flex items-center gap-2">
     <a href="/ai/api.md" target="_blank" class="text-sm text-primary hover:underline">
       View full API documentation →
+    </a>
+    <a href="/ai/cli.md" target="_blank" class="text-sm text-primary hover:underline">
+      Command-line client →
     </a>
   </div>
 </div>

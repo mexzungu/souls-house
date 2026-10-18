@@ -159,6 +159,74 @@ class AgentRuntimeInteractionCostTest < ActiveSupport::TestCase
     end
   end
 
+  test "Haiku 5.5 is priced under catalogue, direct and dotted IDs" do
+    assert_equal "claude-haiku-5-5", Chat.provider_model_id("anthropic/claude-haiku-5.5")
+    [ "anthropic/claude-haiku-5.5", "claude-haiku-5-5", "claude-haiku-5.5" ].each do |model|
+      cost = build_interaction(
+        model: model,
+        uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000,
+        cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+      ).estimated_cost
+      assert_equal "estimated", cost[:status], model
+      assert_equal "0.735", cost[:amount_usd], model
+      assert_equal "0.125", cost.dig(:components_usd, :cache_creation_input), model
+      assert_equal "0.01", cost.dig(:components_usd, :cache_read_input), model
+    end
+  end
+
+  test "Qwen3.8 Omni Flash is priced from the routed Alibaba endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "qwen/qwen3.8-omni-flash",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "0.636", cost[:amount_usd]
+    assert_equal "0.016", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "Gemini 4 Argon uses launch pricing until December and doubles after" do
+    launch = build_interaction(
+      provider: "openrouter", model: "google/gemini-4-argon",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000,
+      started_at: Time.zone.parse("2026-10-13 12:00")
+    ).estimated_cost
+    assert_equal "estimated", launch[:status]
+    assert_equal "12.1", launch[:amount_usd]
+    assert_equal "0.1", launch.dig(:components_usd, :cache_read_input)
+
+    later = build_interaction(
+      provider: "gemini", model: "gemini-4-argon",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000,
+      started_at: Time.zone.parse("2026-12-01 12:00")
+    ).estimated_cost
+    assert_equal "24.2", later[:amount_usd]
+  end
+
+  test "Muse Wonder is priced from the routed Meta endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "meta/muse-wonder",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "24.2", cost[:amount_usd]
+    assert_equal "0.2", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "Muse Spark Open is priced from the routed Modal endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "meta/muse-spark-open",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "5.65", cost[:amount_usd]
+    assert_equal "0.15", cost.dig(:components_usd, :cache_read_input)
+  end
+
   test "Opus 5.5 supports dotted runtime ID and one hour cache writes" do
     cost = build_interaction(
       provider: "anthropic", model: "claude-opus-5.5", cache_ttl: "1h",

@@ -1,11 +1,22 @@
 import { render, fireEvent, screen, waitFor } from '@testing-library/svelte';
 import { router } from '@inertiajs/svelte';
+import { useSync } from '$lib/use-sync';
 import EditResident from './edit.svelte';
 import ResidentIndex from './index.svelte';
 import NewResident from './new.svelte';
 import PortabilityPanel from '$lib/components/agents/resident-portability-panel.svelte';
 
-vi.mock('$lib/use-sync', () => ({ useSync: vi.fn() }));
+// jsdom has no PointerEvent, so fireEvent would drop pointerType.
+if (!window.PointerEvent) {
+  window.PointerEvent = class PointerEvent extends MouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      this.pointerType = init.pointerType ?? '';
+    }
+  };
+}
+
+vi.mock('$lib/use-sync', () => ({ useSync: vi.fn(), createDynamicSync: () => vi.fn() }));
 
 const account = { id: 'account' };
 const portability = { can_manage: true, export_ready: true, export_url: '/export', import_url: '/import' };
@@ -13,6 +24,9 @@ const editProps = { account, agent: { id: 'resident', name: 'Resident' }, portab
 
 test('owner can select the export/import tab with no settings submit action', async () => {
   render(EditResident, editProps);
+  expect(useSync).toHaveBeenCalledWith({
+    'Agent:resident': ['agent', 'memories', 'interactions', 'interactions_pagination', 'cost_report'],
+  });
   await fireEvent.click(screen.getByRole('button', { name: 'Export / Import' }));
   expect(screen.getByRole('link', { name: 'Download resident archive' })).toHaveAttribute('href', '/export');
   expect(screen.getByRole('link', { name: 'Import a resident archive' })).toHaveAttribute('href', '/import');
@@ -36,9 +50,30 @@ test.each(['Stop the resident before exporting.', 'External graph export is unav
   }
 );
 
-test('an empty resident index still offers import', () => {
-  render(ResidentIndex, { account, resident_import_url: '/import' });
+test('an empty resident index still offers import from the New Resident menu', async () => {
+  render(ResidentIndex, { account, resident_import_url: '/import', github_resident_import_url: '/github' });
+  expect(screen.queryByRole('link', { name: 'Import a resident archive' })).not.toBeInTheDocument();
+  await fireEvent.pointerEnter(screen.getByRole('group', { name: 'Add a resident' }), { pointerType: 'mouse' });
   expect(screen.getByRole('link', { name: 'Import a resident archive' })).toHaveAttribute('href', '/import');
+  expect(screen.getByRole('link', { name: 'Bring an existing GitHub resident' })).toHaveAttribute('href', '/github');
+});
+
+test('New Resident still creates a new resident on a mouse click', async () => {
+  render(ResidentIndex, { account, resident_import_url: '/import' });
+  const button = screen.getByRole('button', { name: 'New Resident' });
+  await fireEvent.pointerDown(button, { pointerType: 'mouse' });
+  await fireEvent.click(button);
+  expect(router.visit).toHaveBeenCalled();
+});
+
+test('first tap on touch reveals the choices instead of creating', async () => {
+  render(ResidentIndex, { account, resident_import_url: '/import' });
+  const button = screen.getByRole('button', { name: 'New Resident' });
+  await fireEvent.pointerDown(button, { pointerType: 'touch' });
+  await fireEvent.click(button);
+  expect(router.visit).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole('button', { name: 'Start a new resident' }));
+  expect(router.visit).toHaveBeenCalled();
 });
 
 test('new resident page offers import without creating a resident', () => {
@@ -49,6 +84,7 @@ test('new resident page offers import without creating a resident', () => {
 test('index has no import entry when server does not grant it', () => {
   render(ResidentIndex, { account });
   expect(screen.queryByRole('link', { name: 'Import a resident archive' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'New Resident' })).not.toHaveAttribute('aria-expanded');
 });
 
 describe('explicit portability lifecycle actions', () => {
@@ -173,7 +209,78 @@ describe('explicit portability lifecycle actions', () => {
 
   test('missing URLs hide lifecycle controls even for owners', () => {
     panel({ stop_url: null, activate_url: null, imported: true });
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop for export' })).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  test('explicit status refresh is targeted, single-flight and does not invoke a mutation', async () => {
+    panel();
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+    expect(router.reload).toHaveBeenCalledTimes(1);
+    expect(router.reload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        only: ['portability'],
+        preserveState: true,
+        preserveScroll: true,
+      })
+    );
+    expect(screen.getByRole('button', { name: 'Refreshing status…' })).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalled();
+    router.reload.mock.calls[0][0].onFinish();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeEnabled());
+  });
+
+  test('a newer mutation cancels an older status response and ignores its late completion', async () => {
+    fetch.mockImplementation(() => new Promise(() => {}));
+    panel();
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+    const old = router.reload.mock.calls[0][0];
+    const cancel = vi.fn();
+    old.onCancelToken({ cancel });
+    await fireEvent.click(screen.getByLabelText(/I understand stopping/));
+    await fireEvent.click(screen.getByRole('button', { name: 'Stop for export' }));
+    expect(cancel).toHaveBeenCalledOnce();
+    old.onFinish();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeDisabled());
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('resident switch and unmount cancel pending status reloads', async () => {
+    const { rerender, unmount } = panel();
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+    const cancel = vi.fn();
+    router.reload.mock.calls[0][0].onCancelToken({ cancel });
+    await rerender({ portability: { ...portability, export_url: '/other/export' } });
+    expect(cancel).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+    const cancelNext = vi.fn();
+    router.reload.mock.calls[1][0].onCancelToken({ cancel: cancelNext });
+    unmount();
+    expect(cancelNext).toHaveBeenCalledOnce();
+  });
+
+  test.each(['same object', 'replacement object'])(
+    'same-resident parent refresh with %s preserves a pending explicit status refresh',
+    async (update) => {
+      const { rerender } = render(EditResident, { ...editProps, active_tab: 'portability' });
+      await fireEvent.click(screen.getByRole('button', { name: 'Refresh export status' }));
+      const refresh = router.reload.mock.calls[0][0];
+      const cancel = vi.fn();
+      refresh.onCancelToken({ cancel });
+
+      // A broad Agent health refresh updates the parent, not the resident identity.
+      await rerender({
+        ...editProps,
+        agent: { ...editProps.agent, active: true },
+        portability: update === 'same object' ? portability : { ...portability },
+      });
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Refreshing status…' })).toBeDisabled();
+      expect(router.reload).toHaveBeenCalledTimes(1);
+      refresh.onFinish();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeEnabled());
+    }
+  );
 });

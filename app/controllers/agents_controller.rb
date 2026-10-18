@@ -1,5 +1,7 @@
 class AgentsController < ApplicationController
 
+  include AgentSettingsParams
+
   require_feature_enabled :agents
   before_action :set_agent, only: [ :edit, :update, :destroy ]
 
@@ -11,13 +13,15 @@ class AgentsController < ApplicationController
 
     render inertia: "agents/index", props: {
       resident_import_url: current_account.owned_by?(Current.user) ? import_account_agents_path(current_account) : nil,
-      agents: Agents::ResidentDirectory.new(current_account).call,
+      github_resident_import_url: GithubResidentImport.requestable_by?(current_account, Current.user) ? new_account_github_resident_import_path(current_account) : nil,
+      # Directory-only hints must not rebuild cards or claim journal-stat jobs.
+      agents: -> { Agents::ResidentDirectory.new(current_account).call },
       can_end_guest_memberships: current_account.owned_by?(Current.user),
       guest_memberships: current_account.guest_memberships.includes(agent: :account).order(:created_at).as_json,
       away_memberships: GuestMembership.where(agent: current_account.agents).includes(:account, agent: :account).order(:created_at).as_json,
       guest_candidates: GuestMembership.candidates_for(account: current_account, user: Current.user)
         .includes(:account).by_name.map { |agent| { id: agent.to_param, name: agent.name, home_account_name: agent.account.name } },
-      grouped_models: grouped_models,
+      grouped_models: -> { grouped_models },
       colour_options: Agent::VALID_COLOURS,
       icon_options: Agent::VALID_ICONS,
       account: current_account.as_json
@@ -28,7 +32,9 @@ class AgentsController < ApplicationController
     render inertia: "agents/new", props: {
       grouped_models: grouped_models,
       resident_import_url: current_account.owned_by?(Current.user) ? import_account_agents_path(current_account) : nil,
+      github_resident_import_url: GithubResidentImport.requestable_by?(current_account, Current.user) ? new_account_github_resident_import_path(current_account) : nil,
       default_model_id: Agents::HostedBirth.default_model_id(account: current_account, creator: Current.user),
+      vm_birth_refusal: Agents::VmBirthPolicy.current.refusal(kind: :birth),
       colour_options: Agent::VALID_COLOURS,
       icon_options: Agent::VALID_ICONS,
       account: current_account.as_json
@@ -55,20 +61,25 @@ class AgentsController < ApplicationController
   end
 
   def edit
-    interactions_pagy, interactions = pagy(
-      :offset,
-      @agent.agent_runtime_interactions.includes(:chat).recent,
-      limit: 25
-    )
-
+    interaction_data = nil
+    load_interactions = -> {
+      interaction_data ||= pagy(:offset, @agent.agent_runtime_interactions.includes(:chat).recent, limit: 25)
+    }
+    catalog = nil
+    load_catalog = -> { catalog ||= @agent.subagent_catalog }
     render inertia: "agents/edit", props: {
-      portability: portability_props,
-      agent: @agent.as_json,
-      house_allowance: HouseInferenceGrant.find_by(agent: @agent)&.presentation,
-      telegram_deep_link: @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil,
-      telegram_subscriber_count: @agent.telegram_subscriptions.active.count,
-      memories: memories_for_display,
-      grouped_models: grouped_models,
+      portability: -> { portability_props },
+      agent: -> { @agent.as_json },
+      house_allowance: -> { HouseInferenceGrant.find_by(agent: @agent)&.presentation },
+      subagent_catalog: -> { load_catalog.call.options },
+      subagent_providers: -> { load_catalog.call.providers },
+      subagent_catalog_empty_reason: -> { load_catalog.call.empty_reason },
+      # Count/provider partials must not mint another registration token.
+      telegram_deep_link: InertiaRails.optional { @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil },
+      telegram_configuration: -> { { configured: @agent.telegram_configured?, username: @agent.telegram_bot_username } },
+      telegram_subscriber_count: -> { @agent.telegram_subscriptions.active.count },
+      memories: -> { memories_for_display },
+      grouped_models: -> { grouped_models },
       colour_options: Agent::VALID_COLOURS,
       icon_options: Agent::VALID_ICONS,
       active_tab: params[:tab],
@@ -79,12 +90,12 @@ class AgentsController < ApplicationController
       hosting_diagnostics_url: account_agent_hosting_diagnostics_path(current_account, @agent),
       runtime_observability_url: Current.user&.is_site_admin? ? admin_agent_runtime_path(@agent) : nil,
       sandbox_recreation_url: account_agent_sandbox_recreation_path(current_account, @agent),
-      provider_subscription: Agents::ProviderSubscriptionPresentation.call(@agent),
-      service_connections: service_connections_for_agent,
-      can_manage_provider_subscription: current_account.ai_credentials_manageable_by?(Current.user),
-      interactions: interactions.map(&:as_session_json),
-      interactions_pagination: pagy_to_hash(interactions_pagy),
-      cost_report: AgentInteractionCostReport.new(agent: @agent).call,
+      provider_subscription: -> { Agents::ProviderSubscriptionPresentation.call(@agent) },
+      service_connections: -> { service_connections_for_agent },
+      can_manage_provider_subscription: -> { current_account.ai_credentials_manageable_by?(Current.user) },
+      interactions: -> { load_interactions.call.last.map(&:as_session_json) },
+      interactions_pagination: -> { pagy_to_hash(load_interactions.call.first) },
+      cost_report: -> { AgentInteractionCostReport.new(agent: @agent).call },
       account: current_account.as_json
     }
   end
@@ -93,14 +104,13 @@ class AgentsController < ApplicationController
     attrs = agent_params
     model_changed = attrs.key?(:model_id) && attrs[:model_id] != @agent.model_id
 
-    HouseInferenceGrant.synchronize do
-      @agent.update!(attrs)
-      HouseInferenceGrant.assign!(@agent, Current.user)
-    end
+    @agent.update_settings!(attrs, by: Current.user)
     audit("update_agent", @agent, **agent_audit_data(attrs))
     redirect_to account_agents_path(current_account), notice: update_notice(model_changed)
   rescue ActiveRecord::RecordInvalid => e
-    redirect_to edit_account_agent_path(current_account, @agent),
+    tab = "subagents" if e.record.errors.attribute_names.intersect?(%i[subagents_enabled subagent_models])
+    tab ||= "settings" if e.record.errors.attribute_names.include?(:switchable_model_ids)
+    redirect_to edit_account_agent_path(current_account, @agent, tab: tab),
                 inertia: { errors: e.record.errors.to_hash }
   end
 
@@ -136,39 +146,6 @@ class AgentsController < ApplicationController
     @agent = current_account.agents.find(params[:id])
   end
 
-  def agent_params
-    permitted = params.require(:agent).permit(
-      :name, :system_prompt,
-      :model_id, :active, :paused, :colour, :icon,
-      :thinking_enabled, :thinking_budget, :reasoning_effort,
-      :telegram_bot_token, :telegram_bot_username,
-      :voice_id, :persistent_session, :persistent_wake_session, :scheduled_wakes_enabled,
-      :heartbeat_wakes_per_day, :session_idle_timeout_minutes, :session_max_age_minutes,
-      :session_context_budget_tokens, :turn_timeout_minutes
-    )
-
-    permitted.delete(:telegram_bot_token) if permitted[:telegram_bot_token].blank?
-    strip_externally_managed_params!(permitted) if @agent&.identity_owned_by_agent?
-    permitted
-  end
-
-  def birth_params
-    params.require(:agent).permit(
-      :name, :system_prompt, :model_id, :colour, :icon,
-      :scheduled_wakes_enabled, :open_beginning
-    )
-  end
-
-  def strip_externally_managed_params!(permitted)
-    Agent::EXTERNALLY_MANAGED_ATTRIBUTES.each do |attribute|
-      permitted.delete(attribute)
-    end
-  end
-
-  def agent_audit_data(attrs)
-    attrs.except(:telegram_bot_token).to_h
-  end
-
   def update_notice(model_changed)
     return "Resident updated" unless model_changed && @agent.identity_owned_by_agent?
 
@@ -182,17 +159,7 @@ class AgentsController < ApplicationController
   end
 
   def grouped_models
-    (Chat::MODELS + HouseInference::Offering.models).group_by { |m| m[:group] || "Other" }.transform_values do |models|
-      models.map do |m|
-        reasoning = Chat.reasoning_effort_config(m[:model_id])
-        {
-          model_id: m[:model_id],
-          label: m[:label],
-          supports_thinking: m.dig(:thinking, :supported) == true,
-          reasoning:
-        }
-      end
-    end
+    Agents::ModelCatalogue.grouped
   end
 
   def memories_for_display
@@ -222,7 +189,8 @@ class AgentsController < ApplicationController
         connection.as_connection_json(current_user: Current.user).merge(
           enabled: access&.enabled? || false,
           provisioning_status: access&.provisioning_status,
-          access_update_url: account_agent_service_access_path(current_account, @agent, connection.public_id)
+          access_update_url: account_agent_service_access_path(current_account, @agent, connection.public_id),
+          tailnet_url: connection.provider == "tailscale" ? account_agent_tailnet_path(current_account, @agent) : nil
         )
       end
   end

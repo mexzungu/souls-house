@@ -27,11 +27,45 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     assert inertia_props.key?("version")
   end
 
+  test "home page carries the ten latest changelog entries that have a clip" do
+    get root_path
+
+    latest = inertia_shared_props["changelog"]
+    expected = Changelog.entries.select { |entry| entry[:clip] }.first(10)
+    assert_equal expected.map { |entry| entry[:title] }, latest.map { |entry| entry["title"] }
+    assert_operator latest.size, :<=, 10
+    assert latest.all? { |entry| entry["clip"].present? }
+  end
+
   test "should get privacy policy without authentication" do
     get privacy_path
 
     assert_response :success
     assert_equal "privacy", inertia_component
+  end
+
+  test "should get features page without authentication" do
+    get features_path
+
+    assert_response :success
+    assert_equal "features", inertia_component
+  end
+
+  test "features page carries only the last two weeks of the changelog" do
+    get features_path
+
+    recent = inertia_shared_props["changelog"]
+    assert_equal Changelog.recent.map { |entry| entry[:title] }, recent.map { |entry| entry["title"] }
+    cutoff = Date.current - Changelog::RECENT_DAYS
+    assert recent.all? { |entry| Date.iso8601(entry["date"]) > cutoff }
+  end
+
+  test "changelog page carries every entry without authentication" do
+    get changelog_path
+
+    assert_response :success
+    assert_equal "changelog", inertia_component
+    assert_equal Changelog.entries.size, inertia_shared_props["changelog"].size
   end
 
   test "should get self hosting guide without authentication" do

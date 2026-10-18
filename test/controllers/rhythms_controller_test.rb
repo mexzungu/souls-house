@@ -30,6 +30,49 @@ class RhythmsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_rhythm_path(@account, rhythm)
   end
 
+  test "only authorized detail partials render a missing rhythm as deleted" do
+    rhythm = make_rhythm
+    path = account_rhythm_path(@account, rhythm)
+    headers = {
+      "X-Inertia" => "true", "X-Inertia-Version" => ViteRuby.digest,
+      "X-Inertia-Partial-Component" => "rhythms/show", "X-Inertia-Partial-Data" => "rhythm"
+    }
+    get path, headers: headers
+    assert_response :success
+    assert_equal rhythm.to_param, response.parsed_body.dig("props", "rhythm", "id")
+    assert_not response.parsed_body.dig("props", "rhythm").key?("start_request_key")
+    rhythm.destroy!
+    get path, headers: headers
+    assert_response :success
+    assert_nil response.parsed_body.dig("props", "rhythm")
+    get path
+    assert_response :not_found
+    get path, headers: headers.merge("X-Inertia-Partial-Component" => "rhythms/index")
+    assert_response :not_found
+    foreign_account = accounts(:existing_user_account)
+    foreign_agent = foreign_account.agents.create!(name: "Foreign synthetic", runtime: "external", model_id: "anthropic/claude-opus-5.5")
+    foreign = Rhythm.create!(account: foreign_account, creator: @user, title: "Foreign", opening: "Private",
+      agents: [ foreign_agent ], cadence: "daily", time_of_day: "09:00", timezone: "UTC")
+    get account_rhythm_path(@account, foreign), headers: headers
+    assert_response :success
+    assert_nil response.parsed_body.dig("props", "rhythm")
+    get account_rhythm_path(accounts(:existing_user_account), foreign), headers: headers
+    assert_response :not_found
+  end
+
+  test "index shows each rhythm's last five conversations, marking the ones in the conversation list" do
+    rhythm = Rhythm.create!(account: @account, creator_agent: @resident, title: "House watch", opening: "Look round.",
+      agents: [ @resident ], cadence: "daily", time_of_day: "09:00", timezone: "UTC", next_run_at: 1.hour.ago)
+    chats = 6.times.map { |i| rhythm.fire!(now: Time.current, manual: true, request_key: "k#{i}").occurrence.chat }
+    chats.last.messages.create!(role: "user", user: @user, content: "Seen it.", suppress_automatic_dispatch: true)
+
+    get account_rhythms_path(@account)
+    assert_response :success
+    runs = inertia_shared_props.fetch("rhythms").find { |row| row["id"] == rhythm.to_param }.fetch("recent_runs")
+    assert_equal chats.last(5).reverse.map { |chat| account_chat_path(@account, chat) }, runs.pluck("chat_url")
+    assert_equal [ true, false, false, false, false ], runs.pluck("listed")
+  end
+
   test "preview does not require private opening or resident selection" do
     get preview_account_rhythms_path(@account), params: { rhythm: @attributes.except(:opening, :resident_ids) }, as: :json
     assert_response :ok
@@ -123,6 +166,51 @@ class RhythmsControllerTest < ActionDispatch::IntegrationTest
     assert rhythm.reload.held?
     post resume_account_rhythm_path(@account, rhythm)
     assert_not rhythm.reload.held?
+  end
+
+  # Mira #228 finding 1, on the shared save path: a rejected edit must not
+  # keep the selection it assigned.
+  test "a rejected edit keeps the saved selection and adds no hold" do
+    rhythm = make_rhythm
+    peer = agents(:code_reviewer)
+    patch account_rhythm_path(@account, rhythm), params: { rhythm: { title: "Changed", opening: "", resident_ids: [ peer.to_param ] } }
+    assert_response :unprocessable_entity
+    rhythm.reload
+    assert_equal [ @resident.id ], rhythm.agent_ids
+    assert_equal "Weekly reflection", rhythm.title
+    patch account_rhythm_path(@account, rhythm), params: { rhythm: { opening: "", resident_ids: [] } }
+    assert_response :unprocessable_entity
+    assert_equal [ @resident.id ], rhythm.reload.agent_ids
+    assert_empty rhythm.open_holds
+  end
+
+  test "a malformed resident id is not found rather than an error" do
+    rhythm = make_rhythm
+    patch account_rhythm_path(@account, rhythm), params: { rhythm: { title: "Changed", resident_ids: [ @resident.to_param, "abc-!" ] } }
+    assert_response :not_found
+    assert_equal "Weekly reflection", rhythm.reload.title
+  end
+
+  test "the form sets a model per resident, offers each resident's choices, and shows the pin" do
+    @resident.update!(model_id: "anthropic/claude-opus-5.5", switchable_model_ids: [ "anthropic/claude-fable-5.1" ])
+    post account_rhythms_path(@account), params: { rhythm: @attributes.merge(
+      resident_models: { @resident.to_param => "anthropic/claude-fable-5.1" }
+    ) }
+    rhythm = Rhythm.order(:id).last
+    assert_redirected_to account_rhythm_path(@account, rhythm)
+    assert_equal({ @resident.id => "anthropic/claude-fable-5.1" }, rhythm.resident_models)
+
+    get edit_account_rhythm_path(@account, rhythm), headers: { "X-Inertia" => "true", "X-Inertia-Version" => ViteRuby.digest }
+    assert_response :ok
+    props = response.parsed_body["props"]
+    picker = props["residents"].find { |resident| resident["id"] == @resident.to_param }
+    assert_equal %w[anthropic/claude-opus-5.5 anthropic/claude-fable-5.1], picker["model_choices"].map { |c| c["model_id"] }
+    assert_equal "anthropic/claude-fable-5.1", props.dig("rhythm", "resident_models", @resident.to_param)
+    assert props.dig("rhythm", "residents", 0, "model_selected")
+
+    patch account_rhythm_path(@account, rhythm), params: { rhythm: { resident_models: { @resident.to_param => "openai/gpt-6.1-sol" } } }
+    assert_response :unprocessable_entity
+    assert_equal "anthropic/claude-fable-5.1", rhythm.reload.resident_models[@resident.id]
   end
 
   private

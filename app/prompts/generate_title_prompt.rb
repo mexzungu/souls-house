@@ -21,8 +21,7 @@ class GenerateTitlePrompt
 
   def render
     %i[system user].index_with do |role|
-      template = Rails.root.join("app", "prompts", "generate_title", "#{role}.prompt.erb")
-      ERB.new(template.read).result_with_hash(messages: build_conversation_lines, model: @model)
+      PromptTemplate.render("generate_title", role, messages: build_conversation_lines, model: @model)
     end
   end
 
@@ -37,6 +36,8 @@ class GenerateTitlePrompt
   def format_message_line(message)
     content = message.content.to_s.strip
     return if content.blank?
+    # A labelled safeguard script should not name the conversation.
+    return if message.safeguard_labelled?
 
     label = case message.role
     when "user" then "User"

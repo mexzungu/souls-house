@@ -9,8 +9,16 @@
   import VisualTagIcon from '$lib/components/chat/VisualTagIcon.svelte';
   import { visualTagColour } from '$lib/visual-tags';
   import { createDynamicSync } from '$lib/use-sync';
+  import AccountLogoColourPicker from '$lib/components/theme/AccountLogoColourPicker.svelte';
 
-  let { account, visual_tags = [], can_manage = false, icon_options = [], colour_options = [] } = $props();
+  let {
+    account,
+    visual_tags = [],
+    can_manage = false,
+    icon_options = [],
+    colour_options = [],
+    logo_colour_options = [],
+  } = $props();
   const updateSync = createDynamicSync();
   let editing = $state(null);
   let open = $state(false);
@@ -19,7 +27,15 @@
     open = true;
   }
   $effect(() => {
-    updateSync({ [`Account:${account.id}`]: 'visual_tags' });
+    updateSync({ [`Account:${account.id}`]: ['visual_tags', 'account', 'can_manage'] });
+  });
+  let editingAccount = account.id;
+  $effect(() => {
+    if (editingAccount !== account.id) {
+      editingAccount = account.id;
+      editing = null;
+      open = false;
+    }
   });
 </script>
 
@@ -27,6 +43,27 @@
 
 <AccountSettingsLayout {account} active="interface" title="Interface" description="How this account looks and feels.">
   <FlashMessages flash={$page.props.flash} />
+  <section class="space-y-4" aria-labelledby="logo-colour-heading">
+    <div class="space-y-2">
+      <h2 id="logo-colour-heading" class="text-xl font-semibold">Logo colour</h2>
+      <p class="text-sm text-muted-foreground">
+        The colour of the dot in the logo while you're in this account, so you can tell at a glance where you are.
+        Everyone in the account sees it. Each colour has a light and a dark version.
+      </p>
+      {#if !can_manage}<p class="text-sm text-muted-foreground">
+          You do not have permission to change this account’s logo colour.
+        </p>{/if}
+    </div>
+    <AccountLogoColourPicker
+      accountId={account.id}
+      current={account.logo_colour ?? null}
+      options={logo_colour_options}
+      canManage={can_manage} />
+    {#if $page.props.errors?.logo_colour}
+      <p class="text-sm text-destructive">{$page.props.errors.logo_colour}</p>
+    {/if}
+  </section>
+  <div class="border-t"></div>
   <section class="space-y-4" aria-labelledby="visual-tags-heading">
     <div class="flex items-start justify-between gap-4">
       <div class="space-y-2">
@@ -53,7 +90,9 @@
           <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-muted/50">
             <VisualTagIcon icon={tag.icon} size={26} class={visualTagColour(tag.colour)} />
           </span>
-          <span class="min-w-0 flex-1 break-words text-sm font-medium">{tag.label}</span>
+          <span class="min-w-0 flex-1 break-words text-sm font-medium">
+            {tag.label} <span class="text-muted-foreground">({tag.conversation_count})</span>
+          </span>
           {#if can_manage}<PencilSimple
               size={16}
               class="shrink-0 text-muted-foreground/50 group-hover:text-foreground" />{/if}
@@ -63,8 +102,9 @@
       {/each}
     </div>
     <p class="text-xs leading-relaxed text-muted-foreground">
-      Shared across this account. Editing a tag updates every thread using it; removing it leaves the threads intact.
-      Tags never change notifications or access.
+      Counts include archived conversations in this account, but not deleted conversations. Shared across this account.
+      Editing a tag updates every thread using it; removing it leaves the threads intact. Tags never change
+      notifications or access.
     </p>
   </section>
 </AccountSettingsLayout>
