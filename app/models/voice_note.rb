@@ -37,6 +37,16 @@ module VoiceNote
     blob.created_at + RETENTION
   end
 
+  # For a send: the recording a signed id names, locked FOR UPDATE until the
+  # caller's transaction ends, so a discard or the sweep (which lock the same
+  # row and recheck for an attachment) cannot delete it between here and the
+  # attachment insert. nil when the signature is bad or the recording is gone,
+  # and the message then goes out with its text only. Call inside a transaction.
+  def self.lock_for_send(signed_id)
+    blob = ActiveStorage::Blob.find_signed(signed_id.to_s)
+    blob && ActiveStorage::Blob.lock("FOR UPDATE").find_by(id: blob.id)
+  end
+
   # Removes the recording unless a message has taken it. The row is locked and
   # the attachment rechecked under the lock, as the sweep does, so a send that
   # is attaching it concurrently wins. Returns true when it was removed.

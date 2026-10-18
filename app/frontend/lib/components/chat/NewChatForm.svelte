@@ -10,6 +10,7 @@
   import { accountChatsPath } from '@/routes';
   import { NewConversationDraft } from '$lib/new-conversation-draft';
   import { holdForRecording } from '$lib/recording-guard';
+  import { withTranscript } from '$lib/voice-note-recovery';
 
   let {
     chats = [],
@@ -61,11 +62,10 @@
   let error = $state('');
 
   function handleTranscription(text, audioSignedId, { retry = false } = {}) {
-    const existing = message.trim();
-    // A retried voice note can land after the person has typed something else: keep both and
-    // let them start the conversation, rather than replacing their text and sending it away.
-    if (retry && existing && existing !== text.trim()) {
-      message = `${message.trimEnd()}\n\n${text}`;
+    // A retried voice note fills the form and waits for the person to start the conversation;
+    // anything they typed meanwhile is kept ahead of it.
+    if (retry) {
+      message = withTranscript(message, text);
       draft.edit({ message });
       setPendingAudio(audioSignedId || null);
       return;

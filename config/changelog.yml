@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-18
+  title: A voice note survives a failed transcription
+  body: "If transcription fails, the recording is kept: the composer offers Retry transcription and Discard, and retry uses the same audio instead of asking you to record again. A recording the server saved stays retryable for 7 days, including after a reload; if the upload itself never arrived, it is kept in that tab and the page warns before you leave. A retried transcript fills the composer and waits for you to send it, after anything you typed meanwhile."
+- date: 2026-10-18
   title: Why voice notes still use ElevenLabs
   body: "The Decisions page records our comparison of local and cloud transcription alternatives, and why current voice-note usage does not justify replacing ElevenLabs or maintaining a hybrid."
 - date: 2026-10-18

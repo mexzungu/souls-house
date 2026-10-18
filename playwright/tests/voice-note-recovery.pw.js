@@ -153,10 +153,13 @@ test.describe('voice note recovery in an existing chat', () => {
 
     await retryButton(component).click();
     await expect(card(component)).toHaveCount(0);
+    await expect(component.getByRole('textbox')).toHaveValue('Recovered words');
     expect(uploads).toHaveLength(2);
     const marker = Buffer.alloc(AUDIO_BYTES, 7);
     expect(uploads[0].includes(marker)).toBe(true);
     expect(uploads[1].includes(marker)).toBe(true);
+    expect(sends).toHaveLength(0);
+    await component.getByRole('button', { name: 'Send message', exact: true }).click();
     await expect.poll(() => sends.length).toBe(1);
     expect(sends[0]).toContain('signed-2');
   });
@@ -271,4 +274,76 @@ test.describe('voice note recovery before a chat exists', () => {
     expect(posts[1]).toContain('signed-new');
     expect(await page.evaluate((key) => localStorage.getItem(key), recoveryKey('new'))).toBeNull();
   });
+});
+
+// Every retry fills the composer and waits: empty, identical and different drafts alike.
+// Nothing is sent or created until the person submits.
+const drafts = [
+  ['an empty composer', '', 'Spoken words'],
+  ['the same words already typed', 'Spoken words', 'Spoken words'],
+  ['different words typed', 'Typed first', 'Typed first\n\nSpoken words'],
+];
+
+test.describe('a retried transcript never sends by itself', () => {
+  test.beforeEach(async ({ page }) => fakeMicrophone(page));
+
+  for (const [label, typed, expected] of drafts) {
+    test(`existing chat, ${label}`, async ({ mount, page }) => {
+      const sends = await draftRoutes(page);
+      await page.evaluate(
+        ([key]) =>
+          localStorage.setItem(
+            key,
+            JSON.stringify({ signedId: 's-retry', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })
+          ),
+        [recoveryKey(CHAT)]
+      );
+      await page.route(chatPath, (route) =>
+        route.fulfill({ json: { text: 'Spoken words', audio_signed_id: 's-retry' } })
+      );
+
+      const component = await mount(MessageComposer, { props: composerProps });
+      const input = component.getByRole('textbox');
+      await input.fill(typed);
+      await retryButton(component).click();
+
+      await expect(input).toHaveValue(expected);
+      await expect(card(component)).toHaveCount(0);
+      await page.waitForTimeout(300);
+      expect(sends).toHaveLength(0);
+
+      await component.getByRole('button', { name: 'Send message', exact: true }).click();
+      await expect.poll(() => sends.length).toBe(1);
+      expect(sends[0]).toContain('s-retry');
+    });
+
+    test(`new conversation, ${label}`, async ({ mount, page }) => {
+      const creates = [];
+      await page.route('**/accounts/1/chats', (route) => {
+        creates.push(route.request().method());
+        return route.fulfill({ status: 500, body: '' });
+      });
+      await page.evaluate(
+        ([key]) =>
+          localStorage.setItem(
+            key,
+            JSON.stringify({ signedId: 's-new', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })
+          ),
+        [recoveryKey('new')]
+      );
+      await page.route(newPath, (route) => route.fulfill({ json: { text: 'Spoken words', audio_signed_id: 's-new' } }));
+
+      const component = await mount(NewChatForm, {
+        props: { userId: 7, account: { id: 1 }, chats: [], agents: [{ id: 'agent-1', name: 'Mira' }] },
+      });
+      const input = component.getByTestId('message-composer').getByRole('textbox');
+      await input.fill(typed);
+      await retryButton(component).click();
+
+      await expect(input).toHaveValue(expected);
+      await expect(card(component)).toHaveCount(0);
+      await page.waitForTimeout(300);
+      expect(creates).toHaveLength(0);
+    });
+  }
 });

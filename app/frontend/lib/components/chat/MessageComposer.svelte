@@ -5,6 +5,7 @@
   import FileUploadInput from '$lib/components/chat/FileUploadInput.svelte';
   import MicButton from '$lib/components/chat/MicButton.svelte';
   import { holdForRecording } from '$lib/recording-guard';
+  import { withTranscript } from '$lib/voice-note-recovery';
   import { accountChatMessagesPath } from '@/routes';
   import * as logging from '$lib/logging';
 
@@ -162,11 +163,10 @@
 
   function handleTranscription(text, audioSignedId, { retry = false } = {}) {
     setPendingAudio(audioSignedId || null);
-    const existing = draftState.content.trim();
-    // A retried voice note can land after the person has typed something else: keep both and
-    // let them send, rather than replacing their text and sending it away.
-    if (retry && existing && existing !== text.trim()) {
-      draft.edit(`${draftState.content.trimEnd()}\n\n${text}`);
+    // A retried voice note fills the composer and waits for the person to send it: they may
+    // have typed meanwhile, or come back after a reload. Their text is kept ahead of it.
+    if (retry) {
+      draft.edit(withTranscript(draftState.content, text));
       tick().then(autoResize);
       return;
     }

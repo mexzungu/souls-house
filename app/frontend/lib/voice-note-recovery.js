@@ -175,3 +175,12 @@ export function signedIdForm(signedId) {
   formData.append('audio_signed_id', signedId);
   return formData;
 }
+
+// The composer text after a retried transcript lands: the transcript alone in an empty
+// composer, unchanged if it already says exactly that, otherwise after what was typed.
+export function withTranscript(current, text) {
+  const typed = (current || '').trimEnd();
+  if (!typed.trim()) return text;
+  if (typed.trim() === text.trim()) return current;
+  return `${typed}\n\n${text}`;
+}

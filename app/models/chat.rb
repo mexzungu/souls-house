@@ -159,12 +159,13 @@ class Chat < ApplicationRecord
         })
         message.attachments.attach(files) if files.present? && files.any?
         if audio_signed_id.present?
-          begin
-            message.audio_recording.attach(audio_signed_id)
+          # Locked until commit, as in Messages::PostFromHuman: a recording
+          # discarded or swept first leaves the opening message its text.
+          if (audio = VoiceNote.lock_for_send(audio_signed_id))
+            message.audio_recording.attach(audio)
             message.update!(audio_source: true)
-          # A recording discarded or swept before the send leaves only the text.
-          rescue ActiveSupport::MessageVerifier::InvalidSignature, ActiveRecord::RecordNotFound
-            Rails.logger.warn "Invalid audio_signed_id for initial message in chat #{chat.id}"
+          else
+            Rails.logger.warn "Invalid or removed audio_signed_id for initial message in chat #{chat.id}"
           end
         end
         chat.send(:accept_opening_mention_dispatch, message) if automatic_response

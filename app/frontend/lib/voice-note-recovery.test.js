@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { clearRecovery, loadRecovery, readTranscription, recoveryKey, saveRecovery } from './voice-note-recovery';
+import {
+  clearRecovery,
+  loadRecovery,
+  readTranscription,
+  recoveryKey,
+  saveRecovery,
+  withTranscript,
+} from './voice-note-recovery';
 
 class MemoryStorage {
   constructor() {
@@ -113,5 +120,14 @@ describe('reading transcription answers', () => {
   it('keeps a saved recording saved when a retry cannot reach the app', async () => {
     expect((await readTranscription(null, { retrying: true })).saved).toBe('saved');
     expect((await readTranscription(new Response('', { status: 504 }), { retrying: true })).saved).toBe('saved');
+  });
+});
+
+describe('placing a retried transcript', () => {
+  it('fills an empty composer, keeps an identical one, and puts typed text first', () => {
+    expect(withTranscript('', 'Hello')).toBe('Hello');
+    expect(withTranscript('   ', 'Hello')).toBe('Hello');
+    expect(withTranscript('Hello', 'Hello')).toBe('Hello');
+    expect(withTranscript('Typed first  ', 'Hello')).toBe('Typed first\n\nHello');
   });
 });

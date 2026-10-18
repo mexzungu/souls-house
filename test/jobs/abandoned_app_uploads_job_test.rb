@@ -16,6 +16,7 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
   end
 
   teardown do
+    Array(@started_chats).each { |chat| Chat.find_by(id: chat.id)&.destroy! }
     @chat.destroy!
     @blobs.each { |blob| ActiveStorage::Blob.find_by(id: blob.id)&.purge }
   end
@@ -68,6 +69,72 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
 
     message.audio_recording.purge
     assert_equal false, VoiceNote.discard!(blob), "a recording already gone is reported gone"
+  end
+
+  # A voice-note send locks its recording until commit (VoiceNote.lock_for_send),
+  # in both send paths. Either the send holds the lock and a discard waits and
+  # then finds it attached, or a discard finishes between the signed id's
+  # resolution and the lock and the message keeps its text. The barriers wrap
+  # the real code at those two points.
+  { "a message in a chat" => :send_voice, "a new conversation" => :start_with_voice }.each do |label, sender|
+    test "#{label}: a send holding its recording makes a concurrent discard wait and then leave it" do
+      blob = voice_upload
+      locked = Queue.new
+      release = Queue.new
+      original = VoiceNote.method(:lock_for_send)
+      holding = lambda do |signed_id|
+        held = original.call(signed_id) # the row is locked from here to the send's commit
+        locked << true
+        release.pop
+        held
+      end
+
+      VoiceNote.stub(:lock_for_send, holding) do
+        sending = Thread.new { ActiveRecord::Base.connection_pool.with_connection { send(sender, blob) } }
+        Timeout.timeout(10) do
+          locked.pop
+          discarding = Thread.new { ActiveRecord::Base.connection_pool.with_connection { VoiceNote.discard!(blob) } }
+          sleep 0.3
+          assert discarding.alive?, "the discard waits for the send's lock"
+          release << true
+          assert sending.value.audio_recording.attached?
+          assert_nil discarding.value, "after the send commits, the discard finds the recording attached"
+        end
+      end
+
+      assert ActiveStorage::Blob.exists?(blob.id)
+      assert blob.service.exist?(blob.key)
+    end
+
+    test "#{label}: a discard that wins between resolution and lock leaves the message its text" do
+      blob = voice_upload
+      resolved = Queue.new
+      release = Queue.new
+      original = ActiveStorage::Blob.method(:find_signed)
+      resolving = lambda do |*args, **kwargs|
+        found = original.call(*args, **kwargs)
+        resolved << true
+        release.pop
+        found
+      end
+
+      message = nil
+      ActiveStorage::Blob.stub(:find_signed, resolving) do
+        sending = Thread.new { ActiveRecord::Base.connection_pool.with_connection { send(sender, blob) } }
+        Timeout.timeout(10) do
+          resolved.pop
+          discarded = Thread.new { ActiveRecord::Base.connection_pool.with_connection { VoiceNote.discard!(blob) } }.value
+          assert_equal true, discarded
+          release << true
+          message = sending.value
+        end
+      end
+
+      assert message.persisted?
+      assert_match "Spoken words", message.content
+      assert_not message.reload.audio_recording.attached?
+      assert_not ActiveStorage::Blob.exists?(blob.id)
+    end
   end
 
   test "a bounded batch is removed and another run takes the remainder" do
@@ -238,6 +305,28 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
       chat: @chat, user: @user, content: "Upload #{SecureRandom.hex(4)}",
       files: [ blob ], client_message_id: SecureRandom.uuid
     ).call(on_persisted: on_persisted)
+  end
+
+  def voice_upload(created_at: @now)
+    upload(created_at: created_at, metadata: { "voice_note" => VoiceNote.metadata_for(user: @user, account: @chat.account, chat: @chat) })
+  end
+
+  def send_voice(blob)
+    result = Messages::PostFromHuman.new(
+      chat: @chat, user: @user, content: "Spoken words", audio_signed_id: blob.signed_id, client_message_id: SecureRandom.uuid
+    ).call
+    assert result.created?
+    result.message
+  end
+
+  def start_with_voice(blob)
+    chat = Chat.create_with_message!(
+      { model_id: "openrouter/auto", account: @chat.account, manual_responses: true, title: "Voice opening" },
+      message_content: "Spoken words", user: @user, audio_signed_id: blob.signed_id, automatic_response: false,
+      agent_ids: [ @chat.account.agents.where(active: true).order(:id).first!.id ]
+    )
+    (@started_chats ||= []) << chat
+    chat.messages.first
   end
 
 end
