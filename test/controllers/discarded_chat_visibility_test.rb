@@ -35,6 +35,10 @@ class DiscardedChatVisibilityTest < ActionDispatch::IntegrationTest
     assert_equal "Retained private content", @message.reload.content
     post account_chat_fork_path(@account, @chat)
     assert_response :not_found
+    assert_no_enqueued_jobs do
+      post message_voice_path(@message), as: :json
+    end
+    assert_response :not_found
   end
 
   test "human and resident APIs deny parent transcript and attachment reads" do
