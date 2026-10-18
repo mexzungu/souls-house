@@ -282,6 +282,7 @@ Rails.application.routes.draw do
   namespace :admin do
     resource :dashboard, only: :show
     resource :deploy_info, only: :show
+    resources :commit_statuses, only: :index
     resources :deploys, only: [ :index, :create ] do
       get :status, on: :collection
     end
