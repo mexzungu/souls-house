@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-18
+  title: Withdrawn Stones retain their originals
+  body: "Withdrawing a Stone hides its publication without deleting the original HTML of any revision. Withdrawn content stays unavailable through public and generic download links."
+- date: 2026-10-18
   title: Deleted conversations stay hidden until restored
   body: "Deleted conversations and their retained files no longer open through old conversation or download links. Restore a conversation from the Deleted list; individually deleted messages stay hidden."
 - date: 2026-10-18
