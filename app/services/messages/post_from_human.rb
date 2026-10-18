@@ -156,7 +156,8 @@ class Messages::PostFromHuman
   def attach_audio(message)
     message.audio_recording.attach(@audio_signed_id)
     message.audio_source = true
-  rescue ActiveSupport::MessageVerifier::InvalidSignature
+  # A recording discarded or swept before the send leaves only the text.
+  rescue ActiveSupport::MessageVerifier::InvalidSignature, ActiveRecord::RecordNotFound
     Rails.logger.warn "Invalid audio_signed_id for message in chat #{@chat.id}"
   end
 

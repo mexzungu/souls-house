@@ -162,7 +162,8 @@ class Chat < ApplicationRecord
           begin
             message.audio_recording.attach(audio_signed_id)
             message.update!(audio_source: true)
-          rescue ActiveSupport::MessageVerifier::InvalidSignature
+          # A recording discarded or swept before the send leaves only the text.
+          rescue ActiveSupport::MessageVerifier::InvalidSignature, ActiveRecord::RecordNotFound
             Rails.logger.warn "Invalid audio_signed_id for initial message in chat #{chat.id}"
           end
         end

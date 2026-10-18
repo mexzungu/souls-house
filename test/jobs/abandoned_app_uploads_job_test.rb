@@ -41,6 +41,35 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
     assert message.reload.attachments.attached?
   end
 
+  test "unsent chat voice notes are kept for seven days, then removed; sent ones stay" do
+    voice = ->(age) { upload(created_at: @now - age, metadata: { "voice_note" => VoiceNote.metadata_for(user: @user, account: @chat.account, chat: @chat) }) }
+    expired = voice.call(7.days + 1.second)
+    retryable = voice.call(2.days)
+    sent = voice.call(8.days)
+    message = @chat.messages.create!(role: "user", user: @user, content: "with audio")
+    message.audio_recording.attach(sent)
+
+    AbandonedAppUploadsJob.perform_now(now: @now)
+
+    assert_not ActiveStorage::Blob.exists?(expired.id)
+    assert_not expired.service.exist?(expired.key)
+    [ retryable, sent ].each { |blob| assert ActiveStorage::Blob.exists?(blob.id) }
+    assert message.reload.audio_recording.attached?
+  end
+
+  test "discarding a voice note that a message has just taken leaves it in place" do
+    blob = upload(created_at: @now, metadata: { "voice_note" => VoiceNote.metadata_for(user: @user, account: @chat.account, chat: @chat) })
+    message = @chat.messages.create!(role: "user", user: @user, content: "with audio")
+    message.audio_recording.attach(blob)
+
+    assert_nil VoiceNote.discard!(blob)
+    assert ActiveStorage::Blob.exists?(blob.id)
+    assert blob.service.exist?(blob.key)
+
+    message.audio_recording.purge
+    assert_equal false, VoiceNote.discard!(blob), "a recording already gone is reported gone"
+  end
+
   test "a bounded batch is removed and another run takes the remainder" do
     blobs = 3.times.map { upload(created_at: @now - 2.days) }
     stub_const(AbandonedAppUploadsJob, :BATCH_SIZE, 2) do
