@@ -13,6 +13,8 @@ class Api::V1::MessageRestoresControllerTest < ActionDispatch::IntegrationTest
       client_message_id: SecureRandom.uuid,
       suppress_automatic_dispatch: true)
     @message.attachments.attach(io: StringIO.new("Retained bytes"), filename: "note.txt", content_type: "text/plain")
+    @dispatch = MessageDispatch.accept!(message: @message, target_agent_ids: @chat.agent_ids)
+    @message.reload
     @message.discard_as_author!
     @key = ApiKey.generate_for(@user, name: "Recovery operator", account: @account)
     @headers = { "Authorization" => "Bearer #{@key.raw_token}" }
@@ -33,6 +35,7 @@ class Api::V1::MessageRestoresControllerTest < ActionDispatch::IntegrationTest
     restored_revision = @message.revision
     assert_operator restored_revision, :>, revision
     assert_equal identity, @message.client_message_id
+    assert_equal [ "cancelled", "discarded" ], @dispatch.reload.values_at(:status, :reason)
     assert_equal "Retained message", @message.content
     assert_equal "Retained bytes", @message.attachments.sole.download
     assert_equal({ "id" => @message.to_param, "conversation_id" => @chat.to_param,
