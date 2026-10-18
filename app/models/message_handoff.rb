@@ -186,7 +186,7 @@ class MessageHandoff < ApplicationRecord
       next block!(reason) if reason
 
       begin
-        result = chat.trigger_agent_response!(recipient_agent)
+        result = chat.trigger_agent_response!(recipient_agent, wake_source_kinds: WakeProvenance.for(message: message))
         update!(status: "triggered", runtime_interaction: result.is_a?(AgentRuntimeInteraction) ? result : nil)
       rescue Chat::AlreadyResponding
         wake = PendingWake.queue!(chat: chat, agent: recipient_agent, requested_by: "#{requester_label}'s message", message: message)

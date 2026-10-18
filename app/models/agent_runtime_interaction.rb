@@ -57,7 +57,7 @@ class AgentRuntimeInteraction < ApplicationRecord
     active.where("agent_runtime_interactions.execution_state IS NULL OR agent_runtime_interactions.execution_state NOT IN (?)", TERMINAL_STATES)
   }
 
-  def self.record_trigger!(agent:, chat:, trigger_kind:, conversation_id:, requested_by:, session_id:, endpoint_url:, request_text:, last_included_message_id: nil, provider_auth_mode: "api_key", provider: nil, model: nil)
+  def self.record_trigger!(agent:, chat:, trigger_kind:, conversation_id:, requested_by:, session_id:, endpoint_url:, request_text:, last_included_message_id: nil, provider_auth_mode: "api_key", provider: nil, model: nil, wake_source_kinds: [])
     interaction = agent.with_lock do
       raise Agent::RuntimeAvailability::Unavailable, "Resident is inactive" unless agent.active?
       if Agents::RemoteRuntime.refresh_pending?(agent)
@@ -70,6 +70,7 @@ class AgentRuntimeInteraction < ApplicationRecord
         trigger_kind: trigger_kind,
         conversation_obfuscated_id: conversation_id,
         requested_by: requested_by,
+        wake_source_kinds: wake_source_kinds,
         session_id: session_id,
         endpoint_url: endpoint_url,
         request_text: request_text,
