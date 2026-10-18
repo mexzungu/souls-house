@@ -4,7 +4,7 @@
 module RetainsStoneHtml
 
   def perform(blob)
-    return if blob.metadata["stone_html"] == true
+    return if ActiveModel::Type::Boolean.new.cast(blob.metadata["stone_html"])
 
     super
   end
