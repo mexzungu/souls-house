@@ -73,7 +73,9 @@ async function draftRoutes(page) {
   const sends = [];
   await page.route(`**/accounts/1/chats/${CHAT}/messages`, async (route) => {
     sends.push(route.request().postData());
-    await route.fulfill({ json: { message: { id: 'm1', role: 'user', content: 'x' }, draft: { content: '', revision: 99 } } });
+    await route.fulfill({
+      json: { message: { id: 'm1', role: 'user', content: 'x' }, draft: { content: '', revision: 99 } },
+    });
   });
   return sends;
 }
@@ -83,7 +85,10 @@ const composerProps = { accountId: 1, chatId: CHAT, userId: 7 };
 test.describe('voice note recovery in an existing chat', () => {
   test.beforeEach(async ({ page }) => fakeMicrophone(page));
 
-  test('a saved failure survives a reload and a retry fills the composer without overwriting typed text', async ({ mount, page }) => {
+  test('a saved failure survives a reload and a retry fills the composer without overwriting typed text', async ({
+    mount,
+    page,
+  }) => {
     const sends = await draftRoutes(page);
     const posts = [];
     let answer = savedFailure();
@@ -99,7 +104,9 @@ test.describe('voice note recovery in an existing chat', () => {
     await expect(card(component)).toContainText('Voice note not transcribed');
     await expect(card(component)).toContainText('Your recording is saved until');
     await expect(card(component)).toHaveAttribute('data-saved', 'saved');
-    expect(JSON.parse(await page.evaluate((key) => localStorage.getItem(key), recoveryKey(CHAT))).signedId).toBe('signed-1');
+    expect(JSON.parse(await page.evaluate((key) => localStorage.getItem(key), recoveryKey(CHAT))).signedId).toBe(
+      'signed-1'
+    );
     await expect(component.getByRole('button', { name: 'Record voice message' })).toHaveCount(0);
 
     // The reload: a fresh composer finds the saved recording.
@@ -126,7 +133,10 @@ test.describe('voice note recovery in an existing chat', () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), recoveryKey(CHAT))).toBeNull();
   });
 
-  test('an upload whose answer was lost keeps the bytes in the tab and re-uploads the same recording', async ({ mount, page }) => {
+  test('an upload whose answer was lost keeps the bytes in the tab and re-uploads the same recording', async ({
+    mount,
+    page,
+  }) => {
     const sends = await draftRoutes(page);
     const uploads = [];
     await page.route(chatPath, async (route) => {
@@ -182,8 +192,12 @@ test.describe('voice note recovery in an existing chat', () => {
   test('a failed discard is not reported as deleted', async ({ mount, page }) => {
     await draftRoutes(page);
     await page.evaluate(
-      ([key]) => localStorage.setItem(key, JSON.stringify({ signedId: 'signed-4', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })),
-      [recoveryKey(CHAT)],
+      ([key]) =>
+        localStorage.setItem(
+          key,
+          JSON.stringify({ signedId: 'signed-4', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })
+        ),
+      [recoveryKey(CHAT)]
     );
     await page.route(chatPath, (route) => route.fulfill({ status: 500, body: 'boom' }));
 
@@ -196,11 +210,18 @@ test.describe('voice note recovery in an existing chat', () => {
   test('a recording that is no longer on the server ends cleanly', async ({ mount, page }) => {
     await draftRoutes(page);
     await page.evaluate(
-      ([key]) => localStorage.setItem(key, JSON.stringify({ signedId: 'signed-5', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })),
-      [recoveryKey(CHAT)],
+      ([key]) =>
+        localStorage.setItem(
+          key,
+          JSON.stringify({ signedId: 'signed-5', error: 'Timeout', expiresAt: '2099-01-01T00:00:00Z' })
+        ),
+      [recoveryKey(CHAT)]
     );
     await page.route(chatPath, (route) =>
-      route.fulfill({ status: 404, json: { error: 'That recording is no longer available.', retryable: false, saved: false } }),
+      route.fulfill({
+        status: 404,
+        json: { error: 'That recording is no longer available.', retryable: false, saved: false },
+      })
     );
 
     const component = await mount(MessageComposer, { props: composerProps });

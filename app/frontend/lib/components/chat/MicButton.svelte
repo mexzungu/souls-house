@@ -45,7 +45,10 @@
     if (!recovered) return;
     if (recovered.expired) {
       clearRecovery(scope());
-      failure = { saved: 'gone', error: 'A voice note that failed to transcribe has expired and is no longer available.' };
+      failure = {
+        saved: 'gone',
+        error: 'A voice note that failed to transcribe has expired and is no longer available.',
+      };
     } else {
       failure = { ...recovered, saved: 'saved', persisted: true, retryable: true, recovered: true };
     }
@@ -140,7 +143,9 @@
   }
 
   function transcriptionPath() {
-    return chatId ? `/accounts/${accountId}/chats/${chatId}/transcription` : `/accounts/${accountId}/chats/transcription`;
+    return chatId
+      ? `/accounts/${accountId}/chats/${chatId}/transcription`
+      : `/accounts/${accountId}/chats/transcription`;
   }
 
   function request(method, formData) {
@@ -195,14 +200,35 @@
       const signedId = result.signedId || failure.signedId;
       const expiresAt = result.expiresAt ?? failure?.expiresAt ?? null;
       const persisted = userId ? saveRecovery(scope(), { signedId, error: result.error, expiresAt }) : false;
-      failure = { blob, mimeType, signedId, expiresAt, persisted, saved: 'saved', error: result.error, retryable: result.retryable !== false };
+      failure = {
+        blob,
+        mimeType,
+        signedId,
+        expiresAt,
+        persisted,
+        saved: 'saved',
+        error: result.error,
+        retryable: result.retryable !== false,
+      };
     } else if (result.saved === 'gone') {
       clearRecovery(scope());
       failure = blob
-        ? { blob, mimeType, saved: 'unsaved', retryable: true, error: `${result.error} It is still in this tab; Retry uploads it again.` }
+        ? {
+            blob,
+            mimeType,
+            saved: 'unsaved',
+            retryable: true,
+            error: `${result.error} It is still in this tab; Retry uploads it again.`,
+          }
         : { saved: 'gone', error: result.error };
     } else {
-      failure = { blob, mimeType, saved: result.saved, error: result.error, retryable: result.retryable !== false && !!blob };
+      failure = {
+        blob,
+        mimeType,
+        saved: result.saved,
+        error: result.error,
+        retryable: result.retryable !== false && !!blob,
+      };
     }
     syncFailureHold();
     state = 'failed';
@@ -238,9 +264,10 @@
       // 404: already gone, which is what was asked for.
       if (!response || !(response.ok || response.status === 404)) {
         failure.busy = null;
-        failure.discardError = response?.status === 409
-          ? 'That recording has already been sent, so it was not deleted.'
-          : 'Could not delete the recording. It is still saved; try again.';
+        failure.discardError =
+          response?.status === 409
+            ? 'That recording has already been sent, so it was not deleted.'
+            : 'Could not delete the recording. It is still saved; try again.';
         return;
       }
     }

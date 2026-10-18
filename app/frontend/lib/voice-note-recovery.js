@@ -90,7 +90,8 @@ export async function readTranscription(response, { retrying = false } = {}) {
 
   let data = null;
   try {
-    data = JSON.parse(await response.text());
+    // Read as text so a proxy's HTML error page cannot throw past us.
+    data = typeof response.text === 'function' ? JSON.parse(await response.text()) : await response.json();
   } catch {
     data = null;
   }
@@ -100,7 +101,8 @@ export async function readTranscription(response, { retrying = false } = {}) {
   }
 
   if (data && typeof data === 'object' && 'saved' in data) {
-    if (response.status === 404) return { ok: false, saved: 'gone', error: data.error || 'That recording is no longer available.' };
+    if (response.status === 404)
+      return { ok: false, saved: 'gone', error: data.error || 'That recording is no longer available.' };
     if (data.saved === true) {
       return {
         ok: false,
@@ -111,13 +113,22 @@ export async function readTranscription(response, { retrying = false } = {}) {
         retryable: data.retryable !== false,
       };
     }
-    return { ok: false, saved: 'unsaved', error: data.error || 'The recording could not be saved.', retryable: data.retryable !== false };
+    return {
+      ok: false,
+      saved: 'unsaved',
+      error: data.error || 'The recording could not be saved.',
+      retryable: data.retryable !== false,
+    };
   }
 
   // An answer that is not the app's (a proxy's 413/502/504, or HTML): the app
   // may still have stored the upload, so do not claim either way.
   if (retrying) {
-    return { ok: false, saved: 'saved', error: `Transcription failed (HTTP ${response.status}). Your recording is still saved.` };
+    return {
+      ok: false,
+      saved: 'saved',
+      error: `Transcription failed (HTTP ${response.status}). Your recording is still saved.`,
+    };
   }
   if (response.status === 413) {
     return { ok: false, saved: 'unsaved', error: 'The recording is too large to upload.', retryable: false };

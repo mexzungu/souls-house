@@ -17,7 +17,8 @@ class MemoryStorage {
 }
 
 const scope = { userId: 'u1', accountId: 'a1', chatId: 'c1' };
-const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+const json = (status, body) =>
+  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
 describe('voice note recovery storage', () => {
   it('keys by user, account and chat, with new conversations kept apart', () => {
@@ -76,14 +77,22 @@ describe('reading transcription answers', () => {
 
   it('distinguishes saved, unsaved and gone from the app', async () => {
     const saved = await readTranscription(
-      json(422, { error: 'No speech detected', saved: true, retryable: true, audio_signed_id: 's1', expires_at: 'x' }),
+      json(422, { error: 'No speech detected', saved: true, retryable: true, audio_signed_id: 's1', expires_at: 'x' })
     );
-    expect(saved).toMatchObject({ ok: false, saved: 'saved', signedId: 's1', error: 'No speech detected', retryable: true });
+    expect(saved).toMatchObject({
+      ok: false,
+      saved: 'saved',
+      signedId: 's1',
+      error: 'No speech detected',
+      retryable: true,
+    });
 
     const unsaved = await readTranscription(json(503, { error: 'not saved', saved: false, retryable: true }));
     expect(unsaved).toMatchObject({ saved: 'unsaved', retryable: true });
 
-    const gone = await readTranscription(json(404, { error: 'gone', saved: false, retryable: false }), { retrying: true });
+    const gone = await readTranscription(json(404, { error: 'gone', saved: false, retryable: false }), {
+      retrying: true,
+    });
     expect(gone).toMatchObject({ saved: 'gone' });
   });
 
