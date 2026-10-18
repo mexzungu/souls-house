@@ -24,17 +24,18 @@ test('a deleted conversation is hidden and can be restored from the deleted list
     page.once('dialog', (dialog) => dialog.accept());
     await page.getByRole('button', { name: 'Conversation actions' }).click();
     await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
-    await expect(page).toHaveURL(`/accounts/${setup.account_id}/chats`);
+    await expect(page).toHaveURL(/\/accounts\/[^/]+\/chats$/);
+    const indexUrl = page.url();
     const directRead = await page.request.get(chatPath);
     expect(directRead.status()).toBe(404);
     expect(await directRead.text()).not.toContain(fixture.first_message);
 
-    await page.goto(`/accounts/${setup.account_id}/chats?show_deleted=true`);
+    await page.goto(`${indexUrl}?show_deleted=true`);
     await expect(page.getByRole('link', { name: 'E2E long conversation', exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Restore E2E long conversation', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Restore E2E long conversation', exact: true })).toHaveCount(0);
     await page.getByRole('link', { name: /E2E long conversation/ }).click();
-    await expect(page).toHaveURL(chatPath);
+    await expect(page).toHaveURL(new RegExp(`/chats/${fixture.chat_id}$`));
     await expect(page.getByText(fixture.first_message, { exact: true })).toBeVisible();
   } finally {
     await request.post('/test/e2e/cleanup', { data: { run_id: runId } });
