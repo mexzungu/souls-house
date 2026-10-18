@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-18
+  title: Deleted conversations stay hidden until restored
+  body: "Deleted conversations and their retained files no longer open through old conversation or download links. Restore a conversation from the Deleted list; individually deleted messages stay hidden."
+- date: 2026-10-18
   title: Conversations keep a recovery path
   body: "The legacy web chat DELETE endpoint that permanently removed conversations, messages and attachments is gone; use the existing Discard and Restore controls instead. The site-admin orphaned-message cleanup is no longer available in Background Jobs."
 - date: 2026-10-17
