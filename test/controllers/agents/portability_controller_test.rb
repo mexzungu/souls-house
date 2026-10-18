@@ -78,6 +78,21 @@ class Agents::PortabilityControllerTest < ActionDispatch::IntegrationTest
     assert @agent.paused?
   end
 
+  test "a copy staged for its own server is refused at activation and nothing local is touched" do
+    AgentPlacement.create!(agent: @agent, backend: "hetzner_cloud", kind: "archive_import", state: "staged")
+    Agents::Sandbox.stub(:new, ->(*) { flunk "a staged copy must never reach the local sandbox" }) do
+      Agents::Portability::Transport.stub(:new, ->(*) { flunk "a staged copy has no local volumes" }) do
+        post portability_activate_account_agent_path(@account, @agent), params: { confirmed: true }
+      end
+    end
+    assert_response :unprocessable_entity
+    assert_equal Agents::PortabilityController::STAGED_REFUSAL, response.parsed_body["error"]
+    @agent.reload
+    refute @agent.active?
+    assert @agent.paused?
+    assert @agent.placement.staged?
+  end
+
   test "stop rejects unknown idle probe and retains disabled admission without killing" do
     @agent.update_columns(active: true, paused: false, scheduled_wakes_enabled: true)
     transport = Object.new

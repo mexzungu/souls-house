@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_18_090000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_18_100000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -176,7 +176,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_090000) do
     t.datetime "updated_at", null: false
     t.index ["agent_id", "role"], name: "index_agent_import_stages_on_agent_id_and_role", unique: true
     t.check_constraint "bytes > 0", name: "agent_import_stages_positive_bytes"
-    t.check_constraint "role::text = ANY (ARRAY['identity'::character varying, 'repo'::character varying, 'work'::character varying]::text[])", name: "agent_import_stages_role"
+    t.check_constraint "role::text = ANY (ARRAY['identity'::character varying::text, 'repo'::character varying::text, 'work'::character varying::text])", name: "agent_import_stages_role"
   end
 
   create_table "agent_memories", force: :cascade do |t|
@@ -216,10 +216,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_090000) do
     t.binary "seed_archive"
     t.string "seed_sha256"
     t.datetime "seeded_at"
+    t.string "kind"
     t.index ["agent_id"], name: "index_agent_placements_on_agent_id", unique: true
     t.index ["cleanup_requested_at"], name: "index_agent_placements_on_cleanup_requested_at", where: "(cleanup_requested_at IS NOT NULL)"
     t.index ["provider_server_id"], name: "index_agent_placements_on_provider_server_id", unique: true, where: "(provider_server_id IS NOT NULL)"
     t.check_constraint "generation >= 1", name: "agent_placements_positive_generation"
+    t.check_constraint "kind IS NULL OR (kind::text = ANY (ARRAY['birth'::character varying, 'archive_import'::character varying, 'github_import'::character varying]::text[]))", name: "agent_placements_kind"
     t.check_constraint "provider_server_id > 0", name: "agent_placements_positive_server_id"
   end
 
