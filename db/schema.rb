@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_18_110000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_18_190000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -221,7 +221,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_110000) do
     t.index ["cleanup_requested_at"], name: "index_agent_placements_on_cleanup_requested_at", where: "(cleanup_requested_at IS NOT NULL)"
     t.index ["provider_server_id"], name: "index_agent_placements_on_provider_server_id", unique: true, where: "(provider_server_id IS NOT NULL)"
     t.check_constraint "generation >= 1", name: "agent_placements_positive_generation"
-    t.check_constraint "kind IS NULL OR (kind::text = ANY (ARRAY['birth'::character varying, 'archive_import'::character varying, 'github_import'::character varying]::text[]))", name: "agent_placements_kind"
+    t.check_constraint "kind IS NULL OR (kind::text = ANY (ARRAY['birth'::character varying::text, 'archive_import'::character varying::text, 'github_import'::character varying::text]))", name: "agent_placements_kind"
     t.check_constraint "provider_server_id > 0", name: "agent_placements_positive_server_id"
   end
 
@@ -2130,11 +2130,13 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_110000) do
     t.bigint "resident_turn_id"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "seed_role"
     t.index ["agent_placement_id"], name: "index_runner_commands_on_agent_placement_id"
     t.index ["public_id"], name: "index_runner_commands_on_public_id", unique: true
     t.index ["resident_turn_id"], name: "index_runner_commands_on_resident_turn_id"
     t.index ["runner_enrollment_id", "state", "id"], name: "index_runner_commands_on_runner_enrollment_id_and_state_and_id"
     t.index ["runner_enrollment_id"], name: "index_runner_commands_on_runner_enrollment_id"
+    t.check_constraint "seed_role IS NULL OR kind::text = 'seed_home'::text AND (seed_role::text = ANY (ARRAY['identity'::character varying, 'repo'::character varying, 'work'::character varying]::text[]))", name: "runner_commands_seed_role"
   end
 
   create_table "runner_enrollments", force: :cascade do |t|
