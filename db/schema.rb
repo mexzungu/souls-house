@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_18_100000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_18_110000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -329,6 +329,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_100000) do
     t.datetime "follow_through_checked_at"
     t.bigint "failure_notice_message_id"
     t.bigint "stalled_thread_sweep_id"
+    t.jsonb "wake_source_kinds", default: [], null: false
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -1818,6 +1819,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_18_100000) do
     t.bigint "requester_agent_id"
     t.datetime "updated_at", null: false
     t.bigint "user_id"
+    t.jsonb "wake_source_kinds", default: [], null: false
     t.index ["message_id"], name: "index_pending_wake_sources_on_message_id"
     t.index ["pending_wake_id"], name: "index_pending_wake_sources_on_pending_wake_id"
     t.index ["requester_agent_id"], name: "index_pending_wake_sources_on_requester_agent_id"

@@ -329,7 +329,7 @@ class Chat < ApplicationRecord
   # API tells it apart as a 409 (#94 B, step 4b-iii).
   class AlreadyResponding < ArgumentError; end
 
-  def trigger_agent_response!(agent)
+  def trigger_agent_response!(agent, wake_source_kinds: [])
     raise ArgumentError, "Resident not in this conversation" unless agents.include?(agent)
     agent.require_conversation_runtime!
     raise ArgumentError, "This chat does not support manual responses" unless manual_responses?
@@ -337,9 +337,9 @@ class Chat < ApplicationRecord
     raise AlreadyResponding, "#{agent.name} is already responding" if agent_response_active?(agent)
 
     if AgentRuntimeInteraction.live_activity_enabled?
-      AgentRuntimeInteraction.reserve!(agent: agent, chat: self, enqueue: true)
+      AgentRuntimeInteraction.reserve!(agent: agent, chat: self, enqueue: true, wake_source_kinds: wake_source_kinds)
     else
-      ManualAgentResponseJob.perform_later(self, agent)
+      ManualAgentResponseJob.perform_later(self, agent, wake_source_kinds: wake_source_kinds)
     end
   end
 
@@ -367,12 +367,14 @@ class Chat < ApplicationRecord
   # refused: the request becomes a PendingWake, released as one run when the
   # busy run finishes. Everything else trigger_agent_response! refuses is
   # still refused. Returns :triggered or :queued.
-  def request_agent_response!(agent, requested_by:, user: nil, requester_agent: nil)
+  def request_agent_response!(agent, requested_by:, user: nil, requester_agent: nil, wake_source_kinds: nil)
+    wake_source_kinds ||= WakeProvenance.for(user: user, requester_agent: requester_agent)
     with_lock do
-      trigger_agent_response!(agent)
+      trigger_agent_response!(agent, wake_source_kinds: wake_source_kinds)
       :triggered
     rescue AlreadyResponding
-      PendingWake.queue!(chat: self, agent: agent, requested_by: requested_by, user: user, requester_agent: requester_agent)
+      PendingWake.queue!(chat: self, agent: agent, requested_by: requested_by, user: user, requester_agent: requester_agent,
+        wake_source_kinds: wake_source_kinds)
       :queued
     end
   end
@@ -395,7 +397,10 @@ class Chat < ApplicationRecord
       busy.each do |agent|
         PendingWake.queue!(chat: self, agent: agent, requested_by: requested_by, user: user, requester_agent: requester_agent)
       end
-      AllAgentsResponseJob.perform_later(self, free.map(&:id)) if free.any?
+      if free.any?
+        AllAgentsResponseJob.perform_later(self, free.map(&:id),
+          wake_source_kinds: WakeProvenance.for(user: user, requester_agent: requester_agent))
+      end
       { triggered: free, queued: busy }
     end
   end
