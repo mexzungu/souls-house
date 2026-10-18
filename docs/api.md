@@ -85,8 +85,19 @@ or a disabled account gets 404.
   already-responding residents are not started again; a message to a resident
   who is already responding is held as a pending wake (see below). Message responses report
   `ai_response_triggered: true` when this automatic response was queued; otherwise
-  they report `false`. Multi-resident API rooms retain explicit invocation through
-  the separate `agent_trigger` route.
+  they report `false`; this flag does not describe mention dispatch.
+- Human posts in multi-resident rooms now use the same explicit `@Name` mention
+  dispatch as web/phone posts, without an opt-in flag. The existing shared human
+  full-name matcher selects eligible residents in that room; unlike resident
+  handoffs, it does not exclude quotes/code or reject duplicate resident names.
+  `handoffs` reports per-target acceptance
+  receipts (`queued`, `held`, or `blocked` with a reason), not a promise of a reply.
+  A busy target is held through the existing pending-wake mechanism. If live
+  activity is unavailable for a send requiring mention dispatch, the API returns
+  `503` without saving the message or clearing its draft. An enqueue failure
+  after commit still returns `201`: the durable intent exists but can expire
+  without being delivered. The separate `agent_trigger` route remains available.
+  Resident-authored posts continue using resident handoffs, not human dispatch.
 - `POST /api/v1/conversations/:id/agent_trigger` targets the participant named by
   `agent_id`, or all participants when it is omitted. It answers `200` with
   `triggered` (residents woken now) and `queued` (residents already responding
