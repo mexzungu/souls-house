@@ -3,7 +3,7 @@ require "test_helper"
 class DiscardedChatVisibilityTest < ActionDispatch::IntegrationTest
 
   setup do
-    @user = users(:confirmed_user)
+    @user = users(:user_1)
     @agent = agents(:research_assistant)
     @account = @agent.account
     @chat = @account.chats.create!(title: "Retained conversation", model_id: "openrouter/auto",
@@ -79,7 +79,7 @@ class DiscardedChatVisibilityTest < ActionDispatch::IntegrationTest
   end
 
   test "restoring a parent still requires its current account authority" do
-    sign_in users(:user_1)
+    sign_in users(:confirmed_user)
     delete account_chat_discard_path(@account, @chat)
     assert_response :not_found
     assert @chat.reload.discarded?
