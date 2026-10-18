@@ -449,6 +449,7 @@ Rails.application.routes.draw do
         resources :messages, only: [ :create, :update, :destroy ] do
           resources :attachments, only: :show
           resource :safeguard_reset, only: :create
+          resource :restore, only: :create, controller: "message_restores"
         end
         resource :agent_trigger, only: :create
         resource :model, only: [ :show, :create ], controller: "conversation_models"
