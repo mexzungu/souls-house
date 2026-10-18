@@ -15,10 +15,12 @@ error.
 
 Cleanup commits the blob-row removal before deleting storage bytes. Storage
 failure can leave orphan bytes, but cannot resurrect a claimable row pointing to
-missing bytes. Such an exception fails the job visibly through normal job error
-reporting; this narrow change adds no durable storage-deletion ledger. Inspect
-the failed job before retrying: its already-deleted blob row will not be selected
-again. Do not turn that inspection into a general untagged-blob purge.
+missing bytes. Each row's failure is logged with its blob ID and exception class,
+without filenames, storage keys or service-error details; other candidates in the
+batch still run. This narrow change adds no durable storage-deletion ledger.
+Inspect the cleanup error logs: an already-deleted blob row will not be selected
+again, whereas a row whose deletion rolled back can be retried next hour.
+Do not turn that inspection into a general untagged-blob purge.
 
 Rollback disables future cleanup by reverting the job and recurring entry. It
 cannot recover purged files. Existing backups are not an application-level undo.

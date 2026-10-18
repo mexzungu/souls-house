@@ -29,6 +29,10 @@ class AbandonedAppUploadsJob < ApplicationJob
       # missing row, never a rollback that resurrects a blob without its bytes.
       # Blob#delete also removes image variants, as Blob#purge does.
       deleted&.delete
+    rescue StandardError => error
+      # A bad row or unavailable object must not prevent the rest of the
+      # batch from being cleaned. Do not log keys, filenames or service errors.
+      Rails.logger.error "[AbandonedAppUploadsJob] blob_id=#{id} cleanup failed: #{error.class}"
     end
   end
 

@@ -51,22 +51,51 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
     assert_empty ActiveStorage::Blob.where(id: blobs.map(&:id))
   end
 
-  test "a storage deletion failure cannot resurrect the row or damage a neighboring upload" do
+  test "a storage deletion failure is logged without stopping the next upload" do
     blob = upload(created_at: @now - 2.days)
     neighbor = upload(created_at: @now - 2.days)
     service = blob.service
-    service.stub(:delete, ->(*) { raise IOError, "storage unavailable" }) do
-      assert_raises(IOError) { AbandonedAppUploadsJob.perform_now(now: @now) }
+    original_delete = service.method(:delete)
+    errors = []
+    Rails.logger.stub(:error, ->(message) { errors << message }) do
+      service.stub(:delete, lambda { |key|
+        raise IOError, "private service diagnostic" if key == blob.key
+        original_delete.call(key)
+      }) do
+        AbandonedAppUploadsJob.perform_now(now: @now)
+      end
     end
 
     assert_not ActiveStorage::Blob.exists?(blob.id)
     assert service.exist?(blob.key)
-    assert ActiveStorage::Blob.exists?(neighbor.id)
-    assert service.exist?(neighbor.key)
-    AbandonedAppUploadsJob.perform_now(now: @now)
     assert_not ActiveStorage::Blob.exists?(neighbor.id)
+    assert_not service.exist?(neighbor.key)
+    assert_equal [ "[AbandonedAppUploadsJob] blob_id=#{blob.id} cleanup failed: IOError" ], errors
   ensure
     service&.delete(blob.key) if blob
+  end
+
+  test "a row deletion failure rolls back and does not stop the next upload" do
+    blob = upload(created_at: @now - 2.days)
+    neighbor = upload(created_at: @now - 2.days)
+    variant = blob.variant_records.create!(variation_digest: SecureRandom.hex)
+    errors = []
+
+    # Reproduce a real FK failure when an old variant exists but automatic
+    # variant tracking (and its before_destroy cleanup) is disabled.
+    ActiveStorage.stub(:track_variants, false) do
+      Rails.logger.stub(:error, ->(message) { errors << message }) do
+        AbandonedAppUploadsJob.perform_now(now: @now)
+      end
+    end
+
+    assert ActiveStorage::Blob.exists?(blob.id)
+    assert blob.service.exist?(blob.key)
+    assert_not ActiveStorage::Blob.exists?(neighbor.id)
+    assert_not neighbor.service.exist?(neighbor.key)
+    assert_equal [ "[AbandonedAppUploadsJob] blob_id=#{blob.id} cleanup failed: ActiveRecord::InvalidForeignKey" ], errors
+  ensure
+    variant&.destroy!
   end
 
   test "nested metadata keys cannot fill the batch and starve real abandoned uploads" do
