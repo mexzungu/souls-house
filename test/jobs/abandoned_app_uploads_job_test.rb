@@ -118,6 +118,7 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
   test "a claim holding the blob lock is skipped and its committed attachment survives" do
     blob = upload(created_at: @now - 2.days)
     locked, release = Queue.new, Queue.new
+    cleaner = nil
     claimant = Thread.new do
       ActiveRecord::Base.connection_pool.with_connection do
         send_upload(blob, on_persisted: ->(*) { locked << true; release.pop })
@@ -126,7 +127,14 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
 
     Timeout.timeout(10) do
       locked.pop
-      AbandonedAppUploadsJob.perform_now(now: @now)
+      # Keep the timeout in this waiting thread, outside the job's per-row
+      # rescue. A blocking sweep must fail the test, not swallow its timeout.
+      cleaner = Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          AbandonedAppUploadsJob.perform_now(now: @now)
+        end
+      end
+      cleaner.value
       assert ActiveStorage::Blob.exists?(blob.id)
       release << true
       assert claimant.value.created?
@@ -137,6 +145,7 @@ class AbandonedAppUploadsJobTest < ActiveSupport::TestCase
   ensure
     release << true if release
     claimant&.join(10)
+    cleaner&.join(10)
   end
 
   test "cleanup commits before file deletion and a previously resolved claim then refuses" do
