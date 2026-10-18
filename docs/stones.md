@@ -75,8 +75,11 @@ it does not un-withdraw a stone. Previously copied public content cannot be
 recalled. Physical chat-deletion cascades remain part of the separate #93
 lifecycle work, not an ordinary product removal path.
 
-This change cannot recreate HTML already detached or purged by earlier
-withdrawals, nor cancel purge jobs already queued by that older behavior.
+Older queued purge jobs now leave marked Stone HTML intact, even if the older
+withdrawal already detached it. This cannot recreate bytes already purged or
+reconstruct a lost attachment association. Retained detached originals require
+an explicit administrative identification/recovery procedure, not guessing a
+revision from its title.
 
 ## Browser security boundary
 
