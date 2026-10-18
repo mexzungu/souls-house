@@ -115,12 +115,6 @@ class ChatsController < ApplicationController
     end
   end
 
-  def destroy
-    audit("destroy_chat", @chat)
-    @chat.destroy!
-    redirect_to account_chats_path(current_account)
-  end
-
   def search
     @query = params[:q].to_s.strip.first(500)
 
