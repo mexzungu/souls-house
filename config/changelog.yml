@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-18
+  title: Unsent phone uploads expire after a day
+  body: "After the Rails update, phone-app files that were uploaded but never sent are permanently removed once they are more than 24 hours old. Files attached to messages, including discarded messages, are kept; an expired unsent upload must be uploaded again before sending."
 - date: 2026-10-17
   title: Integration chat counts stay current
   body: "Open integration views now refresh their chat totals when connector chats arrive, are removed or change sync coverage. Ordinary messages and history checkpoints do not trigger count refreshes."
