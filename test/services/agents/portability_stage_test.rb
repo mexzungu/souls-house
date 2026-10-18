@@ -85,6 +85,29 @@ class Agents::PortabilityStageTest < ActiveSupport::TestCase
     assert_equal 0, AgentImportStage.where(agent: @target).count
   end
 
+  test "a role the runner would refuse to unpack is refused before anything is built" do
+    with_archive do |archive|
+      Stage.stub(:max_role_unpacked, 5) do
+        error = assert_raises(Error) { Stage.persist!(archive, @target) }
+        assert_match(/MB unpacked/, error.message)
+      end
+      Stage.stub(:max_role_entries, 1) do
+        error = assert_raises(Error) { Stage.persist!(archive, @target) }
+        assert_match(/more files than/, error.message)
+      end
+      assert_empty Dir.glob(File.join(archive.stage, "seed-*"))
+    end
+    assert_equal 0, AgentImportStage.where(agent: @target).count
+  end
+
+  test "the role limits are the runner's seed limits" do
+    runner = Rails.root.join("host-runner/souls_house_runner.py").read
+    limit = ->(name) { runner[/^#{name} = ([\d *]+)$/, 1].split("*").map(&:to_i).reduce(:*) }
+    assert_equal limit.call("SEED_MAX_BYTES"), Stage::MAX_ROLE_BYTES
+    assert_equal limit.call("SEED_MAX_UNPACKED"), Stage::MAX_ROLE_UNPACKED
+    assert_equal limit.call("SEED_MAX_ENTRIES"), Stage::MAX_ROLE_ENTRIES
+  end
+
   test "an existing stage is never replaced" do
     with_archive do |archive|
       Stage.persist!(archive, @target)
