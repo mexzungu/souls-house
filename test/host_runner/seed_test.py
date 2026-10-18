@@ -104,6 +104,23 @@ class SeedHomeTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.volume, runner.SEED_STAGING)))
         self.assertIn(["docker", "volume", "create", "agent-1-identity"], self.docker.calls)
 
+    def test_a_role_seeds_its_own_volume_under_the_same_rules(self):
+        result = self.run_seed(self.host(), self.payload(role="repo"))
+        self.assertEqual("done", result["outcome"], result)
+        self.assertIn(["docker", "volume", "create", "agent-1-repo"], self.docker.calls)
+        self.assertNotIn(["docker", "volume", "create", "agent-1-identity"], self.docker.calls)
+        other = archive([("README.md", b"# someone else\n")])
+        refused = self.run_seed(self.host(other), self.payload(other, role="repo"), cid="c" * 32)
+        self.assertEqual("refused", refused["outcome"])
+        self.assertIn("repo volume was seeded from a different archive", refused["error"])
+
+    def test_an_unknown_role_is_refused_before_any_volume_is_touched(self):
+        for role in ("chaos", "state", "../identity", 1, None):
+            result = self.run_seed(self.host(), self.payload(role=role), cid=hashlib.md5(repr(role).encode()).hexdigest())
+            self.assertEqual("refused", result["outcome"], role)
+        self.assertEqual([], self.docker.calls)
+        self.assertEqual([], self.served)
+
     def test_a_new_command_with_the_same_digest_after_a_lost_answer_is_done_without_fetching(self):
         self.run_seed(self.host(), self.payload())
         self.served.clear()
