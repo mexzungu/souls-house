@@ -12,9 +12,6 @@ class Agents::PortabilityController < ApplicationController
     render json: { error: "Resident archive unavailable or invalid. Check v1 limits, stopped state and supported profile." }, status: :unprocessable_entity
   end
 
-  STAGED_REFUSAL = "This resident runs on its own server, and starting it there isn't available yet. " \
-                   "It stays imported, inactive and paused.".freeze
-
   def new
     render inertia: "agents/import", props: {
       account: current_account.as_json,
@@ -62,9 +59,11 @@ class Agents::PortabilityController < ApplicationController
   def activate
     agent = current_account.agents.find(params[:id])
     raise Agents::Portability::Error, "Confirm service and hook trust review before activation" unless params[:confirmed].to_s == "true"
-    # A copy staged for its own server is never started here. Activating it
-    # on its server is the next step of docs/2026-10-10-vm-imports.md.
-    raise Agents::Portability::Error, STAGED_REFUSAL if agent.placement&.staged?
+    # A copy staged for its own server is never started here: Activate admits
+    # it, and ProvisionVmAgentJob brings it up there
+    # (docs/2026-10-10-vm-imports.md). The confirmation above is its trust
+    # boundary, recorded with who asked.
+    return activate_on_vm!(agent) if agent.placement&.kind == "archive_import"
     raise Agents::Portability::Error, "Only stopped inactive native residents can activate here" unless !agent.imported_home? && agent.externally_hosted? && !agent.active? && agent.paused?
     activation_error = nil
     agent.with_lock do
@@ -133,6 +132,24 @@ class Agents::PortabilityController < ApplicationController
   end
 
   private
+
+  def activate_on_vm!(agent)
+    placement = agent.placement
+    raise Agents::Portability::Error, "This resident is already running on its own server" if placement.state == "ready"
+    raise Agents::Portability::Error, "Only inactive paused residents can activate here" if agent.active? || !agent.paused?
+
+    begin
+      Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: Current.user)
+    rescue Agents::VmBirthPolicy::Refused => error
+      raise Agents::Portability::Error, error.message
+    end
+    AuditLog.create!(user: Current.user, account: agent.account, action: "vm_import_activation_admitted", auditable: agent,
+      data: { "placement_id" => placement.id, "confirmed_trust_review" => true })
+    agent.update_columns(runtime: "provisioning", health_state: "unknown", sandbox_last_error: nil, sandbox_last_error_at: nil)
+    ProvisionVmAgentJob.perform_later(agent.id)
+    redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other,
+      notice: "Ordering its own server. It starts once its home is seeded and its first backup is verified."
+  end
 
   def private_response
     response.headers["Cache-Control"] = "private, no-store"

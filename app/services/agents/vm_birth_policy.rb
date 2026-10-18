@@ -31,6 +31,9 @@ module Agents
                     "of resident servers. Ask a site admin.".freeze
     NOT_AVAILABLE_REFUSAL = "This house creates new residents on their own server, and that isn't available " \
                             "yet. Ask a site admin.".freeze
+    IMPORT_SWITCHED_OFF = "This resident runs on its own server, and this house isn't creating resident servers " \
+                          "right now. It stays imported, inactive and paused. Ask a site admin.".freeze
+    ALREADY_ACTIVATING = "This resident is already being started on its own server.".freeze
     # From admission to first verified backup. Past it the birth fails and its
     # server is cleaned up, so a stuck birth can't keep spending.
     BIRTH_DEADLINE = 45.minutes
@@ -84,6 +87,30 @@ module Agents
         agent.save!
         AgentPlacement.create!(agent:, backend: "hetzner_cloud", kind: "birth", state: "pending", admitted_by_setting_at: now,
           birth_deadline_at: now + BIRTH_DEADLINE, birth_requested_by: requested_by)
+      end
+    end
+
+    # Activating an archive import staged for its own server
+    # (docs/2026-10-10-vm-imports.md, points 2, 3, 9): the same lock, switch
+    # and checks as a birth, then the staged placement becomes a pending one
+    # with its admission stamp, deadline and requester, which is what lets
+    # ProvisionVmAgentJob and procurement act on it. A second Activate, or
+    # one racing this, finds it no longer staged and is refused. With the
+    # switch off nothing is admitted and the copy stays staged: it is never
+    # run here instead. Returns the placement.
+    def admit_import!(placement:, requested_by:, now: Time.current)
+      AgentPlacement.transaction do
+        AgentPlacement.connection.execute("SELECT pg_advisory_xact_lock(#{CloudProcurement::ADMISSION_LOCK})")
+        @setting.reload
+        raise Refused, IMPORT_SWITCHED_OFF unless enabled?
+
+        placement.lock!
+        raise Refused, ALREADY_ACTIVATING unless placement.staged?
+        refuse!(kind: :birth)
+
+        placement.update!(state: "pending", admitted_by_setting_at: now, birth_deadline_at: now + BIRTH_DEADLINE,
+          birth_requested_by: requested_by)
+        placement
       end
     end
 
