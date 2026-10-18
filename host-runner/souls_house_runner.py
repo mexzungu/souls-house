@@ -196,6 +196,10 @@ def collect_facts(runtime_image=None, server_id_reader=provider_server_id, comma
         "memory_total_kib": memory_total_kib(),
         "uptime_seconds": uptime_seconds(),
         "runner_version": SIGNATURE_VERSION,
+        # The house sends an archive import's per-role seeds only to a runner
+        # that says it can seed each role into its own volume. A runner from
+        # before roles would put every role into identity.
+        "seed_roles": list(SEED_ROLES),
     }
 
 

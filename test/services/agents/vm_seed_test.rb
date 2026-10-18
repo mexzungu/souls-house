@@ -83,7 +83,8 @@ module Agents
       assert_equal 0, RunnerCommand.where(kind: "seed_home").count
     end
 
-    def stage_import!
+    def stage_import!(seed_roles: AgentImportStage::ROLES)
+      @enrollment.update!(last_facts: { "seed_roles" => seed_roles }) if seed_roles
       @placement.update!(kind: "archive_import")
       AgentImportStage::ROLES.to_h do |role|
         bytes = Zlib.gzip("#{role} home")
@@ -130,6 +131,20 @@ module Agents
 
       answer(again["work"], "refused", error: "work volume is not empty and has no seed marker")
       assert_not VmSeed.new(@agent).retryable?
+    end
+
+    test "a runner that has not said it seeds each role into its own volume gets no import seed at all" do
+      # A runner from before roles ignores role and writes identity: an empty
+      # identity volume would take the repo home, and identical digests would
+      # report all three done with repo and work never written.
+      [ nil, %w[identity], %w[identity repo] ].each do |roles|
+        stage_import!(seed_roles: roles)
+        @enrollment.update!(last_facts: {}) if roles.nil?
+        error = assert_raises(VmSeed::Unavailable) { VmSeed.new(@agent).issue! }
+        assert_match(/newer runner/, error.message)
+        assert_equal 0, RunnerCommand.where(kind: "seed_home").count, roles.inspect
+        @agent.import_stages.delete_all
+      end
     end
 
     test "an archive import with a role missing from its stage is unavailable and queues nothing" do

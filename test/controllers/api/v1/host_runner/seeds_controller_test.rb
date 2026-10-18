@@ -37,6 +37,7 @@ class Api::V1::HostRunner::SeedsControllerTest < ActionDispatch::IntegrationTest
 
   test "an archive import's staged role is served by its digest, and only for its own placement" do
     @placement.update!(kind: "archive_import")
+    @enrollment.update!(last_facts: { "seed_roles" => AgentImportStage::ROLES })
     AgentImportStage::ROLES.each do |role|
       bytes = Zlib.gzip("#{role} home")
       @agent.import_stages.create!(role:, archive: bytes, sha256: Digest::SHA256.hexdigest(bytes), bytes: bytes.bytesize)

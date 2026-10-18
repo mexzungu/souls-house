@@ -45,6 +45,7 @@ module Agents
 
       placement = remote_placement!
       enrollment = Agents::RemoteRuntime.live_enrollment!(agent)
+      require_role_support!(enrollment) if import?(placement)
       placement.with_lock do
         issued = roles(placement).to_h do |role|
           sha256, bytes = archive_for!(placement, role)
@@ -104,6 +105,18 @@ module Agents
     end
 
     def import?(placement) = placement.kind == "archive_import"
+
+    # A runner from before seed roles ignores role and seeds identity: an
+    # empty identity volume would take the repo home, and identical digests
+    # would report every role done with repo and work never written. So the
+    # runner must say, in the facts it last reported, that it seeds each role
+    # into its own volume; otherwise nothing is queued (Mira's review of #444).
+    def require_role_support!(enrollment)
+      roles = enrollment.reload.last_facts.to_h["seed_roles"]
+      return if roles.is_a?(Array) && (AgentImportStage::ROLES - roles).empty?
+
+      raise Unavailable, "This resident's server runner cannot seed an imported home yet; it needs a newer runner"
+    end
 
     def roles(placement) = import?(placement) ? AgentImportStage::ROLES : %w[identity]
 
