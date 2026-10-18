@@ -6,7 +6,8 @@ class Api::V1::MessageRestoresControllerTest < ActionDispatch::IntegrationTest
     @user = users(:user_1)
     @user.update!(is_site_admin: true)
     @account = accounts(:personal_account)
-    @chat = @account.chats.create!(model_id: "openrouter/auto", title: "Recovery", manual_responses: true)
+    @chat = @account.chats.create!(model_id: "openrouter/auto", title: "Recovery",
+      manual_responses: true, agents: [ agents(:research_assistant) ])
     @message = @chat.messages.create!(role: "user", user: @user, content: "Retained message",
       suppress_automatic_dispatch: true)
     @message.attachments.attach(io: StringIO.new("Retained bytes"), filename: "note.txt", content_type: "text/plain")
