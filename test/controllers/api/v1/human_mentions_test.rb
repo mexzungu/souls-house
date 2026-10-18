@@ -16,7 +16,9 @@ class Api::V1::HumanMentionsTest < ActionDispatch::IntegrationTest
   test "human mentions accept durable requests without claiming invocation delivery" do
     live do
       assert_enqueued_jobs 1, only: MessageDispatchJob do
-        send_message("@Mira then @Lume")
+        assert_difference "Message.count", 1 do
+          send_message("@Mira then @Lume")
+        end
       end
     end
     assert_response :created
@@ -36,6 +38,22 @@ class Api::V1::HumanMentionsTest < ActionDispatch::IntegrationTest
     assert_nil message.message_dispatch
     assert PendingWakeSource.exists?(message: message)
     assert_equal [ receipt(@mira, "held") ], response.parsed_body["handoffs"]
+  end
+
+  test "human acceptance has no controller-built orphan in the chat association" do
+    factory = Messages::PostFromHuman.method(:new)
+    checked_factory = ->(**arguments) do
+      assert_empty arguments.fetch(:chat).association(:messages).target.select(&:new_record?)
+      factory.call(**arguments)
+    end
+    live do
+      Messages::PostFromHuman.stub(:new, checked_factory) do
+        assert_difference "Message.count", 1 do
+          send_message("@Mira only one message")
+        end
+      end
+    end
+    assert_response :created
   end
 
   test "no mention and a nonmember tag create no requests or receipts" do
@@ -107,9 +125,11 @@ class Api::V1::HumanMentionsTest < ActionDispatch::IntegrationTest
   test "human files and pinned stones survive shared acceptance" do
     stone = Stone.publish!(chat: @chat, title: "Reference", html: "<!doctype html><html><body>Reference</body></html>", author: @mira, public: true)
     live do
-      post api_v1_conversation_messages_url(@chat),
-        params: { content: "@Mira reference", files: [ fixture_file_upload("test_image.png", "image/png") ],
-                  stone_revision_ids: [ stone.latest_revision.to_param ] }, headers: @headers
+      assert_difference [ "Message.count", "MessageStoneRevision.count" ], 1 do
+        post api_v1_conversation_messages_url(@chat),
+          params: { content: "@Mira reference", files: [ fixture_file_upload("test_image.png", "image/png") ],
+                    stone_revision_ids: [ stone.latest_revision.to_param ] }, headers: @headers
+      end
     end
     assert_response :created
     message = @chat.messages.last
