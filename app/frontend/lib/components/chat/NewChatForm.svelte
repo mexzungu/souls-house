@@ -10,6 +10,7 @@
   import { accountChatsPath } from '@/routes';
   import { NewConversationDraft } from '$lib/new-conversation-draft';
   import { holdForRecording } from '$lib/recording-guard';
+  import { withTranscript } from '$lib/voice-note-recovery';
 
   let {
     chats = [],
@@ -60,7 +61,15 @@
   onDestroy(() => setPendingAudio(null));
   let error = $state('');
 
-  function handleTranscription(text, audioSignedId) {
+  function handleTranscription(text, audioSignedId, { retry = false } = {}) {
+    // A retried voice note fills the form and waits for the person to start the conversation;
+    // anything they typed meanwhile is kept ahead of it.
+    if (retry) {
+      message = withTranscript(message, text);
+      draft.edit({ message });
+      setPendingAudio(audioSignedId || null);
+      return;
+    }
     message = text;
     draft.edit({ message: text });
     setPendingAudio(audioSignedId || null);
@@ -179,6 +188,7 @@
     </div>
     <NewChatComposer
       accountId={account.id}
+      {userId}
       onTranscription={handleTranscription}
       onError={(message) => (error = message)}
       bind:selectedFiles

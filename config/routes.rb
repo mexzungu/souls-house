@@ -167,6 +167,7 @@ Rails.application.routes.draw do
       collection do
         get :search
         post :transcription, to: "chats/transcriptions#create"
+        delete :transcription, to: "chats/transcriptions#destroy"
       end
       scope module: :chats do
         resource :visual_tag, only: :update
@@ -181,7 +182,7 @@ Rails.application.routes.draw do
         resource :participant, only: :create
         resource :agent_trigger, only: :create
         resource :model_selection, only: :update
-        resource :transcription, only: :create
+        resource :transcription, only: [ :create, :destroy ]
       end
       resources :messages, only: [ :index, :create ]
     end

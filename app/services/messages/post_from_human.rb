@@ -68,7 +68,6 @@ class Messages::PostFromHuman
       # A file with no caption is a message, as in Chat#create_with_message.
       message.skip_content_validation = @content.blank?
     end
-    attach_audio(message) if @audio_signed_id.present?
 
     # A room with one resident wakes it automatically (Message writes that
     # dispatch), so a mention there would be a second wake.
@@ -84,6 +83,8 @@ class Messages::PostFromHuman
     saved = begin
       Message.transaction do
         next claimed = false unless claim_uploads
+
+        attach_audio(message) if @audio_signed_id.present?
 
         next false unless @draft ? @draft.accept_send!(message, revision: @draft_revision) { message.save } : message.save
 
@@ -153,11 +154,18 @@ class Messages::PostFromHuman
     Rails.logger.warn "[PostFromHuman] dispatch #{dispatch.id} enqueue failed, wake will lapse: #{e.class}: #{e.message}"
   end
 
+  # Inside the send's transaction: the recording stays locked until commit, so
+  # a discard or sweep either finished first (the message keeps its text and
+  # goes without audio) or waits and then finds it attached.
   def attach_audio(message)
-    message.audio_recording.attach(@audio_signed_id)
+    blob = VoiceNote.lock_for_send(@audio_signed_id)
+    unless blob
+      Rails.logger.warn "Invalid or removed audio_signed_id for message in chat #{@chat.id}"
+      return
+    end
+
+    message.audio_recording.attach(blob)
     message.audio_source = true
-  rescue ActiveSupport::MessageVerifier::InvalidSignature
-    Rails.logger.warn "Invalid audio_signed_id for message in chat #{@chat.id}"
   end
 
 end

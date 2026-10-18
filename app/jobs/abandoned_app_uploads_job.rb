@@ -5,20 +5,29 @@ class AbandonedAppUploadsJob < ApplicationJob
   BATCH_SIZE = 100
   RETENTION = 24.hours
 
+  # Unsent uploads by metadata tag, and how long each is kept. Chat voice notes
+  # stay longer so a failed transcription can still be retried the next day.
+  SWEEPS = { "app_upload" => RETENTION, VoiceNote::METADATA_KEY => VoiceNote::RETENTION }.freeze
+
   def perform(now: Time.current)
-    cutoff = now - RETENTION
+    SWEEPS.each { |tag, retention| sweep(tag, now - retention) }
+  end
+
+  private
+
+  def sweep(tag, cutoff)
     # Active Storage serializes metadata as JSON in a text column. Cast
     # explicitly so nested keys cannot fill the batch and starve real uploads.
     # Authority still comes from the parsed metadata checked under the lock.
     ids = ActiveStorage::Blob.unattached
       .where(created_at: ...cutoff)
-      .where("metadata::jsonb ? 'app_upload'")
+      .where("metadata::jsonb ? :tag", tag: tag)
       .order(:id).limit(BATCH_SIZE).pluck(:id)
 
     ids.each do |id|
       deleted = ActiveStorage::Blob.transaction do
         blob = ActiveStorage::Blob.lock("FOR UPDATE SKIP LOCKED").find_by(id: id)
-        next unless blob && blob.metadata.key?("app_upload") && blob.created_at < cutoff
+        next unless blob && blob.metadata.key?(tag) && blob.created_at < cutoff
         next if ActiveStorage::Attachment.exists?(blob_id: blob.id)
 
         blob.destroy!
