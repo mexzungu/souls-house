@@ -29,20 +29,7 @@ module Agents::Portability
         transport.create_volumes!
         Archive::ROOTS.each do |root|
           tar_path = File.join(archive.stage, "restore-#{root}.tar")
-          File.open(tar_path, "wb", 0600) do |out|
-            Gem::Package::TarWriter.new(out) do |tar|
-              prefix = "resident/#{root}/"
-              archive.entries.each do |path, item|
-                next unless path.start_with?(prefix)
-                relative = path.delete_prefix(prefix)
-                if item["type"] == "directory"
-                  tar.mkdir(relative, item["mode"])
-                else
-                  tar.add_file_simple(relative, item["mode"], item["size"]) { |destination| File.open(File.join(archive.stage, path), "rb") { |input| IO.copy_stream(input, destination) } }
-                end
-              end
-            end
-          end
+          File.open(tar_path, "wb", 0600) { |out| archive.write_role_tar(root, out) }
           transport.restore(root, tar_path)
         end
         mapping = archive.graph ? GraphImport.call(agent, archive.graph, source_installation: manifest.fetch("source_installation")) : {}
