@@ -897,7 +897,8 @@ The next client contract needs explicit decisions and implementation for:
 These are gaps to resolve, not requirements silently implemented by this cleanup.
 Use [architecture](architecture.md), [data/authorization](data-and-authorization.md)
 and [web synchronization](synchronization-internals.md) as the current baseline.
-# Administrator message recovery
+
+## Administrator message recovery
 
 `POST /api/v1/conversations/:conversation_id/messages/:message_id/restore`
 requires a human system-administrator credential and current confirmed

@@ -6,9 +6,11 @@ class Api::V1::MessageRestoresControllerTest < ActionDispatch::IntegrationTest
     @user = users(:user_1)
     @user.update!(is_site_admin: true)
     @account = accounts(:personal_account)
+    @account.update!(account_type: :team)
     @chat = @account.chats.create!(model_id: "openrouter/auto", title: "Recovery",
       manual_responses: true, agents: [ agents(:research_assistant) ])
     @message = @chat.messages.create!(role: "user", user: @user, content: "Retained message",
+      client_message_id: SecureRandom.uuid,
       suppress_automatic_dispatch: true)
     @message.attachments.attach(io: StringIO.new("Retained bytes"), filename: "note.txt", content_type: "text/plain")
     @message.discard_as_author!
@@ -83,7 +85,8 @@ class Api::V1::MessageRestoresControllerTest < ActionDispatch::IntegrationTest
   test "audit failure rolls back recovery and its sync revision" do
     revision = @message.revision
     AuditLog.stub(:create!, ->(**) { raise ActiveRecord::RecordInvalid }) do
-      assert_raises(ActiveRecord::RecordInvalid) { post path, headers: @headers, as: :json }
+      post path, headers: @headers, as: :json
+      assert_response :unprocessable_entity
     end
     assert @message.reload.discarded?
     assert_equal revision, @message.revision
