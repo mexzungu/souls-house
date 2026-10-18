@@ -139,7 +139,7 @@ class StoneTest < ActiveSupport::TestCase
   test "withdrawal blocks delivery and revisions while retaining every original HTML blob" do
     stone = publish
     first = stone.latest_revision
-    second = stone.revise!(title: "Second", html: HTML.sub("Stone", "Retained"),
+    second = stone.revise!(title: "Second", html: HTML.sub("Hello", "Second original"),
       author: @user, public: true, base_revision_id: first.to_param)
     originals = [ first, second ].to_h { |revision| [ revision, revision.html.download ] }
     assert_no_enqueued_jobs(only: ActiveStorage::PurgeJob) { 2.times { stone.withdraw! } }
