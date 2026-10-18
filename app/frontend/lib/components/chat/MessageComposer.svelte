@@ -160,8 +160,16 @@
     }
   }
 
-  function handleTranscription(text, audioSignedId) {
+  function handleTranscription(text, audioSignedId, { retry = false } = {}) {
     setPendingAudio(audioSignedId || null);
+    const existing = draftState.content.trim();
+    // A retried voice note can land after the person has typed something else: keep both and
+    // let them send, rather than replacing their text and sending it away.
+    if (retry && existing && existing !== text.trim()) {
+      draft.edit(`${draftState.content.trimEnd()}\n\n${text}`);
+      tick().then(autoResize);
+      return;
+    }
     draft.edit(text);
     sendMessage();
   }
@@ -214,6 +222,7 @@
         disabled={submitting || disabled}
         {accountId}
         {chatId}
+        {userId}
         onsuccess={handleTranscription}
         onerror={handleTranscriptionError} />
     </div>

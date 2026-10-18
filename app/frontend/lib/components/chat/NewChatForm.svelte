@@ -60,7 +60,16 @@
   onDestroy(() => setPendingAudio(null));
   let error = $state('');
 
-  function handleTranscription(text, audioSignedId) {
+  function handleTranscription(text, audioSignedId, { retry = false } = {}) {
+    const existing = message.trim();
+    // A retried voice note can land after the person has typed something else: keep both and
+    // let them start the conversation, rather than replacing their text and sending it away.
+    if (retry && existing && existing !== text.trim()) {
+      message = `${message.trimEnd()}\n\n${text}`;
+      draft.edit({ message });
+      setPendingAudio(audioSignedId || null);
+      return;
+    }
     message = text;
     draft.edit({ message: text });
     setPendingAudio(audioSignedId || null);
@@ -179,6 +188,7 @@
     </div>
     <NewChatComposer
       accountId={account.id}
+      {userId}
       onTranscription={handleTranscription}
       onError={(message) => (error = message)}
       bind:selectedFiles
