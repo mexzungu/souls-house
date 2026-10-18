@@ -10,6 +10,11 @@
 #     schedule: at 5am every day
 
 production:
+  abandoned_app_uploads:
+    class: AbandonedAppUploadsJob
+    queue: default
+    schedule: every hour at minute 20
+
   companion_sweep:
     class: CompanionSweepJob
     queue: default

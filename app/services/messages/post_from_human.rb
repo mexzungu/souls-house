@@ -132,12 +132,16 @@ class Messages::PostFromHuman
     blobs = app_blobs
     return true if blobs.empty?
 
-    ids = blobs.map(&:id)
-    ActiveStorage::Blob.where(id: ids).order(:id).lock.pluck(:id)
+    ids = blobs.map(&:id).uniq.sort
+    locked = ActiveStorage::Blob.where(id: ids).order(:id).lock.to_a
+    # A cleanup may have removed a blob after the controller resolved its
+    # signed ID. A stale object is not a claim on a row that no longer exists.
+    return false unless locked.map(&:id) == ids
     return false if ActiveStorage::Attachment.where(blob_id: ids).exists?
 
+    locked_by_id = locked.index_by(&:id)
     blobs.each_with_index do |blob, position|
-      metadata = blob.metadata.merge("position" => position)
+      metadata = locked_by_id.fetch(blob.id).metadata.merge("position" => position)
       blob.update_column(:metadata, metadata)
     end
     true
