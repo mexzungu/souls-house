@@ -64,9 +64,12 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
 
   test "unrelated log output cannot contaminate the captured pairing request" do
     sign_in @owner
-    unrelated_logger = Rails.logger
     log = capture_request_log do
-      CommsConnector.stub(:pair_phone, ->(*) { unrelated_logger.info("unrelated WhatsApp SQL: #{PHONE} #{E164}"); {} }) do
+      unrelated_write = ->(*) do
+        File.open(Rails.root.join("log/test.log"), "a") { |file| file.puts("unrelated WhatsApp SQL: #{PHONE} #{E164}") }
+        {}
+      end
+      CommsConnector.stub(:pair_phone, unrelated_write) do
         post phone_account_service_connection_pairing_path(@account, @connection.public_id),
              params: { phone: PHONE, attempt: 1 }, as: :json
       end
@@ -78,6 +81,18 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
     assert_not_includes log, "unrelated WhatsApp SQL"
     assert_not_includes log, "7700900123"
     assert_not_includes log, "7700 900123"
+  end
+
+  test "request capture includes secondary framework loggers and detaches after errors" do
+    broadcasts = Rails.logger.broadcasts.dup
+    log = capture_request_log do
+      ActiveJob::Base.logger.info("secondary framework log: #{E164}")
+    end
+    assert_includes log, "secondary framework log: #{E164}"
+    assert_equal broadcasts, Rails.logger.broadcasts
+
+    assert_raises(RuntimeError) { capture_request_log { raise "request failed" } }
+    assert_equal broadcasts, Rails.logger.broadcasts
   end
 
   test "a number that is not E.164 is refused and nothing is sent" do
@@ -300,16 +315,16 @@ class Accounts::WhatsappPhonePairingTest < ActionDispatch::IntegrationTest
 
   def capture_request_log
     output = StringIO.new
-    logger = ActiveSupport::TaggedLogging.new(ActiveSupport::Logger.new(output))
+    capture = ActiveSupport::Logger.new(output)
+    logger = Rails.logger
 
-    # Parallel workers share test.log, but not this request's in-memory logger.
-    Rails.stub(:logger, logger) do
-      ActionController::Base.stub(:logger, logger) do
-        ActiveRecord::Base.stub(:logger, logger) { yield }
-      end
-    end
+    # Capture every framework logger in this process, not other workers' file writes.
+    logger.broadcast_to(capture)
+    yield
 
     output.string
+  ensure
+    logger.stop_broadcasting_to(capture)
   end
 
   def request_phone!(attempt = 1)
