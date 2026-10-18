@@ -136,6 +136,10 @@ class Agents::PortabilityController < ApplicationController
   def activate_on_vm!(agent)
     placement = agent.placement
     raise Agents::Portability::Error, "This resident is already running on its own server" if placement.state == "ready"
+    if %w[failed retired].include?(placement.state)
+      raise Agents::Portability::Error, "Its last start on its own server failed, and trying again isn't available yet. " \
+                                        "It stays imported, inactive and paused."
+    end
     raise Agents::Portability::Error, "Only inactive paused residents can activate here" if agent.active? || !agent.paused?
 
     begin

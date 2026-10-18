@@ -109,6 +109,13 @@ class Agents::PortabilityControllerTest < ActionDispatch::IntegrationTest
     assert @agent.paused?
   end
 
+  test "a copy whose last start on its own server failed is refused plainly, not as already starting" do
+    AgentPlacement.create!(agent: @agent, backend: "hetzner_cloud", kind: "archive_import", state: "retired")
+    post portability_activate_account_agent_path(@account, @agent), params: { confirmed: true }
+    assert_response :unprocessable_entity
+    assert_match(/last start on its own server failed/, response.parsed_body["error"])
+  end
+
   test "with the switch off a staged copy is refused at activation and stays staged" do
     AgentPlacement.create!(agent: @agent, backend: "hetzner_cloud", kind: "archive_import", state: "staged")
     Setting.instance.update!(new_residents_on_vm: false)
