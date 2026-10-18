@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-18
+  title: Human API mentions reach residents
+  body: "A person's explicit @mention in a multi-resident room now requests a wake through the general API just as it does on web and phone, with per-resident acceptance receipts. If mention dispatch is unavailable, the API refuses the send with 503 without saving the message or clearing its draft."
 - date: 2026-10-17
   title: Integration chat counts stay current
   body: "Open integration views now refresh their chat totals when connector chats arrive, are removed or change sync coverage. Ordinary messages and history checkpoints do not trigger count refreshes."

@@ -124,6 +124,34 @@ class Messages::PostFromHumanTest < ActiveSupport::TestCase
     assert_not called
   end
 
+  test "pinned stone revisions commit with the human message and dispatch" do
+    stone = Stone.publish!(chat: @group_chat, title: "Reference", html: "<!doctype html><html><body>Reference</body></html>", author: @agent, public: true)
+    result = Messages::PostFromHuman.new(
+      chat: @group_chat, user: @user, content: "@Grok reference", stone_revisions: [ stone.latest_revision ]
+    ).call
+
+    assert result.created?
+    assert_equal [ stone.latest_revision ], result.message.reload.stone_revisions.to_a
+    assert result.message.message_dispatch
+  end
+
+  test "a dispatch failure rolls back pinned stones and the draft clear too" do
+    stone = Stone.publish!(chat: @group_chat, title: "Reference", html: "<!doctype html><html><body>Reference</body></html>", author: @agent, public: true)
+    draft = ConversationDraft.for(chat: @group_chat, user: @user)
+    draft.replace!(content: "@Grok reference", revision: 0)
+    assert_no_difference [ "Message.count", "MessageStoneRevision.count", "MessageDispatch.count" ] do
+      MessageDispatch.stub(:accept!, ->(**) { raise "dispatch unavailable" }) do
+        assert_raises RuntimeError do
+          Messages::PostFromHuman.new(
+            chat: @group_chat, user: @user, content: draft.content, draft: draft, draft_revision: 1,
+            stone_revisions: [ stone.latest_revision ]
+          ).call
+        end
+      end
+    end
+    assert_equal [ "@Grok reference", 1 ], [ draft.reload.content, draft.revision ]
+  end
+
   private
 
   def post(content)

@@ -37,7 +37,7 @@ module Api
         elsif params.key?(:recipient_agent_ids)
           return render json: { errors: [ "recipient_agent_ids is for residents' posts; a person's @mention wakes a resident" ] }, status: :unprocessable_entity
         end
-        message.attachments.attach(params[:files]) if params[:files].present?
+        message.attachments.attach(params[:files]) if current_api_agent && params[:files].present?
         if params.key?(:stone_revision_ids)
           ids = params[:stone_revision_ids]
           unless ids.is_a?(Array) && ids.length <= 10 && ids.all? { |id| id.is_a?(String) }
@@ -57,7 +57,7 @@ module Api
           message.runtime_interaction = interaction
         end
 
-        if message.content.blank? && !message.attachments.attached?
+        if message.content.blank? && !message.attachments.attached? && (current_api_agent || params[:files].blank?)
           return render json: { errors: [ "Content or at least one file is required" ] }, status: :unprocessable_entity
         end
 
@@ -66,10 +66,22 @@ module Api
           current_api_user.confirmed_accounts.find(chat.account_id)
           ConversationDraft.for(chat: chat, user: current_api_user)
         end
-        saved = if draft
-          draft.send_message!(message, revision: params[:draft_revision])
-        else
+        saved = if current_api_agent
           SafeguardConversationPost.save(message)
+        else
+          result = Messages::PostFromHuman.new(
+            chat: chat, user: current_api_user, content: message.content,
+            files: params[:files], stone_revisions: message.stone_revisions.to_a,
+            draft: draft, draft_revision: params[:draft_revision]
+          ).call
+          message = result.message
+          if result.dispatch_unavailable?
+            return render json: {
+              errors: [ "Residents cannot be woken right now; the message was not sent" ],
+              retryable: true
+            }, status: :service_unavailable
+          end
+          result.created?
         end
         unless saved
           return render json: { errors: message.errors.full_messages }, status: :unprocessable_entity
@@ -79,7 +91,7 @@ module Api
           message: message.as_json,
           draft: draft&.as_json,
           ai_response_triggered: !!message.single_resident_response_triggered,
-          handoffs: current_api_agent ? message.handoff_receipts : []
+          handoffs: current_api_agent ? message.handoff_receipts : Messages::HumanMentionReceipts.new(message, sole_resident: result.sole_resident).call
         }, status: :created
       rescue ConversationDraft::Conflict => error
         render json: { errors: [ error.message ], draft: error.draft.as_json }, status: :conflict
