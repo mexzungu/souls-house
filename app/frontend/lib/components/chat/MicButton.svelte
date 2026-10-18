@@ -2,7 +2,16 @@
   import { Microphone, MicrophoneSlash, Spinner } from 'phosphor-svelte';
   import { onDestroy, onMount } from 'svelte';
   import { holdForRecording } from '$lib/recording-guard';
-  import { clearRecovery, expiryLabel, loadRecovery, readTranscription, saveRecovery } from '$lib/voice-note-recovery';
+  import {
+    clearRecovery,
+    loadRecovery,
+    readTranscription,
+    saveRecovery,
+    signedIdForm,
+    transcriptionRequest,
+    uploadForm,
+  } from '$lib/voice-note-recovery';
+  import VoiceNoteRecoveryCard from './VoiceNoteRecoveryCard.svelte';
 
   const MIN_AUDIO_BYTES = 1000;
 
@@ -142,36 +151,7 @@
     }
   }
 
-  function transcriptionPath() {
-    return chatId
-      ? `/accounts/${accountId}/chats/${chatId}/transcription`
-      : `/accounts/${accountId}/chats/transcription`;
-  }
-
-  function request(method, formData) {
-    return fetch(transcriptionPath(), {
-      method,
-      headers: {
-        'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content,
-        Accept: 'application/json',
-      },
-      credentials: 'same-origin',
-      body: formData,
-    }).catch(() => null);
-  }
-
-  function uploadForm(blob, mimeType) {
-    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const formData = new FormData();
-    formData.append('audio', blob, `recording.${ext}`);
-    return formData;
-  }
-
-  function signedIdForm(signedId) {
-    const formData = new FormData();
-    formData.append('audio_signed_id', signedId);
-    return formData;
-  }
+  const request = (method, formData) => transcriptionRequest({ accountId, chatId }, method, formData);
 
   function succeed(result, { retry }) {
     clearRecovery(scope());
@@ -312,51 +292,6 @@
   </button>
 
   {#if failure}
-    <div
-      role="alert"
-      data-testid="voice-note-recovery"
-      data-saved={failure.saved}
-      class="absolute bottom-full right-0 z-20 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-md border border-border bg-background p-3 text-sm shadow-lg">
-      {#if failure.saved === 'gone'}
-        <p>{failure.error}</p>
-        <div class="mt-2 flex justify-end">
-          <button type="button" class="rounded-md px-2 py-1 hover:bg-accent" onclick={dismiss}>Dismiss</button>
-        </div>
-      {:else}
-        <p class="font-medium">Voice note not transcribed</p>
-        <p class="mt-1 text-muted-foreground">{failure.error}</p>
-        {#if failure.saved === 'saved'}
-          <p class="mt-1 text-muted-foreground">
-            Your recording is saved{failure.expiresAt ? ` until ${expiryLabel(failure.expiresAt)}` : ''}.
-            {#if !failure.persisted}
-              This browser could not remember it, so keep this tab open.
-            {/if}
-          </p>
-        {:else if failure.saved === 'unsaved'}
-          <p class="mt-1 text-muted-foreground">Not saved yet. Keep this tab open.</p>
-        {/if}
-        {#if failure.discardError}
-          <p class="mt-1 text-destructive">{failure.discardError}</p>
-        {/if}
-        <div class="mt-2 flex justify-end gap-2">
-          <button
-            type="button"
-            class="rounded-md px-2 py-1 hover:bg-accent disabled:opacity-50"
-            disabled={!!failure.busy}
-            onclick={discard}>
-            {failure.busy === 'discard' ? 'Discarding…' : 'Discard'}
-          </button>
-          {#if failure.retryable}
-            <button
-              type="button"
-              class="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-              disabled={!!failure.busy || disabled}
-              onclick={retry}>
-              {failure.busy === 'retry' ? 'Retrying…' : 'Retry transcription'}
-            </button>
-          {/if}
-        </div>
-      {/if}
-    </div>
+    <VoiceNoteRecoveryCard {failure} {disabled} onretry={retry} ondiscard={discard} ondismiss={dismiss} />
   {/if}
 </div>

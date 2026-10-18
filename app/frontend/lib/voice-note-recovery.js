@@ -145,3 +145,33 @@ export function expiryLabel(expiresAt, locale) {
   if (!date || Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' });
 }
+
+export function transcriptionPath({ accountId, chatId }) {
+  return chatId ? `/accounts/${accountId}/chats/${chatId}/transcription` : `/accounts/${accountId}/chats/transcription`;
+}
+
+// Resolves to the Response, or null when the request never got an answer.
+export function transcriptionRequest(where, method, formData) {
+  return fetch(transcriptionPath(where), {
+    method,
+    headers: {
+      'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content,
+      Accept: 'application/json',
+    },
+    credentials: 'same-origin',
+    body: formData,
+  }).catch(() => null);
+}
+
+export function uploadForm(blob, mimeType) {
+  const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+  const formData = new FormData();
+  formData.append('audio', blob, `recording.${ext}`);
+  return formData;
+}
+
+export function signedIdForm(signedId) {
+  const formData = new FormData();
+  formData.append('audio_signed_id', signedId);
+  return formData;
+}
