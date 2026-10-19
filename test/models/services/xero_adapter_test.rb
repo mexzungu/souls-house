@@ -33,13 +33,15 @@ class Services::XeroAdapterTest < ActiveSupport::TestCase
     "header.#{segment}.signature"
   end
 
-  def xero_connection(payload)
+  def xero_connection(payload = {}, subject: "xero-user-1", **string_keyed)
+    payload = payload.merge(string_keyed.transform_keys(&:to_s))
     accounts(:personal_account).service_connections.create!(
       connected_by_user: users(:user_1),
       provider: "xero",
-      external_subject_id: "xero-user-1",
+      external_subject_id: subject,
       management_scope: "personal",
       credential_kind: "oauth2",
+      status: "connected",
       credential_payload_hash: payload,
       credential_metadata: { "credential_strategy" => "refresh_broker" }
     )
@@ -150,6 +152,110 @@ class Services::XeroAdapterTest < ActiveSupport::TestCase
     error = assert_raises(Services::XeroAdapter::Error) { with_credentials { @adapter.current_access_token(connection) } }
     assert_match "reconnect Xero", error.message
     assert_no_match "r1", error.message
+    connection.reload
+    assert_equal "reauthorizing", connection.status, "a dead grant must show Reconnect needed on the card"
+    assert_empty connection.credential_payload_hash.to_h
+  end
+
+  test "a network failure during refresh leaves the connection connected" do
+    connection = xero_connection("access_token" => "old", "refresh_token" => "r1", "expires_at" => 1.minute.ago.utc.iso8601)
+    stub_request(:post, TOKEN_URL).to_return(status: 503, body: "")
+
+    assert_raises(Services::XeroAdapter::Error) { with_credentials { @adapter.current_access_token(connection) } }
+    assert_equal "connected", connection.reload.status
+    assert_equal "r1", connection.credential_payload_hash["refresh_token"]
+  end
+
+  test "a dead-grant mark cannot clear a grant reconnected after the lock is released" do
+    connection = xero_connection("access_token" => "old", "refresh_token" => "dead", "expires_at" => 1.minute.ago.utc.iso8601)
+    stub_request(:post, TOKEN_URL).to_return(status: 400, body: { error: "invalid_grant" }.to_json)
+    # Simulate the person reconnecting in the window between the refresh
+    # lock's commit and the error reaching the caller.
+    reconnect = -> {
+      fresh = ServiceConnection.find(connection.id)
+      fresh.update!(status: "connected")
+      fresh.replace_credential_payload_without_reconciliation!(
+        "access_token" => "a2", "refresh_token" => "new-grant", "expires_at" => 30.minutes.from_now.utc.iso8601)
+    }
+    connection.define_singleton_method(:with_lock) do |*args, &block|
+      result = super(*args, &block)
+      reconnect.call
+      result
+    end
+
+    assert_raises(Services::XeroAdapter::DeadGrant) { with_credentials { @adapter.current_access_token(connection) } }
+    reloaded = ServiceConnection.find(connection.id)
+    assert_equal "connected", reloaded.status
+    assert_equal "new-grant", reloaded.credential_payload_hash["refresh_token"]
+  end
+
+  test "a dropped or malformed response is a short adapter error" do
+    connection = xero_connection("access_token" => "old", "refresh_token" => "r1", "expires_at" => 1.minute.ago.utc.iso8601)
+    [ EOFError, Net::HTTPBadResponse ].each do |failure|
+      WebMock.reset!
+      stub_request(:post, TOKEN_URL).to_raise(failure)
+      error = assert_raises(Services::XeroAdapter::Error) { with_credentials { @adapter.current_access_token(connection) } }
+      assert_equal "Xero could not be reached", error.message
+      assert_equal "connected", connection.reload.status
+    end
+  end
+
+  test "the keep-alive sweep carries on past a connection whose refresh fails" do
+    first = xero_connection({ "access_token" => "a", "refresh_token" => "drops", "expires_at" => 40.days.ago.utc.iso8601,
+      "refreshed_at" => 40.days.ago.utc.iso8601 }, subject: "xero-user-1")
+    second = xero_connection({ "access_token" => "b", "refresh_token" => "fine", "expires_at" => 40.days.ago.utc.iso8601,
+      "refreshed_at" => 40.days.ago.utc.iso8601 }, subject: "xero-user-2")
+    assert first.id < second.id
+    stub_request(:post, TOKEN_URL).with(body: hash_including("refresh_token" => "drops")).to_raise(EOFError)
+    stub_request(:post, TOKEN_URL).with(body: hash_including("refresh_token" => "fine"))
+      .to_return(status: 200, body: { access_token: "b2", refresh_token: "fine2", expires_in: 1800 }.to_json)
+
+    with_credentials { Services::XeroKeepAliveJob.perform_now }
+
+    assert_equal "drops", first.reload.credential_payload_hash["refresh_token"]
+    assert_equal "connected", first.status
+    assert_equal "fine2", second.reload.credential_payload_hash["refresh_token"]
+  end
+
+  test "keep-alive leaves a connection refreshed within 30 days alone" do
+    connection = xero_connection("access_token" => "a", "refresh_token" => "r1",
+      "expires_at" => 1.day.ago.utc.iso8601, "refreshed_at" => 29.days.ago.utc.iso8601)
+
+    assert_equal false, with_credentials { @adapter.keep_alive!(connection) }
+    assert_not_requested :post, TOKEN_URL
+  end
+
+  test "keep-alive refreshes a connection idle for 30 days and stores the rotated token" do
+    connection = xero_connection("access_token" => "a", "refresh_token" => "r1",
+      "expires_at" => 31.days.ago.utc.iso8601, "refreshed_at" => 31.days.ago.utc.iso8601)
+    stub_request(:post, TOKEN_URL)
+      .with(body: { "grant_type" => "refresh_token", "refresh_token" => "r1" })
+      .to_return(status: 200, body: { access_token: "new", refresh_token: "r2", expires_in: 1800 }.to_json)
+
+    assert_equal true, with_credentials { @adapter.keep_alive!(connection) }
+    payload = connection.reload.credential_payload_hash
+    assert_equal "r2", payload["refresh_token"]
+    assert Time.iso8601(payload["refreshed_at"]) > 1.minute.ago
+  end
+
+  test "keep-alive treats a connection with no refresh record by its age" do
+    connection = xero_connection("access_token" => "a", "refresh_token" => "r1", "expires_at" => 1.day.ago.utc.iso8601)
+
+    assert_equal false, with_credentials { @adapter.keep_alive!(connection) }
+    connection.update_columns(created_at: 31.days.ago)
+    stub_request(:post, TOKEN_URL).to_return(status: 200, body: { access_token: "n", refresh_token: "r2", expires_in: 1800 }.to_json)
+    assert_equal true, with_credentials { @adapter.keep_alive!(connection) }
+  end
+
+  test "the keep-alive job marks a dead grant as needing reconnect without raising" do
+    dead = xero_connection("access_token" => "a", "refresh_token" => "dead", "expires_at" => 40.days.ago.utc.iso8601,
+      "refreshed_at" => 40.days.ago.utc.iso8601)
+    stub_request(:post, TOKEN_URL).with(body: hash_including("refresh_token" => "dead"))
+      .to_return(status: 400, body: { error: "invalid_grant" }.to_json)
+
+    with_credentials { Services::XeroKeepAliveJob.perform_now }
+
+    assert_equal "reauthorizing", dead.reload.status
   end
 
   test "an unreachable Xero is a short adapter error" do

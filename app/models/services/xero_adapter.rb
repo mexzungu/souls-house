@@ -23,8 +23,13 @@ module Services
     CONNECTIONS_URL = "https://api.xero.com/connections"
     REVOKE_URL = "https://identity.xero.com/connect/revocation"
     TIMEOUT = 15
+    # Xero refresh tokens die after 60 days unused. Refresh well inside that.
+    KEEP_ALIVE_AFTER = 30.days
 
     class Error < Services::AdapterError; end
+    # Xero refused the refresh token outright (invalid_grant). Nothing the
+    # house holds can revive the connection; the person has to connect again.
+    class DeadGrant < Error; end
 
     attr_reader :definition
 
@@ -76,21 +81,26 @@ module Services
     end
 
     def current_access_token(connection)
-      connection.with_lock do
-        connection.reload
-        payload = connection.credential_payload_hash
-        return payload.fetch("access_token") if token_fresh?(payload)
+      under_lock(connection) do |payload|
+        next payload.fetch("access_token") if token_fresh?(payload)
 
-        refresh_token = payload["refresh_token"].presence ||
-          raise(Error, "Xero refresh token is unavailable; reconnect Xero")
-        data = token_request(grant_type: "refresh_token", refresh_token: refresh_token)
-        # Xero rotates the refresh token on every use; the old one is now dead.
-        # Never fall back to it.
-        raise Error, "Xero did not return a new refresh token; reconnect Xero" if data["refresh_token"].blank?
+        refresh!(connection, payload).fetch("access_token")
+      end
+    end
 
-        refreshed_payload = credential_payload(data)
-        connection.replace_credential_payload_without_reconciliation!(refreshed_payload)
-        refreshed_payload.fetch("access_token")
+    # Called daily by Services::XeroKeepAliveJob. Refreshes a connection that
+    # has not refreshed for KEEP_ALIVE_AFTER, through the same row lock as the
+    # broker, so an unused connection never reaches Xero's 60-day limit.
+    # Returns true when it refreshed.
+    def keep_alive!(connection)
+      under_lock(connection) do |payload|
+        next false unless connection.status == "connected"
+
+        last = Time.iso8601(payload["refreshed_at"].to_s) rescue connection.created_at
+        next false if last > KEEP_ALIVE_AFTER.ago
+
+        refresh!(connection, payload)
+        true
       end
     end
 
@@ -112,10 +122,47 @@ module Services
 
     private
 
+    def refresh!(connection, payload)
+      refresh_token = payload["refresh_token"].presence ||
+        raise(Error, "Xero refresh token is unavailable; reconnect Xero")
+      data = token_request(grant_type: "refresh_token", refresh_token: refresh_token)
+      # Xero rotates the refresh token on every use; the old one is now dead.
+      # Never fall back to it.
+      raise Error, "Xero did not return a new refresh token; reconnect Xero" if data["refresh_token"].blank?
+
+      refreshed_payload = credential_payload(data)
+      connection.replace_credential_payload_without_reconciliation!(refreshed_payload)
+      refreshed_payload
+    end
+
+    # Runs the block under the connection's row lock with its current payload.
+    # A dead grant can't be fixed by retrying, so it is marked here, under the
+    # same lock that read the dead token: the connection becomes
+    # "reauthorizing" (Reconnect needed; Connect reuses this row). The mark
+    # commits with the lock's transaction and the error is raised after it, so
+    # the mark is neither rolled back nor able to clear a grant reconnected
+    # after the lock was released. Network and provider errors mark nothing.
+    def under_lock(connection)
+      dead = nil
+      result = connection.with_lock do
+        connection.reload
+        begin
+          yield connection.credential_payload_hash
+        rescue DeadGrant => e
+          connection.update!(status: "reauthorizing", credential_payload: nil)
+          dead = e
+          nil
+        end
+      end
+      raise dead if dead
+
+      result
+    end
+
     def token_request(params)
       response = post_form(TOKEN_URL, params)
       if response.is_a?(Net::HTTPBadRequest) && oauth_error(response) == "invalid_grant"
-        raise Error, "Xero no longer accepts this connection's refresh token (unused for 60 days, or refreshed elsewhere); reconnect Xero"
+        raise DeadGrant, "Xero no longer accepts this connection's refresh token (unused for 60 days, or refreshed elsewhere); reconnect Xero"
       end
       parse_success(response, "Xero OAuth token exchange")
     end
@@ -168,7 +215,8 @@ module Services
       {
         "access_token" => data.fetch("access_token"),
         "refresh_token" => data.fetch("refresh_token"),
-        "expires_at" => data["expires_in"].to_i.seconds.from_now.utc.iso8601
+        "expires_at" => data["expires_in"].to_i.seconds.from_now.utc.iso8601,
+        "refreshed_at" => Time.current.utc.iso8601
       }
     end
 
@@ -182,7 +230,8 @@ module Services
     def http(uri, &block)
       Net::HTTP.start(uri.hostname, uri.port, use_ssl: true,
         open_timeout: TIMEOUT, read_timeout: TIMEOUT, max_retries: 0, &block)
-    rescue Timeout::Error, SystemCallError, SocketError, OpenSSL::SSL::SSLError
+    rescue Timeout::Error, SystemCallError, SocketError, OpenSSL::SSL::SSLError,
+           IOError, Net::ProtocolError, Net::HTTPBadResponse
       raise Error, "Xero could not be reached"
     end
 
