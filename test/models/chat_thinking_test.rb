@@ -18,6 +18,7 @@ class ChatThinkingTest < ActiveSupport::TestCase
       "xiaomi/mimo-v2.6-flash" => [ "Xiaomi", %w[none high] ],
       "meta/muse-wonder" => [ "Meta", %w[none high] ],
       "meta/muse-spark-open" => [ "Meta", %w[none high] ],
+      "deepseek/deepseek-v4.1-flash-1017" => [ "DeepSeek", %w[none high] ],
       "google/gemini-4-argon" => [ "Google", %w[low medium high] ]
     }.each do |id, (group, efforts)|
       assert Chat::MODELS.any? { |model| model[:model_id] == id && model[:group] == group }, id

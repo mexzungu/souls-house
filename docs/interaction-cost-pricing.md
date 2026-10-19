@@ -55,6 +55,15 @@ lists no cache-write price and no implicit caching for it, so cache writes fall
 back to the input rate. There is no direct Meta route in souls.house; it runs
 through OpenRouter only.
 
+DeepSeek V4.1 Flash 1017 (added October 19, 2026, two days after DeepSeek
+released the snapshot): input 0.15, cache read 0.003, output 0.6, from the
+OpenRouter endpoint for `deepseek/deepseek-v4.1-flash-1017` (DeepSeek provider)
+and DeepSeek's pricing page on 2026-10-19. These are the off-peak rates; DeepSeek
+charges double at peak (01:00-04:00 and 06:00-10:00 UTC on weekdays), and the
+estimate does not model the time of day. Cheaper third-party hosts exist on
+OpenRouter. No cache-write price is listed, so cache writes fall back to the
+input rate. OpenRouter only (no direct DeepSeek id for the dated snapshot).
+
 Muse Spark Open (added October 16, 2026, the day after Meta released the open
 weights): input 1.25, cache read 0.15, output 4.25, from the OpenRouter endpoint
 for `meta/muse-spark-open` (Modal provider, `meta/muse-spark-open-20261015`, the

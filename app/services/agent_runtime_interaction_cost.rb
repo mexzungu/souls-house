@@ -73,6 +73,7 @@ class AgentRuntimeInteractionCost
     [ /(?:x-ai\/)?grok-4\.3\z/, "x-ai/grok-4.3", 1.25, 2.5 ],
 
     [ /deepseek\/deepseek-v4-pro\z/, "deepseek/deepseek-v4-pro", 0.435, 0.87 ],
+    [ /\A(?:deepseek\/)?deepseek-v4\.1-flash-1017\z/, "deepseek/deepseek-v4.1-flash-1017", 0.15, 0.6 ],
     [ /mistralai\/mistral-large-2512\z/, "mistralai/mistral-large-2512", 0.5, 1.5 ],
     [ /\A(?:meta\/)?muse-wonder\z/, "meta/muse-wonder", 4, 20 ],
     [ /\A(?:meta\/)?muse-spark-open\z/, "meta/muse-spark-open", 1.25, 4.25 ],
@@ -109,6 +110,7 @@ class AgentRuntimeInteractionCost
     "google/gemini-2.5-flash" => 0.03,
     "google/gemini-2.5-flash-lite" => 0.01,
     "deepseek/deepseek-v4-pro" => 0.003625,
+    "deepseek/deepseek-v4.1-flash-1017" => 0.003,
     "mistralai/mistral-large-2512" => 0.05,
     "meta/muse-wonder" => 0.2,
     "meta/muse-spark-open" => 0.15,
