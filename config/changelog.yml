@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-19
+  title: The Voices page no longer promises a backup expiry
+  body: "The Voices page and the Remember-this-voice panel now say what forgetting a voice actually does: it removes the voice print from this Field's active recognition database, and backups may still hold it for an indeterminate time. Voice recognition no longer needs a backup retention period to be switched on. Live once deployed."
+- date: 2026-10-19
   title: Look for known voices again
   body: "A recording's transcript page has a Look for known voices again button. It checks the recording against voices this Field has remembered since it was transcribed, and suggests names it has learned if name suggestions are on. Only speakers nobody has named, set aside or dismissed a guess for are considered, and anything found is a guess for you to confirm. Naming someone isn't enough for their voice to be found: their voice has to be remembered on the Voices page. Recordings brought in with their own transcript don't have the button. Works once deployed."
 - date: 2026-10-19
