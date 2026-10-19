@@ -84,8 +84,8 @@ Audio never leaves the house. The service is an implementation detail behind
 | `embedding` | encrypted (non-deterministic), never serialised, like `FieldVoiceprint#print` |
 | `speech_ms` | clean speech used |
 | `profile` | the service profile that made it |
-| `label_origin` | `human` · `confirmed_recognition` · `machine` · `unknown` (§5) |
-| `eligible` | true only for `human` and `confirmed_recognition` |
+| `label_origin` | the speaker's `naming_source` when sampled: `human` · `confirmed_suggestion` · `confirmed_recognition` · `machine` · `unknown` (§5) |
+| `eligible` | true only for `human`, `confirmed_suggestion` and `confirmed_recognition` (`FieldRecordingSpeaker#training_label?`) |
 | `created_at` | |
 
 **`field_voiceprints`** keeps its role and its generation protocol (spec §9 C5,
@@ -109,12 +109,16 @@ anything not positively known to be a person's decision is not eligible.
 - `naming_source` gains `machine` and `unknown`.
 - **Web clicks** (`FieldRecordingSpeakersController`, a signed-in person in
   the browser) are `human`. **A confirmed guess** is `confirmed_recognition`.
-  Only these two are eligible.
-- **Every API naming is `machine` by default.** The speakers API
-  (`/api/v1/field/...`) records `machine` whether or not the client says
-  anything, so an old Mac script that sends no provenance can never produce a
-  training label. There is no API flag that makes a write `human`. A person's
-  decision only enters through the page, or through the confirm list below.
+  A confirmed text suggestion (`confirmed_suggestion`) is a person's tap too.
+  Only these three are eligible.
+- **An API naming's source comes from how it authenticated, never from what
+  it says** (amended in slice A, 2026-10-19). Through an **API key** (a
+  person's key used by a script such as the Mac's matcher; resident keys are
+  refused by this endpoint) it is `machine`, so an old client that sends no
+  provenance can never produce a training label. Through the **native app**
+  (an OAuth app session, `app_token_request?`), a person is acting, so it is
+  `human`. No request parameter changes either. Otherwise a person's decision
+  enters through the page, or through the confirm list below.
 - **Existing 926 rows start as `unknown`.** Absence from a log isn't proof of
   a human (Mira). Ways out:
   1. *Evidence*, which is thin (checked 2026-10-19). Request logs live only in
@@ -128,7 +132,9 @@ anything not positively known to be a person's decision is not eligible.
      page, per voice: "Confirm these N names", playing a few seconds of each.
      One tap confirms a speaker (→ `human`, `named_by` the person who tapped),
      and one marks it wrong (un-names it).
-- Tests: an old-client API write with no provenance field stays `machine`;
+- Tests: an API-key write with or without forged provenance fields is
+  `machine`; a native-app write is `human`; an old-client API write with no
+  provenance field stays `machine`;
   a historical speaker named by the web and then re-named by the API is not
   `human`; a speaker named by the API and then confirmed on the page is
   `human`.
@@ -319,9 +325,24 @@ confirm (existing stale-chip rules still refuse it).
 
 ## 11. Slices
 
-- **A. Provenance first.** `machine` and `unknown` naming sources, every API
-  write recorded as `machine`, existing rows marked `unknown`, the narrow log
-  reconstruction (§5.1). Small, and it has to land before any sample exists.
+- **A. Provenance first.** `machine` and `unknown` naming sources; API
+  namings take their source from authentication (API key → `machine`,
+  native-app session → `human`, §5); existing `human` rows marked `unknown` by
+  an irreversible migration; `training_label?`. No log reconstruction ships:
+  the logs reach back hours and can't establish both the authentication path
+  and the final naming, so those rows stay `unknown`. Internal only, no
+  changelog entry: nothing a person sees changes yet. Small, and it has to
+  land before any sample exists.
+
+  **Writer cutover checkpoint (before slice C's backfill or any learning).**
+  The migration's sweep can run while old web or jobs processes still record
+  API namings as `human`. Once every process runs slice A's code and the old
+  ones are gone, note when the last old process stopped and run
+  `bin/rails field:mark_unproven_namings_unknown BEFORE=<that time>`. It marks
+  `human` namings from before then `unknown`, and never promotes anything.
+  Rolling back to pre-slice-A writers invalidates the checkpoint: run it
+  again after rolling forward. Slice C adds the guard: its backfill and
+  learning refuse to start until the checkpoint is recorded.
 - **B. The service.** `services/voice-embeddings`, accessory, client, health
   check, release command. Deployed and idle.
 - **C. Samples and prints.** Table, sample job, mean print, forget/un-name
