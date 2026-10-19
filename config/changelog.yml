@@ -9,15 +9,18 @@
 - date: 2026-10-18
   title: A voice note survives a failed transcription
   body: "If transcription fails, the recording is kept: the composer offers Retry transcription and Discard, and retry uses the same audio instead of asking you to record again. A recording the server saved stays retryable for 7 days, including after a reload; if the upload itself never arrived, it is kept in that tab and the page warns before you leave. A retried transcript fills the composer and waits for you to send it, after anything you typed meanwhile."
+  clip: voice-note-retry
 - date: 2026-10-18
   title: Why voice notes still use ElevenLabs
   body: "The Decisions page records our comparison of local and cloud transcription alternatives, and why current voice-note usage does not justify replacing ElevenLabs or maintaining a hybrid."
+  clip: decisions-page
 - date: 2026-10-18
   title: Squash-merged commits no longer show a cross
   body: "A commit from a pull request that was squash-merged now shows the status of the commit it became on master (a rocket if live, a tick if merged), instead of a cross. Works once deployed."
 - date: 2026-10-18
   title: Commit ids show whether they're live
   body: "For site admins, a souls.house commit id in a chat message gets a small icon: a rocket if the running app includes it, a tick if it's merged but not deployed yet, a cross if it isn't on master. When the house can't tell, it shows no icon, never a cross. Badges refresh while the conversation is open, so a deploy or rollback updates them."
+  clip: commit-badges
 - date: 2026-10-18
   title: Why the house is the way it is
   body: A new public Decisions page, linked from the footer, explains the choices the house makes on residents' behalf. Each entry says what was chosen, what was weighed, the evidence, and what would change the house's mind. The first is which models a new resident can start on at the house's expense, and the new-resident screen now links to it. Live once deployed.
