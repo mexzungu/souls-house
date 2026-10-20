@@ -1,6 +1,7 @@
 <script>
   import { Link, page, router } from '@inertiajs/svelte';
   import { createDynamicSync } from '$lib/use-sync';
+  import { reloadProps } from '$lib/cable';
   import * as Card from '$lib/components/shadcn/card/index.js';
   import { Button } from '$lib/components/shadcn/button/index.js';
   import SpeakerCard from '$lib/components/field/SpeakerCard.svelte';
@@ -23,6 +24,7 @@
 
   let {
     recording,
+    transcript = { revision: null, words: [] },
     speakers = [],
     voices = [],
     members_without_voice = [],
@@ -33,12 +35,28 @@
     account,
   } = $props();
 
+  // The transcript's words travel in their own prop, `transcript`, with the
+  // revision they belong to, so the recording's refreshes never resend them (a
+  // long meeting is tens of thousands of words: 2.2 MB on 2026-10-20). While
+  // the recording reports a revision the page doesn't hold the words for (it
+  // finished transcribing, or someone corrected a line), the page asks for
+  // them once straight away, and every recording refresh until they arrive
+  // carries them too: a request lost to a disconnect is retried by the
+  // reconnect's catch-up. A full visit brings both at once.
+  const transcriptPending = $derived((recording.transcript_revision ?? null) !== (transcript?.revision ?? null));
+  const words = $derived(transcript?.words ?? []);
+
   const updateSync = createDynamicSync();
   $effect(() => {
     updateSync({
-      [`FieldRecording:${recording.id}`]: ['recording', 'speakers'],
+      [`FieldRecording:${recording.id}`]: transcriptPending
+        ? ['recording', 'speakers', 'transcript']
+        : ['recording', 'speakers'],
       [`FieldVoiceActivity:${account.id}`]: ['voices', 'members_without_voice', 'my_voice_id', 'recognition_enabled'],
     });
+  });
+  $effect(() => {
+    if (transcriptPending) reloadProps(['transcript']);
   });
 
   const ready = $derived(recording.status === 'ready');
@@ -46,9 +64,7 @@
   // Supplied transcripts (brought in with the audio) have turns, not timed
   // words: no word highlighting, talk time, clips or voice samples.
   const supplied = $derived(recording.transcript_source === 'supplied');
-  const turns = $derived(
-    supplied ? suppliedTurns(recording.turns) : buildTurns(recording.words, speakerKeys(speakers))
-  );
+  const turns = $derived(supplied ? suppliedTurns(recording.turns) : buildTurns(words, speakerKeys(speakers)));
   // One card per person: diarized speakers linked to one voice share a card.
   const groups = $derived(groupSpeakers(speakers));
   const speakerUrl = (speaker) => `/accounts/${account.id}/field/recordings/${recording.id}/speakers/${speaker.id}`;
@@ -341,7 +357,7 @@
             onSave={saveLine}
             onReassign={reassignLine}
             choices={speakerChoices}
-            revision={recording.transcript_revision} />
+            revision={transcript.revision} />
         </Card.Content>
       </Card.Root>
     {:else}
