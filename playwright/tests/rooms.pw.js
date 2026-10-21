@@ -26,10 +26,37 @@ test('the switcher shows waiting counts inside the menu only', async ({ mount, p
   const trigger = component.getByTestId('room-switcher');
   await expect(trigger).toHaveText('Dev');
   await expect(trigger).not.toContainText('2');
-  await trigger.click();
+  // Keyboard (and touch) keep the select.
+  await trigger.focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('option', { name: /Life/ })).toContainText('2');
   await expect(page.getByRole('option', { name: 'All chats' })).toBeVisible();
   await page.screenshot({ path: 'tmp/rooms-switcher.png' });
+});
+
+test('with a mouse, resting on the room name lists the rooms; clicking it does not stack the select on top', async ({
+  mount,
+  page,
+}) => {
+  const component = await mount(RoomsHarness, {
+    props: { account, rooms, current_room: 'devRm', waiting: { lifeRm: 2 } },
+  });
+  const trigger = component.getByTestId('room-switcher');
+  await trigger.hover();
+  const panel = component.getByTestId('room-hover-switcher-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole('link', { name: /Life/ })).toContainText('2');
+  await expect(panel.getByRole('link', { name: /Dev/ })).toHaveAttribute('aria-current', 'page');
+  await expect(panel.getByRole('link', { name: 'All chats' })).toHaveAttribute('href', '/accounts/acc/chats?room=all');
+  await page.screenshot({ path: 'tmp/rooms-hover-switcher.png' });
+  await trigger.click();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(panel).toBeVisible();
+  // Moving down into the list keeps it open; leaving closes it.
+  await panel.getByRole('link', { name: /Life/ }).hover();
+  await expect(panel).toBeVisible();
+  await page.mouse.move(600, 600);
+  await expect(panel).toHaveCount(0);
 });
 
 const mira = { id: 'mira', name: 'Mira', colour: 'violet' };
@@ -37,8 +64,11 @@ const lume = { id: 'lume', name: 'Lume', colour: 'orange' };
 const working = { rooms: { devRm: [mira, lume] }, all: [mira, lume] };
 
 test('the switcher spins beside a room where residents are working, a ring for each', async ({ mount, page }) => {
-  const component = await mount(RoomsHarness, { props: { account, rooms, current_room: 'lifeRm', waiting: { devRm: 1 }, working } });
-  await component.getByTestId('room-switcher').click();
+  const component = await mount(RoomsHarness, {
+    props: { account, rooms, current_room: 'lifeRm', waiting: { devRm: 1 }, working },
+  });
+  await component.getByTestId('room-switcher').focus();
+  await page.keyboard.press('Enter');
   const dev = page.getByRole('option', { name: /Dev/ });
   const spinner = dev.getByTestId('room-working');
   await expect(spinner).toBeVisible();
@@ -64,4 +94,29 @@ test('the navbar Chats menu shows the same spinner', async ({ mount, page }) => 
   await expect(page.getByRole('menuitem', { name: /Main/ }).getByTestId('room-working')).toHaveCount(0);
   await expect(page.getByTestId('manage-rooms')).toHaveText('Manage rooms…');
   await page.screenshot({ path: 'tmp/rooms-nav-working.png' });
+});
+
+test.describe('touch', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+
+  test('on a phone, tapping the room name opens the select (no hover list) and tapping a room goes there', async ({
+    mount,
+    page,
+  }) => {
+    const visited = [];
+    await page.route('**/accounts/acc/chats?room=*', (route) => {
+      visited.push(new URL(route.request().url()).search);
+      route.fulfill({ status: 204, body: '' });
+    });
+    const component = await mount(RoomsHarness, {
+      props: { account, rooms, current_room: 'devRm', waiting: { lifeRm: 2 } },
+    });
+    await component.getByTestId('room-switcher').tap();
+    const life = page.getByRole('option', { name: /Life/ });
+    await expect(life).toBeVisible();
+    await expect(life).toContainText('2');
+    await expect(component.getByTestId('room-hover-switcher-panel')).toHaveCount(0);
+    await life.tap();
+    await expect.poll(() => visited).toEqual(['?room=lifeRm']);
+  });
 });
