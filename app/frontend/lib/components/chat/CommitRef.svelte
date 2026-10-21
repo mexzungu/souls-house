@@ -1,19 +1,26 @@
 <script>
   import { page } from '@inertiajs/svelte';
   import { CheckCircle, RocketLaunch, XCircle } from 'phosphor-svelte';
-  import { commitStatus, watchCommitStatus } from '$lib/commit-status.svelte.js';
-  import { STATUS_LABELS } from '$lib/commit-refs.js';
+  import { commitStatus, setCommitStatusAccount, watchCommitStatus } from '$lib/commit-status.svelte.js';
+  import { STATUS_LABELS, commitRefKey, commitRefLookupable } from '$lib/commit-refs.js';
 
   // token comes from commitRefExtension; live is false while a message is
   // still streaming, so growing prefixes of a sha are not looked up.
   let { token, theme = {}, live = true } = $props();
 
-  const enabled = $derived(live && ($page.props.user?.site_admin ?? false));
-  const status = $derived(enabled ? commitStatus(token.sha) : null);
+  // Only references some repository of this reader's could answer are asked
+  // about: the house's own for site admins, and the account's repositories
+  // with commit badges on (the shared commit_badges prop).
+  const accountId = $derived($page.props.account?.id ?? null);
+  const enabled = $derived(live && accountId !== null && commitRefLookupable(token, $page.props.commit_badges));
+  const key = $derived(commitRefKey(token));
+  const status = $derived(enabled ? commitStatus(key) : null);
 
   // Watching keeps the badge current while it is on screen (see the store).
   $effect(() => {
-    if (enabled) return watchCommitStatus(token.sha);
+    if (!enabled) return;
+    setCommitStatusAccount(accountId);
+    return watchCommitStatus(key);
   });
 </script>
 
@@ -28,7 +35,8 @@
       size="1em"
       weight="fill"
       class="text-red-500 dark:text-red-400" />{/if}{/snippet}
-{#if token.form === 'code'}<code data-streamdown-codespan class={theme.codespan?.base}>{token.sha}</code>{:else if token.form === 'url'}<a
+{#if token.form === 'code'}<code data-streamdown-codespan class={theme.codespan?.base}>{token.sha}</code
+  >{:else if token.form === 'url'}<a
     class={theme.link?.base}
     href={token.href}
     target="_blank"

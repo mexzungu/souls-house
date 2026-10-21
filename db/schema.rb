@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_21_170000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -2590,6 +2590,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_170000) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.bigint "created_by_agent_id"
+    t.boolean "commit_badges", default: false, null: false
     t.index ["account_id", "provider", "full_name"], name: "index_watched_repositories_on_live_full_name", unique: true, where: "(removed_at IS NULL)"
     t.index ["account_id"], name: "index_watched_repositories_on_account_id"
     t.index ["created_by_agent_id"], name: "index_watched_repositories_on_created_by_agent_id"
