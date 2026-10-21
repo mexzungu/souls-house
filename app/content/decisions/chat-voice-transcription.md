@@ -3,7 +3,7 @@ title: Keep ElevenLabs for chat voice notes
 slug: chat-voice-transcription
 date: 2026-10-18
 status: decided
-summary: We tested local and cloud alternatives, including an October 21 Bark 3.0 follow-up. The results still favour keeping ElevenLabs for our current voice-note workload.
+summary: We tested local and cloud alternatives, including October 21 Bark 3.0 and Fluid Speech Mini follow-ups. The results still favour keeping ElevenLabs for our current voice-note workload.
 ---
 
 ## What we decided
@@ -46,7 +46,7 @@ That saving is not worth maintaining a resident model in RAM, a private worker, 
 
 ## What would change the decision?
 
-A deployment that must not depend on ElevenLabs has a different requirement and could revisit the local work. A substantial change in usage, price or model capability could also warrant a fresh decision. Daniel requested the bounded Bark follow-up below; it does not justify changing the current backend. No further benchmarking or implementation is scheduled.
+A deployment that must not depend on ElevenLabs has a different requirement and could revisit the local work. A substantial change in usage, price or model capability could also warrant a fresh decision. Daniel requested the bounded Bark and Fluid follow-ups below; neither justifies changing the current backend. No further benchmarking or implementation is scheduled.
 
 [Preserving the original audio when transcription fails (#453)](https://github.com/swombat/souls-house/issues/453) is a separate reliability concern with the existing path, not a reason to change providers.
 
@@ -72,6 +72,27 @@ To bound memory, the two longer clips were split into consecutive 30-second chun
 Across all four clips, disagreement with the edited saved messages was **4.90% for Bark and 0.50% for the historical ElevenLabs outputs**. On the same three clips used in the Gemini comparison above, it was **6.65% versus 1.27%**. As before, the references favour the existing workflow and are not independent ground truth. Text inspection found retained overall requests but some garbled wording and names; we did not perform an independent audio-grounded accuracy adjudication. The four-clip results do not establish meeting, multilingual, diarization or concurrent-service performance.
 
 This improves the evidence about a compact local option, not the economics of adding a second service. The earlier 80–110 minutes/month avoidance estimate remains historical, not a refreshed usage forecast. Apple-device acceleration, the other Bark variants and production integration were not evaluated. No backend change was made.
+
+## October 21 follow-up: Fluid Speech Mini
+
+At Daniel's request, we evaluated **Fluid Speech Mini by FluidVoice**, using its Linux ONNX build on the same four recordings. **Keep ElevenLabs remains the recommendation.** Fluid used much less memory than our Bark runtime and had less disagreement with the saved messages, but did not improve the CPU waiting times enough to change the choice.
+
+The [announcement](https://x.com/FluidVoiceApp/status/2112640613812478133) describes a compact dictation model. This is a separately fine-tuned, quantised derivative of Parakeet v3 and Parakeet Ultra, not the same Parakeet artifact tested earlier. The [pinned ONNX model card](https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-onnx/blob/fc592620325027419883cf272e70588d8a788c0a/README.md) reports 4.53% average word error across eight English sets and 11.1% with background speech. These are publisher-run results, not independent leaderboard entries, and do not compare with ElevenLabs. Its noise advantage is specifically competing voices; larger models do better with traffic noise. The model is English-only and CC-BY-4.0.
+
+| Recording length | Earlier ElevenLabs-backed chat | Fluid Speech Mini CPU processing |
+|---|---:|---:|
+| 12 seconds | 1.14 s | 1.76 s |
+| 30 seconds | 1.54 s | 3.60 s |
+| 1m08s | 2.80 s | 8.05 s |
+| 4m47s | 7.02 s | 33.30 s |
+
+All four completed. On the same Intel i7-8700 host and 8 GiB container, ONNX Runtime 1.31.0 used two encoder/frontend threads and the publisher's single-thread decoder/joint. Model construction took **0.39 seconds**, excluding Python imports and download; **peak process RSS was 608 MiB** across loading and all four clips, versus 5.36 GiB for the earlier Bark runtime. This is a meaningful memory improvement, not a concurrent-service capacity measurement.
+
+We retained the publisher's native chunking: clips up to 40 seconds run in one pass; longer clips split at quiet points around 30 seconds. Audio decoding matched the Bark harness, and input hashes matched the original recordings. No glossary was supplied. Timings include decoding and inference, not loading, upload, storage or queueing; they are single runs against historical October 18 cloud timings, not fresh concurrent comparisons. Bark used fixed 30-second chunks, so this is a comparison of tested setups rather than an isolated model-architecture comparison.
+
+Edited-reference disagreement across all four was **3.14% for Fluid, 4.90% for Bark and 0.50% for historical ElevenLabs**. On the first three clips it was 3.80%, 6.65% and 1.27%, respectively. These are not independently verified accuracy scores: the references favour the existing transcription workflow. Text inspection found the broad requests retained, with remaining names and wording problems; we did not adjudicate against the audio.
+
+The Apple Neural Engine build and its speed claims were not tested. Nor did this four-clip pilot test the advertised background-voice advantage, meetings, multilingual use, diarization or production reliability. Fluid is a more memory-practical local candidate than our tested Bark setup, but the limited historical usage saving and extra service maintenance remain. No backend change was made.
 
 ## Evidence and return point
 
