@@ -83,10 +83,29 @@ class Api::V1::Field::VoicesControllerTest < ActionDispatch::IntegrationTest
     assert_response :unprocessable_entity
   end
 
-  test "resident keys are refused, other accounts' voices are 404, and former members reach nothing" do
+  test "resident keys list and resolve home voices only; lifecycle stays a person's; other accounts' voices are 404" do
     resident = resident_headers(@user, agents(:research_assistant))
+    accounts(:team_account).field_voices.create!(name: "Team only")
     get api_v1_field_voices_path, headers: resident
+    assert_response :success
+    rows = response.parsed_body.fetch("voices")
+    assert_includes rows.map { |row| row["id"] }, @voice.to_param
+    assert_not_includes rows.map { |row| row["name"] }, "Team only"
+    assert_equal %w[id member name], rows.first.keys.sort
+    assert_not response.parsed_body.key?("members_without_voice")
+    get resolve_api_v1_field_voices_path, params: { name: @voice.name }, headers: resident
+    assert_response :success
+    get resolve_api_v1_field_voices_path, params: { name: "Team only" }, headers: resident
+    assert_response :not_found
+    get api_v1_field_voices_path, params: { account_id: accounts(:team_account).to_param }, headers: resident
+    assert_response :not_found
+    post api_v1_field_voices_path, params: { name: "Resident made" }, headers: resident, as: :json
     assert_response :forbidden
+    patch api_v1_field_voice_path(@voice), params: { name: "Renamed" }, headers: resident, as: :json
+    assert_response :forbidden
+    delete api_v1_field_voice_path(@voice), headers: resident
+    assert_response :forbidden
+    assert @voice.reload.kept?
     delete forget_all_api_v1_field_voices_path, headers: resident
     assert_response :forbidden
     patch recognition_api_v1_field_voices_path, params: { recognise_voices: true }, headers: resident, as: :json

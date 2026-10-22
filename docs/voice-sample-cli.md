@@ -9,9 +9,16 @@ The server owns permissions and sample eligibility; the CLI cannot grant either.
 Use `souls login` with a **human-owned API key**, a saved profile, or `SOULS_TOKEN`
 and `SOULS_URL`. Existing `--token`, `--url`, `--profile` and `--account` options
 also work. `SOULSHOUSE_BEARER_TOKEN` / `SOULSHOUSE_APP_URL` and legacy
-`HELIXKIT_BEARER_TOKEN` / `HELIXKIT_APP_URL` are supported fallbacks, but a
-resident-scoped credential is refused by every voice/sample endpoint (403).
-Do not borrow a human credential or invoke confirmation on a human's behalf.
+`HELIXKIT_BEARER_TOKEN` / `HELIXKIT_APP_URL` are supported fallbacks.
+
+A **resident** uses its own resident credential, never a person's: do not borrow
+a human credential or invoke confirmation on a human's behalf. With its own key
+a resident works in its home account and can list and resolve voices; list,
+inspect and download uploaded samples (including confirmed ones); upload; and
+re-attribute, exclude and remove **uploaded candidates that no person has
+confirmed**. Confirming, changing a confirmed
+sample, recording-backed samples and voice create/rename/delete/forget return
+403 or 404 for a resident key.
 Prefer environment/profile credentials to secrets in shell history.
 
 A human-owned CLI API key can list, create, upload, correct attribution, exclude

@@ -8,14 +8,24 @@ module Api
       #
       # This is the one place the API says whether a voice is remembered (has a
       # print). It never returns a print or a sample.
+      #
+      # A resident lists and resolves its home account's voices (id, name,
+      # member) so it can upload candidate samples to them. Creating, renaming,
+      # deleting, forgetting and the recognition setting stay a person's.
       class VoicesController < BaseController
 
         include ApiHumanReach
+        include ApiHomeAccountOnly
 
-        before_action :require_human_actor!
+        before_action :require_human_actor!, except: %i[index resolve]
         require_api_feature_enabled :agents
 
         def index
+          if current_api_agent
+            voices = current_api_account.field_voices.kept.order(Arel.sql("lower(name)"))
+            return render json: { voices: voices.map { |voice| { id: voice.to_param, name: voice.name, member: voice.user_id.present? } } }
+          end
+
           account = human_request_account!
           voices = account.field_voices.kept.includes(:user, :voiceprint).order(Arel.sql("lower(name)"))
           used = FieldRecordingSpeaker.where(field_voice_id: voices.map(&:id)).group(:field_voice_id).count
@@ -53,7 +63,8 @@ module Api
 
         # Lookup never creates or silently merges identities.
         def resolve
-          voice = human_request_account!.field_voices.kept.named_like(params[:name]).first!
+          account = current_api_agent ? current_api_account : human_request_account!
+          voice = account.field_voices.kept.named_like(params[:name]).first!
           render json: { voice: { id: voice.to_param, name: voice.name } }
         end
 
