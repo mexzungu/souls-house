@@ -10,6 +10,7 @@
   import { Switch } from '$lib/components/shadcn/switch';
   import VoiceMeaning from '$lib/components/field/VoiceMeaning.svelte';
   import VoiceSamples from '$lib/components/field/VoiceSamples.svelte';
+  import VoiceMerge from '$lib/components/field/VoiceMerge.svelte';
   import AccountSettingsLayout from '$lib/components/accounts/AccountSettingsLayout.svelte';
   import { CaretLeft, MagnifyingGlass } from 'phosphor-svelte';
 
@@ -202,6 +203,17 @@
     );
   }
 
+  // "Merge with other speaker" (VoiceMerge): which speaker's panel is open.
+  let mergingId = $state(null);
+  $effect(() => {
+    if (mergingId != null && !voices.some((voice) => voice.id === mergingId)) mergingId = null;
+  });
+
+  function startMerge(voice) {
+    editingId = null;
+    mergingId = voice.id;
+  }
+
   function usedLine(count) {
     return `named in ${count} ${count === 1 ? 'speaker' : 'speakers'}`;
   }
@@ -370,6 +382,10 @@
             {#if editingId !== voice.id}
               <div class="flex flex-wrap gap-1 -ml-2">
                 <Button size="sm" variant="ghost" onclick={() => startRename(voice)}>Rename</Button>
+                {#if voices.length > 1}
+                  <Button size="sm" variant="ghost" onclick={() => startMerge(voice)} data-testid="voice-merge"
+                    >Merge with other speaker</Button>
+                {/if}
                 {#if voice.remembered || voice.remember}
                   <Button size="sm" variant="ghost" onclick={() => forget(voice)} data-testid="voice-forget"
                     >Forget voice</Button>
@@ -382,6 +398,17 @@
               </div>
             {/if}
           </div>
+          {#if mergingId === voice.id}
+            <VoiceMerge
+              {voice}
+              {voices}
+              {base}
+              onMerged={(keptId) => {
+                pickedId = keptId;
+                mergingId = null;
+              }}
+              onCancel={() => (mergingId = null)} />
+          {/if}
           <VoiceSamples
             base={`${base}/${voice.id}`}
             name={voice.name}
