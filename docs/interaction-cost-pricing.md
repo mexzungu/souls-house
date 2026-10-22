@@ -55,6 +55,21 @@ lists no cache-write price and no implicit caching for it, so cache writes fall
 back to the input rate. There is no direct Meta route in souls.house; it runs
 through OpenRouter only.
 
+MiniMax M3.1 Flash (added October 22, 2026, three days after MiniMax released
+it): input 0.15, cache read 0.015, output 0.6, from the OpenRouter endpoint for
+`minimax/minimax-m3.1-flash` (Minimax provider, `minimax/minimax-m3.1-flash-20261019`)
+on 2026-10-22. No cache-write price is listed, so cache writes fall back to the
+input rate. OpenRouter only, like MiniMax M3.
+
+Mercury 3 (added October 22, 2026, three days after Inception released it):
+input 0.10, cache read 0.01, output 0.35, from the OpenRouter endpoint for
+`inception/mercury-3` (Inception provider) on 2026-10-22. These are Inception's
+launch rates, 50% off the list price of 0.20 in / 0.70 out (Inception's
+announcement, inceptionlabs.ai/blog/introducing-mercury-3). When the launch
+discount ends, the row should move to the list price. No cache-write price is
+listed, so cache writes fall back to the input rate. OpenRouter only; Inception
+is a new group in souls.house.
+
 DeepSeek V4.1 Flash 1017 (added October 19, 2026, two days after DeepSeek
 released the snapshot): input 0.15, cache read 0.003, output 0.6, from the
 OpenRouter endpoint for `deepseek/deepseek-v4.1-flash-1017` (DeepSeek provider)

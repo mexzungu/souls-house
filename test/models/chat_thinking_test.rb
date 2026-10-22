@@ -19,6 +19,8 @@ class ChatThinkingTest < ActiveSupport::TestCase
       "meta/muse-wonder" => [ "Meta", %w[none high] ],
       "meta/muse-spark-open" => [ "Meta", %w[none high] ],
       "deepseek/deepseek-v4.1-flash-1017" => [ "DeepSeek", %w[none high] ],
+      "minimax/minimax-m3.1-flash" => [ "MiniMax", %w[none high] ],
+      "inception/mercury-3" => [ "Inception", %w[none high] ],
       "google/gemini-4-argon" => [ "Google", %w[low medium high] ]
     }.each do |id, (group, efforts)|
       assert Chat::MODELS.any? { |model| model[:model_id] == id && model[:group] == group }, id
