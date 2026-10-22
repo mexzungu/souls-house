@@ -246,7 +246,12 @@ module Api
         end
 
         def present(sample)
-          FieldVoiceSamples::Presentation.row(sample).merge(
+          row = FieldVoiceSamples::Presentation.row(sample)
+          # The shared row falls back to a linked recording's date. Residents
+          # never read recording metadata through this API, so they see only
+          # the upload's own provenance.
+          row[:recorded_at] = sample.recorded_at&.iso8601 if current_api_agent
+          row.merge(
             audio_url: (audio_api_v1_field_voice_sample_path(sample.field_voice, sample, digest: sample.source_digest) if sample.source_current?))
         end
 

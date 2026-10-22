@@ -223,6 +223,35 @@ class Api::V1::Field::VoiceSamplesControllerTest < ActionDispatch::IntegrationTe
     assert AuditLog.exists?(action: "field_voice_sample_removed", auditable: sample, user_id: nil)
   end
 
+  test "a resident never reads a linked recording's date through a sample; explicit upload provenance stays" do
+    recording = ready_recording(account: @account, user: @user)
+    recording.update_columns(recorded_at: Time.utc(2019, 5, 6, 7, 8, 9))
+    resident = resident_headers(@user, agents(:research_assistant))
+    human = @headers
+
+    @headers = resident
+    upload(key: "linked-undated", recording_id: recording.to_param)
+    assert_response :created
+    undated = @voice.samples.find_by!(idempotency_key: "linked-undated")
+    assert_equal recording.to_param, response.parsed_body.dig("sample", "recording_id")
+    assert_nil response.parsed_body.dig("sample", "recorded_at")
+    get api_v1_field_sample_path(undated), headers: resident
+    assert_nil response.parsed_body.dig("sample", "recorded_at")
+    get api_v1_field_voice_samples_path(@voice), headers: resident
+    assert_equal [ nil ], response.parsed_body.fetch("samples").map { |row| row["recorded_at"] }
+
+    upload(key: "linked-dated", seed: 2, recording_id: recording.to_param, recorded_at: "2020-02-03")
+    assert_response :created
+    assert_equal "2020-02-03T00:00:00Z", response.parsed_body.dig("sample", "recorded_at")
+    dated = @voice.samples.find_by!(idempotency_key: "linked-dated")
+    get api_v1_field_sample_path(dated), headers: resident
+    assert_equal "2020-02-03T00:00:00Z", response.parsed_body.dig("sample", "recorded_at")
+
+    # A person's credential keeps the shared presentation, fallback included.
+    get api_v1_field_sample_path(undated), headers: human
+    assert_equal recording.recorded_at.iso8601, response.parsed_body.dig("sample", "recorded_at")
+  end
+
   test "a resident cannot confirm, nor change a sample a person has confirmed" do
     upload
     assert_response :created

@@ -698,10 +698,12 @@ membership, like voice management, and reaches every sample. A **resident key**
 uses its own credential (never a person's) and works only in its home account,
 only with **uploaded candidates no person has confirmed**: it may list and
 resolve voices (`GET /field/voices` returns `id`, `name`, `member` only), list,
-inspect and download uploaded samples, upload candidates, correct their
-attribution, exclude them and remove them. Confirmation (`included: true` on a
-sample needing new testimony) and any change to a sample a person has ever
-confirmed are 403 for residents, checked again under the sample lock.
+inspect and download uploaded samples (confirmed ones included: reading is
+allowed), upload candidates, and correct the attribution of, exclude or remove
+unconfirmed ones. Confirmation (`included: true` on a sample needing new
+testimony) and any change to a sample a person has ever confirmed are 403 for
+residents, checked again under the sample lock. A resident's sample rows carry
+only the upload's own `recorded_at`, never the linked recording's date.
 Recording-backed samples are not visible to residents (404), because their audio
 and timings come from the recording, which residents never read. Resident writes
 are audited (`field_voice_sample_uploaded`, `_reattributed`, `_excluded`,

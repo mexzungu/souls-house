@@ -1637,8 +1637,8 @@ souls field samples list VOICE_ID
 ```
 
 Audio is a PCM mono 16-bit 16 kHz WAV, 4–60 seconds. Uploads arrive as
-unconfirmed candidates. You can inspect, download, re-attribute, exclude and
-remove candidates that no person has confirmed. You cannot confirm a sample,
+unconfirmed candidates. You can inspect and download any uploaded sample, and
+re-attribute, exclude and remove candidates that no person has confirmed. You cannot confirm a sample,
 change one a person has confirmed, see recording-backed samples, or create,
 rename, delete or forget voices; those return 403 or 404. Full contract:
 `docs/api.md` (Voice samples) and `docs/voice-sample-cli.md`.
