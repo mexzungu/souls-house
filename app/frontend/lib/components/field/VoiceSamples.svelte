@@ -3,11 +3,15 @@
   // reject. Each sample is the exact montage that was embedded (several source
   // spans joined), so Accept stays off until it has been played to the end.
   // Namings with no usable sample are a count, listed only on request.
+  // Accept and reject show at once: the row moves to the end, marked saving,
+  // and the list refreshes behind it, so the next sample can be played
+  // straight away. A failed save puts the row back with the reason.
   import { untrack } from 'svelte';
   import { Button } from '$lib/components/shadcn/button/index.js';
   import VoiceSampleRow from './VoiceSampleRow.svelte';
   import OtherNamings from './OtherNamings.svelte';
   import { STATES } from './voice-sample-format.js';
+  import { orderedRows, shownCounts, stillPending } from './voice-sample-pending.js';
 
   let { base, name, version = '', onChanged = () => {} } = $props();
 
@@ -28,23 +32,56 @@
   let paused = $state(true);
   let progress = $state({});
 
+  // Reviews shown before the server has answered (voice-sample-pending.js).
+  let pending = $state({});
+  let loadSeq = 0;
+  let appliedSeq = 0;
+  // The list request in flight, for one voice: { base, promise }.
+  let inFlight = null;
+  let again = null;
+
   const headers = () => ({
     Accept: 'application/json',
     'Content-Type': 'application/json',
     'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '',
   });
 
-  async function load(nextPage = page) {
+  // One list request at a time per voice; asks made meanwhile become one more
+  // after it. Another voice's request never holds this one up: it is simply
+  // superseded, and its completion touches nothing (Mira's review of #497).
+  function load(nextPage = page) {
+    if (inFlight?.base === base) {
+      again = nextPage;
+      return inFlight.promise;
+    }
+    const request = { base };
+    again = null;
+    inFlight = request;
+    request.promise = fetchList(nextPage).finally(() => {
+      if (inFlight !== request) return;
+      inFlight = null;
+      if (again != null) {
+        const next = again;
+        again = null;
+        load(next);
+      }
+    });
+    return request.promise;
+  }
+
+  async function fetchList(nextPage) {
     const url = base;
+    const seq = ++loadSeq;
     loading = true;
-    error = '';
     try {
       const response = await fetch(`${url}/samples?page=${nextPage}`, { headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error('Samples could not be loaded. Please try again.');
       const body = await response.json();
-      if (url !== base) return;
+      if (url !== base || seq < appliedSeq) return;
+      appliedSeq = seq;
       result = body;
       page = body.page || 1;
+      pending = stillPending(pending, seq);
       // The playing row changed under the player (rebuilt, or gone): stop,
       // and forget its progress, so nothing heard before carries over.
       const row = playing && body.samples.find((sample) => sample.id === playing.id);
@@ -72,6 +109,7 @@
         result = null;
         heard = {};
         progress = {};
+        pending = {};
         page = 1;
         stop();
       }
@@ -120,15 +158,39 @@
     paused = true;
   }
 
-  async function send(sample, path, method, body) {
-    busy = sample?.id ?? 'all';
+  async function save(path, method, body) {
+    const response = await fetch(path, { method, headers: headers(), body: body && JSON.stringify(body) });
+    if (!response.ok) {
+      const reply = await response.json().catch(() => ({}));
+      throw new Error(reply.error || 'That change could not be saved. Refresh and try again.');
+    }
+  }
+
+  // Shown at once; nothing else waits for the server.
+  async function review(sample, included) {
+    const url = base;
+    error = '';
+    pending = { ...pending, [sample.id]: { included, settled: null } };
+    try {
+      await save(`${url}/samples/${sample.id}`, 'PATCH', { included, digest: sample.digest });
+      if (url !== base) return;
+      if (pending[sample.id]) pending = { ...pending, [sample.id]: { included, settled: loadSeq } };
+      load();
+      onChanged();
+    } catch (failure) {
+      if (url !== base) return;
+      const { [sample.id]: _failed, ...rest } = pending;
+      pending = rest;
+      error = failure.message;
+      load();
+    }
+  }
+
+  async function prepareAll() {
+    busy = 'all';
     error = '';
     try {
-      const response = await fetch(path, { method, headers: headers(), body: body && JSON.stringify(body) });
-      if (!response.ok) {
-        const reply = await response.json().catch(() => ({}));
-        throw new Error(reply.error || 'That change could not be saved. Refresh and try again.');
-      }
+      await save(`${base}/samples/prepare`, 'POST');
       await load();
       onChanged();
     } catch (failure) {
@@ -138,9 +200,7 @@
     }
   }
 
-  const review = (sample, included) =>
-    send(sample, `${base}/samples/${sample.id}`, 'PATCH', { included, digest: sample.digest });
-  const prepareAll = () => send(null, `${base}/samples/prepare`, 'POST');
+  const rows = $derived(orderedRows(result?.samples, pending));
 
   const heardIt = (sample) => heard[sample.id] === sample.digest;
   // Accepting says "I heard all of this and it is only them". A sample
@@ -150,7 +210,7 @@
     (sample.state === 'review' || sample.state === 'removed') &&
     (heardIt(sample) || (sample.state === 'removed' && sample.confirmed));
 
-  const counts = $derived(result?.state_counts || {});
+  const counts = $derived(shownCounts(result, pending));
 </script>
 
 <!-- One shared player: only one sample sounds at a time. -->
@@ -197,13 +257,13 @@
         reject it, then correct the speaker in the recording.
       </p>
       <ul class="divide-y rounded-md border" data-testid="voice-sample-list">
-        {#each result.samples as sample (sample.id)}
+        {#each rows as sample (sample.id)}
           <VoiceSampleRow
             {sample}
             {name}
             playing={playingId === sample.id && playing.digest === sample.digest && !paused}
             progress={progress[sample.id] ?? null}
-            busy={busy != null}
+            busy={busy != null || sample.saving}
             acceptable={canAccept(sample)}
             onToggle={() => toggle(sample)}
             onReview={(included) => review(sample, included)} />
