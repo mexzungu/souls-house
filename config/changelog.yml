@@ -9,9 +9,11 @@
 - date: 2026-10-21
   title: Voices moves to Account settings, built for many speakers
   body: "Voices is now a tab in Account settings. Speakers are a compact list you can search or filter (Needs review, With samples, Name only, All), with a count of samples waiting for review on each. Pick one to see their fingerprint samples, one line each with play, accept and reject; Accept unlocks once you've heard the sample to the end. Namings that never produced a usable sample are folded into one line you can open. Samples learned before their source spans were recorded can't be played yet; one Prepare button, for a speaker or the whole account, rebuilds them from their recordings in the background, and they stay in the fingerprint, unconfirmed, until you review them. Works once deployed."
+  clip: voice-samples
 - date: 2026-10-21
   title: Models by room
   body: "Account → Rooms has a new Models by room section: for each room, Main included, choose the model each resident starts on in a new conversation there, from that resident's list of models for conversations. Anyone in the conversation can still change it from the resident's button. It applies to conversations started (or residents added) after you set it; existing conversations, and conversations moved into the room later, keep the model they have. A rhythm's own model choice still wins, including choosing a resident's own default. Only residents with more than one model for conversations are listed. Works once deployed."
+  clip: models-by-room
 - date: 2026-10-21
   title: Review speaker fingerprint samples
   body: "The Field's speaker list now lets you play the exact samples used for a speaker's fingerprint, see whether someone manually confirmed them, and approve or remove contributions. Older samples without recorded source spans are clearly marked and can be rebuilt before review; removing a sample preserves its confirmation and the recording."
@@ -21,12 +23,14 @@
 - date: 2026-10-21
   title: Share a recording's transcript
   body: "A finished recording's transcript now has a Share button at its top right. Copy transcript to clipboard copies it as text, one line per turn with its time and speaker. Create link makes a private link that anyone holding it can open without signing in: it shows the recording's title, date and transcript, as written and attributed in the Field, with a Copy to clipboard button, and nothing else from your Field (no audio, notes or voices). A link stops working after 1 hour, 1 day (the default), 1 week, or never, as you choose; it's shown once, when made, and the Share menu lists live links with how often they've been opened and a Revoke button. Deleting the recording ends its links. Works once deployed."
+  clip: transcript-share
 - date: 2026-10-21
   title: Fluid Speech Mini added to the transcription decision
   body: "The voice-transcription decision now includes a four-recording Fluid Speech Mini CPU pilot: substantially lower memory than the tested Bark runtime, but similar waiting times. The page separates publisher claims from our measurements and keeps ElevenLabs in place."
 - date: 2026-10-21
   title: Rhythms open in a room
   body: "A rhythm now chooses where its conversations open: the account's default room for resident conversations, Main, or a room you name. Following the account's default is what new rhythms do, and what every existing rhythm does from now on, so in an account with a default room, existing rhythms start opening there instead of Main. To keep one in Main, edit it and choose Main. If a named room is removed, the rhythm opens in the account's default room and its page says so. Conversations that already opened stay where they are. The rhythms API takes and shows the same choice. Works once deployed."
+  clip: rhythm-room
 - date: 2026-10-21
   title: Bark 3.0 added to the transcription decision
   body: "The voice-transcription decision now includes a four-recording Bark 3.0 CPU pilot, its timing and reference-quality limits, and the difference between download size and working memory. ElevenLabs remains in place; no transcription backend changed."
