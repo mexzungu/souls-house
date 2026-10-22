@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_21_170000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_22_070000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -1354,21 +1354,46 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_170000) do
   create_table "field_voice_samples", force: :cascade do |t|
     t.bigint "account_id", null: false
     t.bigint "field_voice_id", null: false
-    t.bigint "field_recording_speaker_id", null: false
-    t.bigint "field_recording_id", null: false
-    t.text "embedding", null: false
+    t.bigint "field_recording_speaker_id"
+    t.bigint "field_recording_id"
+    t.text "embedding"
     t.integer "speech_ms", null: false
-    t.string "profile", null: false
+    t.string "profile"
     t.string "label_origin", null: false
     t.boolean "eligible", default: false, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.jsonb "source_segments"
     t.string "source_digest"
+    t.string "content_sha256"
+    t.string "source_identifier"
+    t.string "source_sha256"
+    t.string "source_session"
+    t.integer "start_ms"
+    t.integer "end_ms"
+    t.datetime "recorded_at"
+    t.string "idempotency_key"
+    t.string "request_digest"
+    t.jsonb "idempotency_receipts", default: {}, null: false
+    t.datetime "removed_at"
+    t.integer "review_generation", default: 0, null: false
+    t.string "confirmed_digest"
+    t.bigint "confirmed_by_id"
+    t.bigint "uploaded_by_id"
+    t.datetime "confirmed_at"
+    t.string "learning_status"
+    t.string "learning_error"
+    t.boolean "excluded", default: false, null: false
+    t.index ["account_id", "content_sha256"], name: "index_voice_samples_on_account_content", unique: true, where: "((content_sha256 IS NOT NULL) AND (removed_at IS NULL))"
+    t.index ["account_id", "idempotency_key"], name: "index_voice_samples_on_account_idempotency", unique: true, where: "(idempotency_key IS NOT NULL)"
+    t.index ["account_id", "source_sha256"], name: "index_field_voice_samples_on_account_id_and_source_sha256"
     t.index ["account_id"], name: "index_field_voice_samples_on_account_id"
+    t.index ["confirmed_by_id"], name: "index_field_voice_samples_on_confirmed_by_id"
     t.index ["field_recording_id"], name: "index_field_voice_samples_on_field_recording_id"
     t.index ["field_recording_speaker_id"], name: "index_field_voice_samples_on_field_recording_speaker_id"
     t.index ["field_voice_id", "field_recording_speaker_id"], name: "index_field_voice_samples_on_voice_and_speaker", unique: true
+    t.index ["uploaded_by_id"], name: "index_field_voice_samples_on_uploaded_by_id"
+    t.check_constraint "start_ms IS NULL AND end_ms IS NULL OR start_ms IS NOT NULL AND end_ms IS NOT NULL AND start_ms >= 0 AND end_ms > start_ms", name: "voice_sample_source_interval"
   end
 
   create_table "field_voiceprints", force: :cascade do |t|
@@ -2736,6 +2761,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_170000) do
   add_foreign_key "field_voice_samples", "accounts"
   add_foreign_key "field_voice_samples", "field_recording_speakers"
   add_foreign_key "field_voice_samples", "field_voices"
+  add_foreign_key "field_voice_samples", "users", column: "confirmed_by_id", on_delete: :nullify
+  add_foreign_key "field_voice_samples", "users", column: "uploaded_by_id", on_delete: :nullify
   add_foreign_key "field_voiceprints", "accounts"
   add_foreign_key "field_voiceprints", "field_voices"
   add_foreign_key "field_voices", "accounts"

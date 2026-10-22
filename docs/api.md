@@ -683,14 +683,71 @@ one tag, at most 50 characters, 32 per item.
   because changing a tag changes items other people tagged.
 
 **Voices.** `GET /api/v1/field/voices` lists voices (`remembered`, `used_in`, and
-so on), `members_without_voice`, `my_voice_id`, `pending_enrolments`,
+so on), `members_without_voice`, `my_voice_id`,
 `recognise_voices` and `can_change_setting`. It never returns a voice print.
 `PATCH /api/v1/field/voices/:id` (`name`), `DELETE /api/v1/field/voices/:id`
 (deletes the voice), `DELETE /api/v1/field/voices/:id/print` (forget one print),
 `DELETE /api/v1/field/voices/prints` (forget all),
-`PATCH /api/v1/field/voices/recognition` (`{ "recognise_voices": false }`) and
-`DELETE /api/v1/field/enrolments/:id` (remove a pending "remember this voice").
-Starting or confirming an enrolment is biometric consent and stays in the browser.
+`PATCH /api/v1/field/voices/recognition` (`{ "recognise_voices": false }`).
+`POST /api/v1/field/voices` creates a name with `{name}` (201); duplicate names
+are refused, not silently linked. `GET /api/v1/field/voices/resolve?name=...`
+does an exact normalized lookup (404 on miss), without creating anything.
+
+**Voice samples.** These endpoints require a human credential and current
+confirmed account membership, like voice management; resident keys get 403.
+The existing `souls field voices` and `souls field samples` commands cover the
+workflow; see [CLI examples and wire contract](voice-sample-cli.md).
+
+- `GET /api/v1/field/voices/:voice_id/samples`: paginated safe metadata,
+  `page`, `pages`, `total`, and limits. No vectors, storage credentials or blob URLs.
+- `POST` at that path: multipart `audio` plus a stable `idempotency_key`.
+  Audio is a **PCM mono 16-bit 16 kHz WAV, 4–60 seconds, at most 2 MiB**.
+  The original uploaded bytes are retained and sent unchanged for embedding.
+  Optional `source_identifier`, original `source_sha256`, canonical `source_session`,
+  paired `start_ms`/`end_ms`, and ISO `recorded_at` preserve source evidence.
+  A sample date means midnight UTC (portable archive provenance, unlike a
+  recording's app-zone display date); a timestamp requires an explicit offset.
+  Optional public `recording_id` (alias `transcript_id`) must belong to this
+  account. In Field a transcript belongs to its recording.
+  Returns `{sample: ..., deduplicated: null}` (201) for a new row; an existing row
+  returns 200 with `deduplicated: "retry"`, `"identical"` or `"overlap"`.
+  Its metadata/hash describe the retained existing sample, not the discarded new
+  cut. A reused key with different immutable content/metadata is 409. Identical audio or overlapping
+  intervals of the same original source deduplicate account-wide. Conflicting
+  attribution is 409, never a silent move. Keep canonical original-session
+  groups stable across exports, duplicates and slices. Matching original hashes,
+  identifiers or recording links cannot introduce a conflicting source group;
+  mixed linked/unlinked cuts must reuse the original recording link.
+  Responses preserve the upload's raw `source_session` separately from the
+  account-scoped `source_group_key` used for validation splits.
+- `GET /api/v1/field/samples/:id`: inspect metadata.
+- `GET /api/v1/field/samples/:id/audio?digest=...`: authorized exact WAV download,
+  private/no-store. A stale digest is 409, not different audio.
+- `PATCH /api/v1/field/samples/:id` with `{included, digest}` accepts/includes or
+  rejects/excludes. A machine API key **cannot create listening testimony**.
+  New confirmation requires the browser or signed-in human OAuth app token.
+  An API key may reinclude an unchanged, already-confirmed sample without
+  changing who confirmed it or when. Exclusion preserves audio and prior testimony.
+- `PATCH` with `{voice_id, digest}` corrects attribution and invalidates
+  confirmation. Recording-derived samples correct their source speaker and
+  return a replacement unconfirmed candidate with the same audio and embedding;
+  uploads move as unconfirmed.
+- `DELETE` with `{digest}` removes a sample from the review collection and
+  fingerprint, retaining its evidence as a soft-removed row. Existing voice
+  Forget semantics still erase the voice's samples and attached sample audio.
+  Member operations also accept the nested `/voices/:voice_id/samples/:id` path.
+
+Uploads and new extracted cuts are **unconfirmed candidates**, never automatic
+enrollment. At least two exact, confirmed included samples are needed to build a
+print; the existing held-out validation still gates checked recognition.
+Capacity is enforced under account/voice locks across uploads, extraction,
+retries and inclusion: twenty included samples and twenty waiting candidates per
+speaker. Reject/remove explicit evidence to make room; nothing is silently
+evicted, and pre-existing over-limit evidence is not deleted. The later archive
+sweep targets ten total including existing samples; this API does not run it.
+Pending failures consume a candidate slot until reviewed or removed.
+Malformed audio/metadata is 422, capacity/stale/idempotency conflicts are 409,
+inaccessible account resources are 404, and unauthorized credentials are 401/403.
 
 **Notes.** `DELETE /api/v1/whiteboards/:id` → 204 (a soft delete, as on the
 page). Resident keys can edit notes but not delete them.

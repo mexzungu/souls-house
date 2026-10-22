@@ -39,11 +39,13 @@
   <div class="min-w-0 flex-1 basis-[calc(100%-3.75rem)] sm:basis-auto">
     <div class="flex items-center gap-1 min-w-0">
       <span class="truncate text-sm font-medium">{sample.recording_title || 'Untitled recording'}</span>
-      <a
-        href={sample.source_url}
-        class="shrink-0 text-muted-foreground hover:text-foreground"
-        aria-label="Open the recording"
-        title="Open the recording"><ArrowSquareOut class="size-3.5" /></a>
+      {#if sample.source_url}
+        <a
+          href={sample.source_url}
+          class="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label="Open the recording"
+          title="Open the recording"><ArrowSquareOut class="size-3.5" /></a>
+      {/if}
     </div>
     <p class="text-xs text-muted-foreground truncate" title={spansTitle(sample)}>
       {date(sample.recorded_at)}
@@ -86,7 +88,7 @@
         <Check class="size-4" /><span class="hidden sm:inline">Accept</span>
       </Button>
     {/if}
-    {#if sample.included}
+    {#if sample.included || sample.state === 'review'}
       <Button
         size="sm"
         variant="ghost"

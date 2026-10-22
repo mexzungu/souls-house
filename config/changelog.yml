@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-22
+  title: Add speaker samples through the API and CLI
+  body: "Upload retained voice samples without a transcript, with source and session provenance, and manage them through the API and souls CLI. Candidates stay out of recognition until a person confirms the exact audio in Voices; at least two confirmed samples are needed, with twenty included samples and twenty waiting candidates per speaker. Existing evidence is kept, never silently evicted. Works once deployed."
 - date: 2026-10-21
   title: Models by room fits a phone
   body: "Account → Rooms → Models by room is no longer a table you scroll sideways. Each room is its own block listing its residents, each with a model picker: stacked, full width, on a phone, side by side on a wider screen. However many residents there are, nothing scrolls sideways."

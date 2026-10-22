@@ -75,6 +75,7 @@ module FieldVoiceprints::Validation
 
     by_voice = prints.index_by(&:field_voice_id)
     samples = FieldVoiceSample.eligible.where(account:, field_voice_id: by_voice.keys, profile: prints.first.profile).to_a
+      .select(&:manually_confirmed?)
     vectors = samples.to_h { |sample| [ sample.id, sample.vector ] }
     candidates = by_voice.keys.to_set
     final = {}
@@ -94,8 +95,8 @@ module FieldVoiceprints::Validation
       [ voice_id, { "queries" => 0, "correct" => 0, "rejected" => 0, "wrong" => 0, "false_accepts_into" => 0,
                     "negatives" => 0 } ]
     end
-    samples.group_by(&:field_recording_id).each do |recording_id, queries|
-      held_out = samples.reject { |sample| sample.field_recording_id == recording_id }
+    samples.group_by(&:source_group_key).each do |group, queries|
+      held_out = samples.reject { |sample| sample.source_group_key == group }
         .select { |sample| candidates.include?(sample.field_voice_id) }
         .group_by(&:field_voice_id)
         .to_h { |voice_id, own| [ voice_id, FieldVoiceprints.centroid(own.map { |sample| vectors[sample.id] }) ] }

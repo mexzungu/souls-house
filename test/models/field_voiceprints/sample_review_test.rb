@@ -59,11 +59,16 @@ class FieldVoiceprints::SampleReviewTest < ActiveSupport::TestCase
   test "legacy samples remain included during refresh and cannot be confirmed" do
     with_recognition(@account) do
       sample = enrolled_sample
+      assert review(sample, included: true)
+      retained = confirmed_recording_sample!(@voice,
+        recording: long_ready_recording(account: @account, user: @user), vector: voice_vector(3))
+      assert_equal 2, @voice.reload.voiceprint.sample_count
       sample.update!(source_segments: nil, source_digest: nil)
       assert_not sample.source_current?
       assert_not sample.manually_confirmed?
       assert_not review(sample, included: true)
       print = @voice.reload.voiceprint
+      assert_empty FieldVoiceprints::Cohort.prints(@account), "retained legacy inclusion is not confirmed testimony"
       assert_equal 0, FieldVoiceprints::Learning.queue_account!(@account),
         "backfill leaves legacy samples alone"
       assert sample.reload.eligible?
@@ -75,23 +80,32 @@ class FieldVoiceprints::SampleReviewTest < ActiveSupport::TestCase
       assert_equal :learned, learn
       assert sample.reload.source_current?
       assert_not sample.manually_confirmed?, "refresh is not a person's approval"
+      assert_not sample.eligible?, "the replacement cut waits for exact review"
+      assert retained.reload.eligible?
+      assert retained.manually_confirmed?
+      assert_nil @voice.reload.voiceprint, "one retained confirmation cannot form a print"
     end
   end
 
   test "last exclusion removes the actual print and preserves confirmation" do
     with_recognition(@account) do
       sample = enrolled_sample
+      retained = confirmed_recording_sample!(@voice,
+        recording: long_ready_recording(account: @account, user: @user), vector: voice_vector(3))
       assert review(sample, included: true)
+      assert_equal 2, @voice.reload.voiceprint.sample_count
       confirmed_at = @speaker.reload.sample_confirmed_at
       assert review(sample, included: false)
       assert @speaker.reload.sample_excluded?
       assert_not sample.reload.eligible?
       assert_nil @voice.reload.voiceprint
+      assert retained.reload.eligible?
+      assert retained.manually_confirmed?
       assert_equal confirmed_at, @speaker.sample_confirmed_at
       assert sample.manually_confirmed?
       assert review(sample, included: true)
       assert sample.reload.eligible?
-      assert_equal 1, @voice.reload.voiceprint.sample_count
+      assert_equal 2, @voice.reload.voiceprint.sample_count
     end
   end
 
@@ -189,8 +203,12 @@ class FieldVoiceprints::SampleReviewTest < ActiveSupport::TestCase
       assert_equal other_voice.id, snapshot["voice_id"]
       assert_equal :learned, learn(snapshot)
       assert_equal other_voice.id, @speaker.voice_samples.sole.field_voice_id
-      assert @speaker.voice_samples.sole.eligible?
-      assert_equal 1, other_voice.reload.voiceprint.sample_count
+      assert_not @speaker.voice_samples.sole.eligible?, "corrected attribution is a new unreviewed candidate"
+      assert_not @speaker.voice_samples.sole.manually_confirmed?
+      assert_nil other_voice.reload.voiceprint
+      assert review(@speaker.voice_samples.sole, included: true)
+      assert @speaker.voice_samples.sole.reload.eligible?
+      assert_nil other_voice.reload.voiceprint, "one exact confirmation remains insufficient"
       assert_nil @voice.reload.voiceprint
     end
   end
@@ -260,23 +278,34 @@ class FieldVoiceprints::SampleReviewTest < ActiveSupport::TestCase
     with_recognition(@account) do
       sample = enrolled_sample
       sample.update!(profile: "ecapa-old", updated_at: 1.day.ago)
+      confirmed_recording_sample!(@voice,
+        recording: long_ready_recording(account: @account, user: @user), vector: voice_vector(3), profile: "ecapa-old")
+      assert review(sample, included: true)
+      assert_equal "ecapa-old", @voice.reload.voiceprint.profile
       other = long_ready_recording(account: @account, user: @user).speakers.find_by!(label: "speaker_0")
       other.name_as!(@voice, by: @user)
       snapshot = FieldVoiceprints::Learning.snapshot_for(other.reload)
       assert_equal :learned, learn(snapshot)
+      assert_equal "ecapa-old", @voice.reload.voiceprint.profile, "pending extractions do not supersede confirmed evidence"
+      current = other.voice_samples.sole
+      assert other.review_sample!(sample: current, digest: current.source_digest, by: @user, included: true)
+      assert_nil @voice.reload.voiceprint, "the newest confirmed profile still needs two samples"
+      confirmed_recording_sample!(@voice,
+        recording: long_ready_recording(account: @account, user: @user), vector: voice_vector(3))
       assert_equal "ecapa-test", @voice.reload.voiceprint.profile
 
       extracted_at = sample.reload.updated_at
       assert review(sample, included: true)
       assert_equal extracted_at, sample.reload.updated_at
       assert_equal "ecapa-test", @voice.reload.voiceprint.profile
-      assert_equal 1, @voice.voiceprint.sample_count
+      assert_equal 2, @voice.voiceprint.sample_count
     end
   end
 
   test "provider failures expose a safe error and a fresh retry clears it" do
     with_recognition(@account) do
       sample = enrolled_sample
+      assert review(sample, included: true)
       sample.update!(source_segments: nil, source_digest: nil)
       assert @speaker.relearn_sample!
       old_snapshot = FieldVoiceprints::Learning.snapshot_for(@speaker.reload)

@@ -14,6 +14,18 @@ module TestSupport::E2e::FieldVoiceSampleFixtures
     wav = "RIFF".b + [ 36 + pcm.bytesize ].pack("V") + "WAVEfmt ".b +
       [ 16, 1, 1, 16_000, 32_000, 2, 16 ].pack("VvvVVvv") +
       "data".b + [ pcm.bytesize ].pack("V") + pcm
+    if params[:standalone]
+      voice = account.field_voices.create!(name: "Synthetic uploaded voice")
+      sample = FieldVoiceSamples::Uploads.create!(voice:, by: nil, file: StringIO.new(wav),
+        metadata: { source_identifier: "Synthetic retained upload", source_session: "synthetic-session",
+          idempotency_key: "synthetic-upload" })
+      sample.vector = [ 1.0 ] + [ 0.0 ] * 191
+      sample.update!(profile: "ecapa-synthetic", learning_status: "learned")
+      return render json: {
+        voice_param: voice.to_param, speaker_param: "upload-#{sample.to_param}",
+        digest: sample.source_digest, wav_sha256: Digest::SHA256.hexdigest(wav)
+      }
+    end
     blob = ActiveStorage::Blob.create_and_upload!(
       io: StringIO.new(wav), filename: "synthetic-speaker-tones.wav", content_type: "audio/wav"
     )

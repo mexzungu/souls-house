@@ -43,6 +43,54 @@ for (const device of [
   test.describe(device.name, () => {
     test.use({ viewport: device.viewport, isMobile: device.isMobile, hasTouch: device.hasTouch });
 
+    test('standalone retained upload is heard and confirmed in the existing review list', async ({ page, request }) => {
+      const runId = `upload-review-${device.isMobile}-${Date.now()}`;
+      const response = await request.post('/test/e2e/setup', { data: { run_id: runId } });
+      expect(response.ok()).toBe(true);
+      const setup = await response.json();
+      try {
+        const seeded = await request.post('/test/e2e/field_voice_sample_fixture', {
+          data: { account_id: setup.account_id, standalone: true },
+        });
+        expect(seeded.ok(), await seeded.text()).toBe(true);
+        const fixture = await seeded.json();
+        await login(page, setup);
+        const base = `/accounts/${setup.account_param}/field/voices`;
+        await page.goto(base);
+        if (!(await page.getByTestId('voice-detail').isVisible())) await page.getByTestId('voice-row').click();
+        const row = page.getByTestId('voice-sample');
+        await expect(row).toHaveCount(1);
+        await expect(row).toContainText('Synthetic retained upload');
+        const accept = row.getByTestId('sample-accept');
+        await expect(accept).toBeDisabled();
+        const audioPath = `${base}/${fixture.voice_param}/samples/${fixture.speaker_param}/audio`;
+        const downloaded = await page.request.get(`${audioPath}?digest=${fixture.digest}`);
+        expect(downloaded.ok()).toBe(true);
+        expect(
+          createHash('sha256')
+            .update(await downloaded.body())
+            .digest('hex')
+        ).toBe(fixture.wav_sha256);
+        await expect(accept).toBeDisabled(); // An authenticated download is not a listening event.
+        await row.getByTestId('sample-play').click();
+        await expect
+          .poll(() => page.getByTestId('sample-audio').evaluate((audio) => audio.currentTime))
+          .toBeGreaterThan(0);
+        await expect(accept).toBeEnabled({ timeout: 10_000 });
+        await accept.click();
+        await expect(row.getByTestId('sample-inclusion')).toHaveText('Confirmed');
+        await expect(page.getByTestId('voice-print-state')).toHaveText('No fingerprint');
+        await row.getByTestId('sample-reject').click();
+        await expect(row.getByTestId('sample-inclusion')).toHaveText('Removed · was confirmed');
+        await expect(row.getByTestId('sample-accept')).toBeEnabled();
+        await row.getByTestId('sample-accept').click();
+        await expect(row.getByTestId('sample-inclusion')).toHaveText('Confirmed');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        expect((await request.post('/test/e2e/cleanup', { data: { run_id: runId } })).ok()).toBe(true);
+      }
+    });
+
     test('real stored montage playback gates confirmation; exclusion and reinclusion survive reload', async ({
       page,
       request,
@@ -90,8 +138,7 @@ for (const device of [
             duration_ms: fixture.duration_ms,
             source_current: true,
           });
-          if (body.samples[0].included) expect(body.print).not.toBe('No fingerprint');
-          else expect(body.print).toBe('No fingerprint');
+          expect(body.print).toBe('No fingerprint'); // One sample cannot enroll.
           // The roster opens the speaker: on a phone the list gives way to the detail.
           if (!(await page.getByTestId('voice-detail').isVisible())) await page.getByTestId('voice-row').click();
           await expect(page.getByTestId('voice-detail')).toBeVisible();

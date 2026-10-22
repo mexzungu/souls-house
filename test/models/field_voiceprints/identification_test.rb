@@ -28,7 +28,10 @@ class FieldVoiceprints::IdentificationTest < ActiveSupport::TestCase
 
   test "an undecided speaker close to an active print gets a guess, and its embedding is kept" do
     with_recognition(@account) do
-      store_print!(@voice, vector: voice_vector(3))
+      print = store_print!(@voice, vector: voice_vector(3))
+      confirmed = FieldVoiceprints::Limits.confirmed_samples(@voice)
+      assert_equal 2, confirmed.size
+      assert_equal FieldVoiceprints::Learning.digest(confirmed), print.sample_digest
       store_print!(@other_voice, vector: voice_vector(7))
       client = FakeVoiceEmbeddings.new({ default: voice_vector(3, noise: 0.05) })
 
@@ -155,7 +158,7 @@ class FieldVoiceprints::IdentificationTest < ActiveSupport::TestCase
       assert_not @speaker.reload.confirm_recognition!(by: @user, shown: token), "Tomás's print is unchanged, but its verdict isn't"
       assert_nil @speaker.reload.field_voice_id
 
-      FieldVoiceprints::Validation.run!(@account) # no survivors: one print, no samples to check it with
+      FieldVoiceprints::Validation.run!(@account) # one surviving voice has too few negative queries to validate
       assert_empty FieldVoiceprints::Identification.active_prints(@account)
       assert_nil @speaker.reload.recognised_voice_id, "publishing a new verdict clears guesses made under the old one"
     end

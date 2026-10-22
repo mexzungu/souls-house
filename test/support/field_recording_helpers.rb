@@ -1,3 +1,5 @@
+require "stringio"
+
 # Shared setup for recording tests: a direct-upload blob pinned to a user and
 # account exactly as FieldRecordingUploadsController makes one.
 module FieldRecordingHelpers
@@ -77,17 +79,56 @@ module FieldRecordingHelpers
 
   # A stored print, active unless active: false. Validation is stamped with
   # the account's cohort digest, so every validated print in the account is
-  # restamped as the cohort grows (as a real validation run would).
+  # restamped as the cohort grows (as a real validation run would). Its fixture
+  # testimony is real persisted, audio-backed, exact-digest confirmation, not
+  # sample_count metadata that could bypass the production confirmed-set gate.
   def store_print!(voice, vector: voice_vector(voice.id % 100), active: true, profile: "ecapa-test")
+    samples = 2.times.map do |index|
+      sample = voice.samples.find_or_initialize_by(source_identifier: "synthetic-print-fixture-#{index}")
+      sample.assign_attributes(account: voice.account, source_session: "synthetic-print-#{voice.id}-#{index}",
+        embedding: JSON.generate(vector), profile:, speech_ms: 6_000, label_origin: "human", learning_status: "learned")
+      unless sample.audio.attached?
+        # Six seconds of synthetic PCM; no provider or real person's recording.
+        pcm = [ (voice.id * 2 + index) % 32_768 ].pack("v") * (16_000 * 6)
+        wav = "RIFF".b + [ 36 + pcm.bytesize ].pack("V") + "WAVEfmt " +
+          [ 16, 1, 1, 16_000, 32_000, 2, 16 ].pack("VvvVVvv") + "data" + [ pcm.bytesize ].pack("V") + pcm
+        sample.content_sha256 = Digest::SHA256.hexdigest(wav)
+        sample.audio.attach(io: StringIO.new(wav), filename: "synthetic.wav", content_type: "audio/wav")
+      end
+      sample.source_sha256 = sample.content_sha256
+      sample.save!
+      sample.update!(source_digest: FieldVoiceSamples::Uploads.source_digest(sample))
+      sample.update!(eligible: true, confirmed_digest: sample.source_digest,
+        confirmed_by: voice.account.users.first || users(:user_1), confirmed_at: Time.current)
+      assert sample.source_current?
+      assert sample.manually_confirmed?
+      sample
+    end
     print = voice.with_lock do
       generation = voice.print_generation + 1
       voice.update_columns(print_generation: generation)
-      FieldVoiceprint.create!(field_voice: voice, account: voice.account, print: JSON.generate(vector), generation:,
-        profile:, sample_count: 2, recording_count: 2, speech_ms: 12_000, sample_digest: "digest-#{generation}",
-        validated: active)
+      row = FieldVoiceprint.find_or_initialize_by(field_voice: voice)
+      row.update!(account: voice.account, print: JSON.generate(vector), generation:,
+        profile:, sample_count: samples.size, recording_count: samples.map(&:source_group_key).uniq.size,
+        speech_ms: samples.sum(&:speech_ms), sample_digest: FieldVoiceprints::Learning.digest(samples), validated: active)
+      row
     end
     restamp_cohort!(voice.account)
     print.reload
+  end
+
+  # Synthetic extraction fixture, but confirmation goes through the real review
+  # operation with the current persisted source digest and an attributed user.
+  def confirmed_recording_sample!(voice, recording:, vector:, profile: "ecapa-test", speech_ms: 5_000)
+    holder = FieldRecordingSpeaker.create!(field_recording: recording, field_voice: voice, naming_source: "human",
+      label: "sample-#{SecureRandom.hex(4)}", position: 50 + recording.speakers.count)
+    segments = [ [ 0, speech_ms ] ]
+    sample = FieldVoiceSample.create!(account: voice.account, field_voice: voice, field_recording_speaker: holder,
+      field_recording: recording, embedding: JSON.generate(vector), speech_ms:, profile:, label_origin: "human",
+      eligible: false, source_segments: segments, source_digest: FieldVoiceSample.source_digest_for(holder, segments))
+    assert holder.review_sample!(sample:, digest: sample.source_digest, by: users(:user_1), included: true)
+    assert sample.reload.manually_confirmed?
+    sample
   end
 
   def restamp_cohort!(account)

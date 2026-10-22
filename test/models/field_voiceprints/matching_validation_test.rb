@@ -31,10 +31,8 @@ class FieldVoiceprints::MatchingValidationTest < ActiveSupport::TestCase
   end
 
   def add_sample(account, voice, recording, vector)
-    holder = FieldRecordingSpeaker.create!(field_recording: recording, label: "s#{SecureRandom.hex(3)}",
-      position: 50 + FieldRecordingSpeaker.where(field_recording: recording).count)
-    FieldVoiceSample.create!(account:, field_voice: voice, field_recording_speaker: holder, field_recording_id: recording.id,
-      embedding: JSON.generate(vector), speech_ms: 5_000, profile: "ecapa-test", label_origin: "human", eligible: true)
+    assert_equal account.id, voice.account_id
+    confirmed_recording_sample!(voice, recording:, vector:)
   end
 
   def rebuild_all(voices)
@@ -59,7 +57,12 @@ class FieldVoiceprints::MatchingValidationTest < ActiveSupport::TestCase
   test "a wrong accept counts even when the query's own voice has no held-out print" do
     account, voices, user = orthogonal_account(6)
     seventh = account.field_voices.create!(name: "Seventh")
-    add_sample(account, seventh, long_ready_recording(account:, user:), unit(e1: 0.6, e9: 0.8))
+    recording = long_ready_recording(account:, user:)
+    add_sample(account, seventh, recording, unit(e1: 0.6, e9: 0.8))
+    # Two confirmations make a print, but neither has an own held-out print.
+    # Keep this second query below threshold so it does not invoke the
+    # production matcher's same-recording double-claim suppression.
+    add_sample(account, seventh, recording, unit(e1: 0.1, e9: Math.sqrt(0.99)))
     rebuild_all(voices + [ seventh ])
 
     stats = FieldVoiceprints::Validation.run!(account)
@@ -74,7 +77,9 @@ class FieldVoiceprints::MatchingValidationTest < ActiveSupport::TestCase
     account, voices, user = orthogonal_account(6)
     add_sample(account, voices.second, long_ready_recording(account:, user:), unit(e1: 0.6, e9: 0.8))
     seventh = account.field_voices.create!(name: "Seventh")
-    add_sample(account, seventh, long_ready_recording(account:, user:), unit(e1: 0.5, e9: Math.sqrt(0.75)))
+    recording = long_ready_recording(account:, user:)
+    add_sample(account, seventh, recording, unit(e1: 0.5, e9: Math.sqrt(0.75)))
+    add_sample(account, seventh, recording, unit(e1: 0.1, e9: Math.sqrt(0.99)))
     rebuild_all(voices + [ seventh ])
 
     FieldVoiceprints::Validation.run!(account)
@@ -148,11 +153,9 @@ class FieldVoiceprints::MatchingValidationTest < ActiveSupport::TestCase
     recordings = (1..3).map { long_ready_recording(account:, user:) }
     recordings.each_with_index do |recording, r|
       voices.each_with_index do |voice, v|
-        holder = FieldRecordingSpeaker.create!(field_recording: recording, label: "v#{v}", position: 10 + v)
         vector = voice_vector(v, noise: 0.05, seed: (r * 10) + v)
         vector = voice_vector(0, noise: 0.05, seed: 99) if confuser && v == 5 && r == 2
-        FieldVoiceSample.create!(account:, field_voice: voice, field_recording_speaker: holder, field_recording_id: recording.id,
-          embedding: JSON.generate(vector), speech_ms: 5_000, profile: "ecapa-test", label_origin: "human", eligible: true)
+        add_sample(account, voice, recording, vector)
       end
     end
     voices.each { |voice| voice.with_lock { FieldVoiceprints::Learning.rebuild!(voice) } }
@@ -180,6 +183,7 @@ class FieldVoiceprints::MatchingValidationTest < ActiveSupport::TestCase
     account, voices = build_account
     FieldVoiceSample.where(field_voice: voices.last).where.not(field_recording_id: FieldVoiceSample.where(field_voice: voices.last).minimum(:field_recording_id)).delete_all
     voices.last.with_lock { FieldVoiceprints::Learning.rebuild!(voices.last) }
+    assert_nil voices.last.reload.voiceprint, "one confirmed sample cannot form a print"
     FieldVoiceprints::Validation.run!(account)
     assert_not_includes active_voice_ids(account), voices.last.id
     assert_includes active_voice_ids(account), voices.first.id
