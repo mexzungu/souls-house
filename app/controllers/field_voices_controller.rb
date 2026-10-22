@@ -9,7 +9,7 @@ class FieldVoicesController < ApplicationController
     voices = current_account.field_voices.kept.includes(:user, :voiceprint).order(Arel.sql("lower(name)"))
     used = FieldRecordingSpeaker.where(field_voice_id: voices.map(&:id)).group(:field_voice_id).count
     active_ids = FieldVoiceprints::Identification.active_prints(current_account).map(&:id)
-    samples = FieldVoiceSample.where(field_voice_id: voices.map(&:id)).includes(:field_recording_speaker).group_by(&:field_voice_id)
+    samples = FieldVoiceSample.where(field_voice_id: voices.map(&:id), removed_at: nil).includes(:field_recording_speaker).group_by(&:field_voice_id)
     render inertia: "field/voices", props: {
       voices: voices.map { |voice|
         FieldItems.voice_page_json(voice, used.fetch(voice.id, 0), active_ids)
@@ -80,17 +80,23 @@ class FieldVoicesController < ApplicationController
   # Roster counts from stored columns only: no transcript, blob or source
   # check per sample. The samples list is the authority on each row.
   def sample_counts(rows)
-    included = rows.select { |sample| sample.eligible? && !sample.field_recording_speaker.sample_excluded? }
+    included = rows.select { |sample| sample.eligible? && !sample.field_recording_speaker&.sample_excluded? }
     confirmed = included.select do |sample|
       speaker = sample.field_recording_speaker
-      sample.source_digest.present? && speaker.sample_confirmed_digest == sample.source_digest &&
-        speaker.sample_confirmed_by_id.present?
+      if speaker
+        sample.source_digest.present? && speaker.sample_confirmed_digest == sample.source_digest && speaker.sample_confirmed_by_id.present?
+      else
+        sample.confirmed_digest.present? && sample.confirmed_digest == sample.source_digest && sample.confirmed_by_id.present?
+      end
     end
     {
       samples: rows.size,
       included_samples: included.size,
       confirmed_samples: confirmed.size,
-      unconfirmed_samples: included.size - confirmed.size,
+      unconfirmed_samples: rows.count { |sample|
+        !sample.excluded? && !sample.field_recording_speaker&.sample_excluded? &&
+          !(sample.standalone? ? sample.confirmed_digest.present? : sample.field_recording_speaker&.sample_confirmed_digest.present?)
+      },
       unprepared_samples: rows.count { |sample| sample.source_digest.blank? }
     }
   end

@@ -78,10 +78,11 @@ class FieldVoiceprintsTest < ActiveSupport::TestCase
   test "nothing biometric happens while a gate is shut: nothing learned, nothing embedded, no guess" do
     client = embeddings
     store_print!(@voice)
+    before = FieldVoiceSample.count
     assert_nil snapshot, "a naming with the gate shut queues no learning"
     assert_nil FieldVoiceprints::Identification.run!(untouched_recording, client:)
     assert_empty client.calls
-    assert_equal 0, FieldVoiceSample.count
+    assert_equal before, FieldVoiceSample.count
   end
 
   test "forget is always allowed, with no gate or print, moves the generations on and stops learning" do

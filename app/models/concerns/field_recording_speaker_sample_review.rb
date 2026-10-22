@@ -8,7 +8,7 @@ module FieldRecordingSpeakerSampleReview
 
   # The sample and digest are the ones the person saw. Exclusion is also
   # possible for a legacy sample, or before the first sample has landed.
-  def review_sample!(sample:, digest:, by:, included:)
+  def review_sample!(sample:, digest:, by:, included:, confirm: true)
     raise ArgumentError, "a user must review the sample" unless by.is_a?(User) && by.persisted?
 
     with_sample_review_locks do |recording, _voices|
@@ -16,10 +16,12 @@ module FieldRecordingSpeakerSampleReview
       next false unless recording.kept? && recording.ready?
       next false unless current&.id == sample&.id && current&.source_digest == digest
       next false if included && !(current && field_voice&.kept? && digest.present? && current.source_current?)
+      next false if included && !confirm && !current.manually_confirmed?
+      FieldVoiceprints::Limits.active!(field_voice, except: current) if included && !current.eligible?
 
       attributes = { sample_excluded: !included, sample_review_generation: sample_review_generation + 1,
         sample_learning_status: current ? "learned" : nil, sample_learning_error: nil }
-      if included
+      if included && confirm
         attributes.merge!(sample_confirmed_digest: digest, sample_confirmed_by: by, sample_confirmed_at: Time.current)
       end
       update!(attributes)
@@ -36,6 +38,8 @@ module FieldRecordingSpeakerSampleReview
   def relearn_sample!
     with_sample_review_locks do |_recording, _voices|
       next false unless FieldVoiceprints::Learning.snapshot_for(self, allow_excluded: true)
+      next false if sample_learning_status == "pending"
+      FieldVoiceprints::Limits.pending!(field_voice, except_speaker: self)
 
       update!(sample_review_generation: sample_review_generation + 1,
         sample_learning_status: "pending", sample_learning_error: nil)

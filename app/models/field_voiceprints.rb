@@ -59,8 +59,10 @@ module FieldVoiceprints
                recognitions: FieldRecordingSpeaker.where.not(recognised_voice_id: nil).count, voices: FieldVoice.count }
     Account.update_all("field_probe_generation = field_probe_generation + 1")
     FieldVoice.update_all("print_generation = print_generation + 1, learning_generation = learning_generation + 1")
-    FieldVoiceSample.delete_all
+    FieldVoiceSample.find_each(&:destroy!)
     FieldVoiceprint.delete_all
+    FieldRecordingSpeaker.update_all(sample_learning_status: nil, sample_learning_error: nil,
+      sample_confirmed_digest: nil, sample_confirmed_by_id: nil, sample_confirmed_at: nil)
     FieldRecordingSpeaker.where.not(probe_embedding: nil).update_all(probe_embedding: nil, probe_profile: nil)
     FieldRecordingSpeaker.where.not(recognised_voice_id: nil)
       .update_all(recognised_voice_id: nil, recognition_confidence: nil, recognition_print_generation: nil,

@@ -21,7 +21,7 @@ module FieldVoiceprints::Cohort
   # doesn't move unless something is learned.
   def profile(account)
     FieldVoiceSample.eligible.joins(:field_voice).merge(FieldVoice.kept)
-      .where(account:, field_voices: { remember: true }).order(id: :desc).pick(:profile) ||
+      .where(account:, field_voices: { remember: true }).order(id: :desc).detect(&:manually_confirmed?)&.profile ||
       FieldVoiceprint.where(account:).order(id: :desc).pick(:profile)
   end
 
@@ -31,7 +31,12 @@ module FieldVoiceprints::Cohort
 
     FieldVoiceprint.joins(:field_voice).merge(FieldVoice.kept)
       .where(account:, profile: current, field_voices: { remember: true }).includes(:field_voice).order(:id).to_a
-      .select { |print| print.generation == print.field_voice.print_generation }
+      .select { |print|
+        confirmed = FieldVoiceprints::Limits.confirmed_samples(print.field_voice).select { |sample| sample.profile == print.profile }
+        print.generation == print.field_voice.print_generation &&
+          confirmed.size >= FieldVoiceprints::Limits::MIN_CONFIRMED &&
+          print.sample_digest == FieldVoiceprints::Learning.digest(confirmed)
+      }
   end
 
   def digest(prints)

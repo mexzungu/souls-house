@@ -39,6 +39,24 @@ module Api
           end
         end
 
+        def create
+          account = human_request_account!
+          voice = account.with_lock do
+            account.field_voices.create!(name: params[:name], created_by: current_api_user)
+          end
+          render json: { voice: { id: voice.to_param, name: voice.name } }, status: :created
+        rescue ActiveRecord::RecordInvalid => error
+          render json: { error: error.record.errors.full_messages.to_sentence }, status: :unprocessable_entity
+        rescue ActiveRecord::RecordNotUnique
+          render json: { error: "A voice with this name already exists. Resolve it explicitly." }, status: :conflict
+        end
+
+        # Lookup never creates or silently merges identities.
+        def resolve
+          voice = human_request_account!.field_voices.kept.named_like(params[:name]).first!
+          render json: { voice: { id: voice.to_param, name: voice.name } }
+        end
+
         def destroy
           find_voice.delete_identity!
           head :no_content

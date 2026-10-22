@@ -550,7 +550,14 @@ Rails.application.routes.draw do
           resources :speakers, only: :update
           resource :tags, only: :update, controller: "item_tags"
         end
-        resources :voices, only: [ :index, :update, :destroy ] do
+        resources :samples, controller: "voice_samples", only: [ :show, :update, :destroy ] do
+          get :audio, on: :member
+        end
+        resources :voices, only: [ :index, :create, :update, :destroy ] do
+          get :resolve, on: :collection
+          resources :samples, controller: "voice_samples", only: [ :index, :show, :create, :update, :destroy ] do
+            get :audio, on: :member
+          end
           delete :forget, on: :member, path: "print"
           post :remember, on: :member
           delete :forget_all, on: :collection, path: "prints"

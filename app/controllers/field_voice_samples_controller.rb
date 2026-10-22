@@ -9,6 +9,12 @@ class FieldVoiceSamplesController < ApplicationController
   require_feature_enabled :agents
   before_action :set_voice
   before_action :set_speaker, except: %i[index prepare]
+  rescue_from FieldVoiceprints::Limits::Reached, FieldVoiceSamples::Conflict do |error|
+    render json: { error: error.message }, status: :conflict
+  end
+  rescue_from FieldVoiceSamples::Invalid do |error|
+    render json: { error: error.message }, status: :unprocessable_entity
+  end
 
   # A voice can be named in hundreds of speakers; only a few have a sample.
   # The review list is the samples; the rest are a count, listed on request.
@@ -23,7 +29,7 @@ class FieldVoiceSamplesController < ApplicationController
     # out of reach however many there are (Mira's review of #488).
     speakers = kept_speakers.where(id: sampled_speaker_ids)
       .includes(:field_recording, :voice_samples, :sample_confirmed_by).order(id: :desc)
-    rows = speakers.map { |speaker| sample_json(speaker) }.each_with_index
+    rows = (speakers.map { |speaker| sample_json(speaker) } + uploaded_rows).each_with_index
       .sort_by { |row, index| [ STATE_ORDER.index(row[:state]) || STATE_ORDER.size, index ] }.map(&:first)
     pages = [ (rows.size / SAMPLES_PAGE.to_f).ceil, 1 ].max
     page = params[:page].to_i.clamp(1, pages)
@@ -45,6 +51,10 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   def update
+    if @uploaded_sample
+      @uploaded_sample.review!(digest: params[:digest], by: Current.user, included: params[:included])
+      return render json: { saved: true }
+    end
     sample = @speaker.voice_samples.find_by!(field_voice: @voice)
     included = params.require(:included)
     return head(:unprocessable_entity) unless [ true, false ].include?(included)
@@ -56,6 +66,8 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   def relearn
+    return head :unprocessable_entity if @uploaded_sample
+
     unless @speaker.relearn_sample!
       return render json: { error: "Learning is off or this attribution needs correction in the source recording." }, status: :conflict
     end
@@ -63,6 +75,13 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   def audio
+    if @uploaded_sample
+      unless params[:digest].present? && params[:digest] == @uploaded_sample.source_digest && @uploaded_sample.source_current?
+        return head :conflict
+      end
+      response.headers["Cache-Control"] = "private, no-store"
+      return send_data @uploaded_sample.audio.download, type: "audio/wav", disposition: "inline", filename: "voice-sample.wav"
+    end
     sample = @speaker.voice_samples.find_by!(field_voice: @voice)
     return head(:conflict) unless params[:digest].present? && params[:digest] == sample.source_digest && sample.source_current?
     return head(:not_found) unless @speaker.field_recording.audio.attached?
@@ -101,6 +120,11 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   def set_speaker
+    if params[:id].to_s.start_with?("upload-")
+      @uploaded_sample = @voice.samples.where(field_recording_speaker_id: nil, removed_at: nil)
+        .find_by!(id: FieldVoiceSample.decode_id(params[:id].delete_prefix("upload-")))
+      return
+    end
     @speaker = kept_speakers.find_by!(id: FieldRecordingSpeaker.decode_id(params[:id]))
   end
 
@@ -109,7 +133,19 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   def sampled_speaker_ids
-    FieldVoiceSample.where(field_voice: @voice).select(:field_recording_speaker_id)
+    FieldVoiceSample.where(field_voice: @voice, removed_at: nil).where.not(field_recording_speaker_id: nil).select(:field_recording_speaker_id)
+  end
+
+  def uploaded_rows
+    @voice.samples.where(field_recording_speaker_id: nil, removed_at: nil).order(id: :desc).map do |sample|
+      id = "upload-#{sample.to_param}"
+      FieldVoiceSamples::Presentation.row(sample).merge(
+        id:, source_url: nil, can_relearn: false, has_sample: true,
+        contributing: sample.eligible? && sample.profile == @voice.voiceprint&.profile,
+        audio_url: (audio_account_field_voice_sample_path(current_account, @voice, id, digest: sample.source_digest) if sample.source_current?),
+        error: sample.learning_error
+      )
+    end
   end
 
   # Namings with no stored sample, and why, a page at a time (the reason reads
@@ -141,9 +177,9 @@ class FieldVoiceSamplesController < ApplicationController
       id: speaker.to_param, recording_title: recording.title, recorded_at: recording.created_at.iso8601,
       source_url: account_field_recording_path(current_account, recording),
       label: speaker.default_name, naming_source: sample&.label_origin || speaker.naming_source,
-      state: sample_state(included:, confirmed:, current:, status:),
+      state: sample_state(included:, confirmed:, current:, status:, excluded: speaker.sample_excluded?),
       included:,
-      contributing: included && sample.profile == @voice.voiceprint&.profile,
+      contributing: included && confirmed && sample.profile == @voice.voiceprint&.profile,
       confirmed:,
       confirmed_by: (speaker.sample_confirmed_by&.full_name if confirmed),
       confirmed_at: (speaker.sample_confirmed_at&.iso8601 if confirmed),
@@ -158,12 +194,12 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   # One word per row for the review list: what, if anything, a person does next.
-  def sample_state(included:, confirmed:, current:, status:)
+  def sample_state(included:, confirmed:, current:, status:, excluded:)
     return "preparing" if status == "pending"
-    return "removed" unless included
+    return "removed" if excluded
     return "not_ready" unless current
 
-    confirmed ? "confirmed" : "review"
+    confirmed && included ? "confirmed" : "review"
   end
 
   def unavailable_reason(speaker, sample, current)
