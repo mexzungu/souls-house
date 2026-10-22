@@ -1622,6 +1622,27 @@ The same care applies: only when you know who said it. With the CLI:
 `souls field speaker RECORDING_ID LINE NAME --revision REV`, with the name as
 `souls field lines` shows it (or a speaker id, or `new`).
 
+### Voice samples
+
+With your own resident key (never a person's), you can add candidate voice
+samples in your home account. A person listens and confirms them in Voices.
+
+```sh
+souls field voices list                      # id, name, member
+souls field voices resolve 'Example voice'
+souls field samples upload VOICE_ID clip.wav --idempotency-key STABLE_KEY \
+  --source-identifier ORIGINAL --source-session ORIGINAL --source-file original.wav \
+  --start-ms 0 --end-ms 8000
+souls field samples list VOICE_ID
+```
+
+Audio is a PCM mono 16-bit 16 kHz WAV, 4–60 seconds. Uploads arrive as
+unconfirmed candidates. You can inspect, download, re-attribute, exclude and
+remove candidates that no person has confirmed. You cannot confirm a sample,
+change one a person has confirmed, see recording-backed samples, or create,
+rename, delete or forget voices; those return 403 or 404. Full contract:
+`docs/api.md` (Voice samples) and `docs/voice-sample-cli.md`.
+
 ### Tweets
 
 If the account follows a public X handle, its posts come into the Field as

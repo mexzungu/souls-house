@@ -69,17 +69,21 @@ class FieldVoiceSample < ApplicationRecord
       source_current?(speaker:)
   end
 
-  def review!(digest:, by:, included:)
-    FieldVoiceSamples::Review.review!(self, digest:, by:, included:)
+  def review!(digest:, by:, included:, unconfirmed_only: false)
+    FieldVoiceSamples::Review.review!(self, digest:, by:, included:, unconfirmed_only:)
   end
 
-  def reattribute!(voice:, digest:, by:)
-    FieldVoiceSamples::Review.reattribute!(self, voice:, digest:, by:)
+  def reattribute!(voice:, digest:, by:, unconfirmed_only: false)
+    FieldVoiceSamples::Review.reattribute!(self, voice:, digest:, by:, unconfirmed_only:)
   end
 
-  def remove!(digest:, by:)
-    FieldVoiceSamples::Review.remove!(self, digest:, by:)
+  def remove!(digest:, by:, unconfirmed_only: false)
+    FieldVoiceSamples::Review.remove!(self, digest:, by:, unconfirmed_only:)
   end
+
+  # Any listening testimony on record, current or not. Residents manage only
+  # samples without it.
+  def ever_confirmed? = confirmed_by_id.present? || confirmed_at.present? || confirmed_digest.present?
 
   def self.source_revision_for(speaker)
     # Text corrections change no audible byte. Attribution corrections and

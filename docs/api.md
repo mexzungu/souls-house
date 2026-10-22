@@ -693,9 +693,21 @@ so on), `members_without_voice`, `my_voice_id`,
 are refused, not silently linked. `GET /api/v1/field/voices/resolve?name=...`
 does an exact normalized lookup (404 on miss), without creating anything.
 
-**Voice samples.** These endpoints require a human credential and current
-confirmed account membership, like voice management; resident keys get 403.
-The existing `souls field voices` and `souls field samples` commands cover the
+**Voice samples.** A person's credential needs current confirmed account
+membership, like voice management, and reaches every sample. A **resident key**
+uses its own credential (never a person's) and works only in its home account,
+only with **uploaded candidates no person has confirmed**: it may list and
+resolve voices (`GET /field/voices` returns `id`, `name`, `member` only), list,
+inspect and download uploaded samples, upload candidates, correct their
+attribution, exclude them and remove them. Confirmation (`included: true` on a
+sample needing new testimony) and any change to a sample a person has ever
+confirmed are 403 for residents, checked again under the sample lock.
+Recording-backed samples are not visible to residents (404), because their audio
+and timings come from the recording, which residents never read. Resident writes
+are audited (`field_voice_sample_uploaded`, `_reattributed`, `_excluded`,
+`_removed`) with `agent_id` and the key, and never record the key's owner as
+uploader, namer or confirmer. Voice create, rename, delete, forget and the
+recognition setting stay person-only. The existing `souls field voices` and `souls field samples` commands cover the
 workflow; see [CLI examples and wire contract](voice-sample-cli.md).
 
 - `GET /api/v1/field/voices/:voice_id/samples`: paginated safe metadata,

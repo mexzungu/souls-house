@@ -3,10 +3,11 @@ module FieldVoiceSamples
 
     module_function
 
-    def review!(sample, digest:, by:, included:)
+    def review!(sample, digest:, by:, included:, unconfirmed_only: false)
       raise Invalid, "Choose whether to include this sample." unless [ true, false ].include?(included)
       Uploads.with_sample_lock(sample) do |live|
         check!(live, digest, current: included)
+        unconfirmed!(live) if unconfirmed_only
         if included
           raise Invalid, "A person must confirm this sample." unless Uploads.human?(by) || live.manually_confirmed?
           raise Conflict, "Wait for this sample to finish learning." unless live.embedding.present? && live.profile.present?
@@ -22,7 +23,7 @@ module FieldVoiceSamples
       end
     end
 
-    def reattribute!(sample, voice:, digest:, by:)
+    def reattribute!(sample, voice:, digest:, by:, unconfirmed_only: false)
       sample.account.with_lock do
         live = FieldVoiceSample.find_by!(id: sample.id)
         raise Invalid, "Choose a voice in this account." unless voice.account_id == live.account_id
@@ -31,6 +32,7 @@ module FieldVoiceSamples
         voices = FieldVoice.where(id: [ live.field_voice_id, voice.id ]).order(:id).lock.to_a
         live.reload
         check!(live, digest)
+        unconfirmed!(live) if unconfirmed_only
         target = voices.find { |row| row.id == voice.id }
         raise Conflict, "This voice is no longer available." unless target&.kept?
         next live if live.field_voice_id == target.id
@@ -48,14 +50,21 @@ module FieldVoiceSamples
       end
     end
 
-    def remove!(sample, digest:, by:)
+    def remove!(sample, digest:, by:, unconfirmed_only: false)
       Uploads.with_sample_lock(sample) do |live|
         check!(live, digest, current: false)
+        unconfirmed!(live) if unconfirmed_only
         live.update!(removed_at: Time.current, eligible: false, confirmed_digest: nil,
           confirmed_by: nil, confirmed_at: nil, review_generation: live.review_generation + 1)
         FieldVoiceprints::Learning.rebuild!(live.field_voice)
         live
       end
+    end
+
+    # Checked under the sample lock, so a confirmation that lands between a
+    # resident's read and its write still wins.
+    def unconfirmed!(sample)
+      raise Forbidden, "A person has confirmed this sample. Only a person can change it." if sample.ever_confirmed?
     end
 
     def check!(sample, digest, current: true)
