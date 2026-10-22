@@ -57,11 +57,14 @@ class Api::V1::Field::VoiceSamplesControllerTest < ActionDispatch::IntegrationTe
     assert_equal "machine", sample.label_origin
     assert_not sample.eligible?
     assert_not row["confirmed"]
+    assert_equal "synthetic-session", row["source_session"]
+    assert_equal sample.source_group_key, row["source_group_key"]
     assert_not response.body.include?('"embedding"')
     assert_equal bytes, sample.audio.download
 
     assert_no_enqueued_jobs { assert_no_difference("FieldVoiceSample.count") { upload } }
-    assert_response :created
+    assert_response :success
+    assert_equal "retry", response.parsed_body["deduplicated"]
     upload(seed: 2)
     assert_response :conflict
 
@@ -88,6 +91,23 @@ class Api::V1::Field::VoiceSamplesControllerTest < ActionDispatch::IntegrationTe
     assert sample.audio.attached?, "removal does not silently erase retained source"
     get api_v1_field_voice_sample_path(@voice, sample), headers: @headers
     assert_response :not_found
+  end
+
+  test "upload receipts distinguish identical content and overlapping cuts from new rows" do
+    upload(start_ms: 0, end_ms: 4_000)
+    assert_response :created
+    original = response.parsed_body.fetch("sample")
+    assert_nil response.parsed_body["deduplicated"]
+    upload(key: "identical", start_ms: 0, end_ms: 4_000)
+    assert_response :ok
+    assert_equal "identical", response.parsed_body["deduplicated"]
+    assert_equal original, response.parsed_body["sample"]
+    upload(key: "overlap", seed: 2, start_ms: 2_000, end_ms: 6_000)
+    assert_response :ok
+    assert_equal "overlap", response.parsed_body["deduplicated"]
+    assert_equal original, response.parsed_body["sample"]
+    assert_not_equal Digest::SHA256.hexdigest(bytes(2)), response.parsed_body.dig("sample", "content_sha256")
+    assert_equal 1, @voice.samples.count
   end
 
   test "browser confirms precisely the retained upload after embedding without a recording" do

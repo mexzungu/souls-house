@@ -135,6 +135,30 @@ class FieldVoiceSamplesTest < ActiveSupport::TestCase
     assert_equal "pending", sample.learning_status
   end
 
+  test "canonical groups cover identifiers mixed hashes and recording links" do
+    recording = ready_recording(account: @account, user: @user)
+    original = upload(metadata: { source_identifier: "identifier-only", source_session: "canonical",
+      start_ms: 0, end_ms: 4_000 })
+    assert_raises(FieldVoiceSamples::Conflict) do
+      upload(bytes: wav(seed: 2), metadata: { source_identifier: "identifier-only", source_session: "different",
+        start_ms: 4_000, end_ms: 8_000 })
+    end
+    mixed = upload(bytes: wav(seed: 3), metadata: { source_identifier: "identifier-only",
+      source_sha256: "e" * 64, source_session: "canonical", start_ms: 4_000, end_ms: 8_000 })
+    assert_equal original.source_group_key, mixed.source_group_key
+    assert_raises(FieldVoiceSamples::Conflict) do
+      upload(bytes: wav(seed: 4), metadata: { source_identifier: "identifier-only",
+        source_session: "another", start_ms: 8_000, end_ms: 12_000 })
+    end
+    linked = upload(bytes: wav(seed: 5), metadata: { source_identifier: "linked-original",
+      field_recording_id: recording.id, start_ms: 0, end_ms: 4_000 })
+    assert_equal "account:#{@account.id}:recording:#{recording.id}", linked.source_group_key
+    assert_raises(FieldVoiceSamples::Conflict) do
+      upload(bytes: wav(seed: 6), metadata: { source_identifier: "linked-original",
+        start_ms: 4_000, end_ms: 8_000 })
+    end
+  end
+
   test "metadata requires a valid source interval and an account-local recording" do
     [ { start_ms: 1 }, { start_ms: 5, end_ms: 4 }, { start_ms: 0, end_ms: 4_000 },
       { source_sha256: "invalid" }, { recorded_at: "yesterday" }, { source_session: "" } ].each do |metadata|

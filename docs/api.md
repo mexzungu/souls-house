@@ -705,14 +705,21 @@ workflow; see [CLI examples and wire contract](voice-sample-cli.md).
   The original uploaded bytes are retained and sent unchanged for embedding.
   Optional `source_identifier`, original `source_sha256`, canonical `source_session`,
   paired `start_ms`/`end_ms`, and ISO `recorded_at` preserve source evidence.
-  A date means midnight UTC; a timestamp requires an explicit offset.
+  A sample date means midnight UTC (portable archive provenance, unlike a
+  recording's app-zone display date); a timestamp requires an explicit offset.
   Optional public `recording_id` (alias `transcript_id`) must belong to this
   account. In Field a transcript belongs to its recording.
-  Returns `{sample: ...}` (201), including for an identical retry; a reused key
-  with different immutable content/metadata is 409. Identical audio or overlapping
+  Returns `{sample: ..., deduplicated: null}` (201) for a new row; an existing row
+  returns 200 with `deduplicated: "retry"`, `"identical"` or `"overlap"`.
+  Its metadata/hash describe the retained existing sample, not the discarded new
+  cut. A reused key with different immutable content/metadata is 409. Identical audio or overlapping
   intervals of the same original source deduplicate account-wide. Conflicting
   attribution is 409, never a silent move. Keep canonical original-session
-  groups stable across exports, duplicates and slices.
+  groups stable across exports, duplicates and slices. Matching original hashes,
+  identifiers or recording links cannot introduce a conflicting source group;
+  mixed linked/unlinked cuts must reuse the original recording link.
+  Responses preserve the upload's raw `source_session` separately from the
+  account-scoped `source_group_key` used for validation splits.
 - `GET /api/v1/field/samples/:id`: inspect metadata.
 - `GET /api/v1/field/samples/:id/audio?digest=...`: authorized exact WAV download,
   private/no-store. A stale digest is 409, not different audio.

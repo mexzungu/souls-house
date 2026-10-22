@@ -91,14 +91,21 @@ optional metadata.
 Use one stable canonical `source_session` group for related clips from the same
 source, not a fresh group per clip. `source_identifier` identifies the original
 source; neither field is inferred from a local filename.
+The API checks canonical groups against both original hashes and source identifiers.
+Sibling cuts must keep the same optional recording link too.
 Offsets are optional but paired, with `0 <= start_ms < end_ms`, measured in the
 original source. Optional `--recorded-at` is an ISO date/time; the server validates
-it. `--recording-id` links an existing recording by its public ID.
+it. Sample date-only values mean midnight UTC for portable archive provenance,
+unlike recording display dates interpreted in the app zone.
+`--recording-id` links an existing recording by its public ID.
 
 An explicit `--idempotency-key` is required. After a timeout or uncertain response,
 repeat the same upload with the **same key, audio and metadata**. The CLI does not
 generate a fresh key or retry invisibly. Reusing a key for different content can
-conflict; server idempotency remains authoritative.
+conflict; server idempotency remains authoritative. New rows return 201.
+Reused samples return 200 with `deduplicated: "retry" | "identical" | "overlap"`;
+the CLI prints that receipt unchanged. For overlap, the returned content hash
+describes the retained existing cut, not the bytes just sent.
 
 ## Wire contract and results
 

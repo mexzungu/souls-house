@@ -1010,6 +1010,14 @@ class VoiceSamplesTest(CliTestCase):
                 self.assertEqual(json.loads(err)["exit_code"], souls.EXIT_USAGE)
         self.assertEqual(self.house.requests, [])
 
+    def test_upload_prints_server_deduplication_receipt_unchanged(self):
+        for reason in ("retry", "identical", "overlap"):
+            receipt = {"sample": {"id": "existing", "content_sha256": "b" * 64}, "deduplicated": reason}
+            self.house.route("POST", "/api/v1/field/voices/v1/samples", status=200, body=receipt)
+            code, out, err = self.run_cli(*self.upload_args("--source-sha256", "a" * 64))
+            self.assertEqual((code, err), (0, ""))
+            self.assertEqual(json.loads(out), receipt)
+
     def test_accept_requires_listening_and_does_not_claim_confirmation(self):
         code, out, err = self.run_cli("field", "samples", "accept", "s1", "--digest", "digest")
         self.assertEqual(code, souls.EXIT_USAGE)

@@ -48,9 +48,11 @@ module Api
               id: FieldRecording.decode_id(params[:recording_id].presence || params[:transcript_id]))
             metadata["field_recording_id"] = recording.id
           end
-          sample = FieldVoiceSamples::Uploads.create!(voice: @voice, by: app_token_request? ? current_api_user : nil, file: params[:audio], metadata:)
+          result = FieldVoiceSamples::Uploads.create_with_receipt!(voice: @voice, by: app_token_request? ? current_api_user : nil, file: params[:audio], metadata:)
+          sample = result.sample
           FieldVoices::LearnUploadJob.queue!(sample)
-          render json: { sample: present(sample) }, status: :created
+          render json: { sample: present(sample), deduplicated: result.deduplicated },
+            status: result.deduplicated ? :ok : :created
         rescue ActiveRecord::RecordInvalid, ArgumentError => error
           render json: { error: error.message }, status: :unprocessable_entity
         end

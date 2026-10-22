@@ -7,9 +7,14 @@ module FieldVoiceSamples
 
     METADATA = %i[source_identifier source_sha256 source_session start_ms end_ms recorded_at idempotency_key field_recording_id].freeze
     MAX_RETRY_ALIASES = 100
+    Result = Data.define(:sample, :deduplicated)
     module_function
 
     def create!(voice:, by:, file:, metadata: {})
+      create_with_receipt!(voice:, by:, file:, metadata:).sample
+    end
+
+    def create_with_receipt!(voice:, by:, file:, metadata: {})
       bytes, speech_ms = Wav.read!(file)
       attributes = normalize_metadata(metadata)
       if attributes[:start_ms] && (attributes[:end_ms] - attributes[:start_ms] - speech_ms).abs > 1
@@ -28,7 +33,7 @@ module FieldVoiceSamples
         if previous
           expected = previous.idempotency_key == key ? previous.request_digest : previous.idempotency_receipts[key]
           raise Conflict, "This idempotency key was used for a different upload." unless expected == fingerprint
-          next previous
+          next Result.new(sample: previous, deduplicated: "retry")
         end
         duplicates = duplicates(account, content_sha256, attributes)
         existing = duplicates.first
@@ -39,17 +44,19 @@ module FieldVoiceSamples
               existing.idempotency_receipts.size >= MAX_RETRY_ALIASES
             existing.update_columns(idempotency_receipts: existing.idempotency_receipts.merge(key => fingerprint))
           end
-          next existing
+          next Result.new(sample: existing, deduplicated: existing.content_sha256 == content_sha256 ? "identical" : "overlap")
         end
         ensure_pending_capacity!(live_voice)
         if attributes[:field_recording_id]
           account.field_recordings.kept.find_by!(id: attributes[:field_recording_id])
         end
         session = attributes[:source_session] || attributes[:source_sha256] || attributes[:source_identifier] || content_sha256
-        if attributes[:source_sha256]
+        provenance = attributes.slice(:source_sha256, :source_identifier, :field_recording_id)
+        if provenance.any?
           group = attributes[:field_recording_id] ?
             "account:#{account.id}:recording:#{attributes[:field_recording_id]}" : "account:#{account.id}:source:#{session}"
-          originals = account_samples(account).not_removed.where(source_sha256: attributes[:source_sha256])
+          scope = account_samples(account).not_removed
+          originals = provenance.reduce(scope.none) { |rows, (key, value)| rows.or(scope.where(key => value)) }
           if originals.any? { |row| row.source_group_key != group }
             raise Conflict, "This original source already has a different session group. Reuse its canonical group."
           end
@@ -64,7 +71,7 @@ module FieldVoiceSamples
         sample.audio.attach(io: StringIO.new(bytes), filename: "voice-sample.wav", content_type: "audio/wav")
         sample.save!
         sample.update!(source_digest: source_digest(sample))
-        sample
+        Result.new(sample:, deduplicated: nil)
       end
     rescue ActiveRecord::RecordNotFound
       raise Invalid, "Choose a recording in this account."
