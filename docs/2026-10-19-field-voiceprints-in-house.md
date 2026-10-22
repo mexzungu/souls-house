@@ -146,7 +146,7 @@ Reuse `FieldVoiceprints::Sample.segments_for`, with two changes for learning:
 - keep the isolation rule (no other speaker within 1 s) and the "fewer voices
   than expected" refusal;
 - per-sample minimum 4 s of clean speech (was 8 s for a single enrolment),
-  maximum 60 s, longest turns first. A speaker under 4 s contributes nothing.
+  maximum 30 s (was 60 s until 2026-10-22), longest turns first. A speaker under 4 s contributes nothing.
 
 A sample is made by a job after an eligible naming commits (`after_commit`),
 under the freshness contract in §9. No human listens before a sample is used.

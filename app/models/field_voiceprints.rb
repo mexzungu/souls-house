@@ -12,9 +12,12 @@
 # is stated or required (Daniel, 2026-10-19).
 module FieldVoiceprints
 
-  # A sample is the clean speech of one speaker in one recording.
+  # A sample is the clean speech of one speaker in one recording. At most
+  # 30 s, so a person can listen to it before confirming (Daniel, 2026-10-22,
+  # OjyMDj: 20–30 s is digestible, a minute isn't). Uploaded samples keep
+  # their own 4–60 s limit (FieldVoiceSamples::Wav).
   MIN_SAMPLE_MS = 4_000
-  MAX_SAMPLE_MS = 60_000
+  MAX_SAMPLE_MS = 30_000
   ISOLATION_MS = 1_000
 
   # Matching (spec §8). Starting points from the Mac's identify.py; the

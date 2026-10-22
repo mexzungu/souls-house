@@ -1,6 +1,6 @@
 # Choosing and cutting a speaker's sample (spec 2026-10-19 §6). Only turns
 # where nobody else speaks within a second either side, longest first, up to
-# 60 s, and at least 4 s of them. Never a fallback: if the speaker isn't heard
+# 30 s, and at least 4 s of them. Never a fallback: if the speaker isn't heard
 # alone for long enough, there is no sample. When the uploader said how many
 # people speak and the transcriber found fewer, two voices may be merged into
 # one speaker, so there is no sample either. These guards reduce the risk of

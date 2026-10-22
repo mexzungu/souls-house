@@ -53,12 +53,26 @@ class FieldVoiceprintsTest < ActiveSupport::TestCase
     end
   end
 
-  test "the sample is clean turns only, at least 4 s, at most 60 s" do
+  test "the sample is clean turns only, at least 4 s, at most 30 s" do
     segments = FieldVoiceprints::Sample.segments_for(@speaker)
     assert_equal [ [ 0, 12_000 ], [ 17_000, 22_000 ] ], segments, "the first two words are one turn"
 
     error = assert_raises(FieldVoiceprints::Sample::Refused) { FieldVoiceprints::Sample.segments_for(@other) }
     assert_match "isn't enough clear speech", error.message
+  end
+
+  test "a long speaker is cut to 30 s, longest turn first" do
+    recording = queued_recording(account: @account, user: @user)
+    words = scribe_words(
+      [ "speaker_0", 0.0, 25.0, "long" ], [ "speaker_1", 27.0, 28.0, "reply" ],
+      [ "speaker_0", 30.0, 50.0, "longer" ], [ "speaker_1", 52.0, 53.0, "reply" ],
+      [ "speaker_0", 55.0, 65.0, "short" ]
+    )
+    recording.accept_transcript!(recording.claim_dispatch!, scribe_transcription(words:))
+    speaker = recording.reload.speakers.find { |each| each.label == "speaker_0" }
+
+    segments = FieldVoiceprints::Sample.segments_for(speaker)
+    assert_equal [ [ 0, 25_000 ], [ 30_000, 35_000 ] ], segments, "the 25 s turn, then 5 s of the 20 s one"
   end
 
   test "fewer speakers than expected means no sample" do
