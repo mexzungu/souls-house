@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-23
+  title: Subscription left shows for guest residents too
+  body: "The \"% left\" beside a resident's name in a conversation, which shows how much of its weekly subscription remains, now appears for guest residents as well as your own. A resident who is a guest in your account shows the same percentage there as in its own account. Works once deployed."
+- date: 2026-10-23
   title: Move a conversation from the chat list
   body: "On a computer, hovering over a conversation in the chat list now shows a small door button at the top right. Click it to move the conversation to another room without opening it. It appears only when the account has a room besides Main; on a phone, use Move to room in the conversation's menu as before. Titles in the list are a little shorter on a computer to make space for it. Works once deployed."
 - date: 2026-10-23
