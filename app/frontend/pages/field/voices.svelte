@@ -16,12 +16,14 @@
   import VoiceMerge from '$lib/components/field/VoiceMerge.svelte';
   import ForgetVoiceDialog from '$lib/components/field/ForgetVoiceDialog.svelte';
   import VoiceDangerZone from '$lib/components/field/VoiceDangerZone.svelte';
+  import { forgetAllRequest, forgetVoiceRequest, deleteNameRequest } from '$lib/voice-forgetting.js';
   import AccountSettingsLayout from '$lib/components/accounts/AccountSettingsLayout.svelte';
   import { CaretLeft, MagnifyingGlass } from 'phosphor-svelte';
 
   let {
     voices = [],
     recognise_voices = true,
+    auto_name_voices = true,
     house_recognition = false,
     voice_conversion = { state: 'ready', remaining: 0 },
     can_change_setting = false,
@@ -31,7 +33,13 @@
   const updateSync = createDynamicSync();
   $effect(() => {
     updateSync({
-      [`FieldVoiceActivity:${account.id}`]: ['voices', 'recognise_voices', 'can_change_setting', 'voice_conversion'],
+      [`FieldVoiceActivity:${account.id}`]: [
+        'voices',
+        'recognise_voices',
+        'auto_name_voices',
+        'can_change_setting',
+        'voice_conversion',
+      ],
     });
   });
 
@@ -136,20 +144,6 @@
     );
   }
 
-  // What a forget throws away, counted from the roster, so the dialog can
-  // say it. Confirmed samples are someone's listening work: when any would
-  // go, the dialog asks for the word typed out.
-  const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
-  function lossesFor(list) {
-    const prints = list.filter((voice) => voice.remembered).length;
-    const samples = list.reduce((sum, voice) => sum + (voice.samples || 0), 0);
-    const confirmed = list.reduce((sum, voice) => sum + (voice.confirmed_samples || 0), 0);
-    const losses = [];
-    if (prints) losses.push(`${plural(prints, 'learned voice print', 'learned voice prints')}`);
-    if (samples) losses.push(`${plural(samples, 'sample', 'samples')}, and every confirm or reject given in review`);
-    if (confirmed) losses.push(`including ${plural(confirmed, 'confirmed sample', 'confirmed samples')}`);
-    return { losses, requireWord: confirmed > 0 };
-  }
   const totalSamples = $derived(voices.reduce((sum, voice) => sum + (voice.samples || 0), 0));
 
   let forgetting = $state(null);
@@ -159,41 +153,29 @@
     forgetOpen = true;
   }
 
-  function forgetAll() {
-    const kept = voices.filter((voice) => voice.remembered || voice.remember || (voice.samples || 0) > 0);
-    ask({
-      title: 'Forget every voice in this Field?',
-      ...lossesFor(kept),
-      keeps: 'every name given to a speaker, on every transcript. Learning can start again from those names.',
-      confirmLabel: 'Forget all voices',
-      run: () => router.delete(`${base}/prints`),
-    });
-  }
+  // Naming on a clear match: the same endpoint, the other setting. Only
+  // meaningful while recognition is on, so the switch rests when it's off.
+  let switchingNaming = $state(null);
+  const namingOn = $derived(switchingNaming ?? auto_name_voices);
 
-  function forget(voice) {
-    ask({
-      title: `Forget ${voice.name}'s voice?`,
-      ...lossesFor([voice]),
-      keeps: `the name ${voice.name}, wherever someone gave it. Learning stops until "Remember again".`,
-      confirmLabel: 'Forget voice',
-      run: () => router.delete(`${base}/${voice.id}/print`),
-    });
+  function setNaming(on) {
+    if (!can_change_setting) return;
+    const identity = account.id;
+    switchingNaming = on;
+    router.patch(
+      `${base}/recognition`,
+      { auto_name_voices: on },
+      {
+        preserveScroll: true,
+        onFinish: () => {
+          if (account.id === identity) switchingNaming = null;
+        },
+      }
+    );
   }
 
   function rememberAgain(voice) {
     router.post(`${base}/${voice.id}/remember`, {}, { preserveScroll: true });
-  }
-
-  function deleteName(voice) {
-    const { losses, requireWord } = lossesFor([voice]);
-    ask({
-      title: `Delete ${voice.name}?`,
-      losses: [`the name ${voice.name}: speakers named ${voice.name} go back to 'Speaker N' everywhere`, ...losses],
-      requireWord,
-      keeps: '',
-      confirmLabel: 'Delete name',
-      run: () => router.delete(`${base}/${voice.id}`),
-    });
   }
 
   let editingId = $state(null);
@@ -211,6 +193,7 @@
       renameError = '';
       renaming = false;
       switching = null;
+      switchingNaming = null;
       renameRequest += 1;
     }
   });
@@ -315,6 +298,23 @@
             A suggestion only: someone still confirms who it is before a name goes on a transcript. Off keeps what was
             learned, unused, and stops learning.
             {#if !can_change_setting}Only people who manage this account can change this.{/if}
+          </p>
+        </div>
+      </div>
+      <div class="flex items-start gap-3 pt-2">
+        <Switch
+          id="auto_name_voices"
+          checked={namingOn && recognitionOn}
+          disabled={!can_change_setting || !recognitionOn || switchingNaming != null}
+          onCheckedChange={setNaming}
+          data-testid="voices-naming-switch" />
+        <div class="min-w-0 space-y-0.5">
+          <label for="auto_name_voices" class="font-medium"
+            >Name a speaker without asking when the match is clear</label>
+          <p class="text-xs text-muted-foreground">
+            Only a voice that has passed its check against other recordings, and only when the match scores at least 70
+            and leads every other voice by 20. The speaker's card says named by voice, with Not them beside it. Off
+            keeps every match a suggestion to confirm.
           </p>
         </div>
       </div>
@@ -438,13 +438,13 @@
                     >Merge with other speaker</Button>
                 {/if}
                 {#if voice.remembered || voice.remember}
-                  <Button size="sm" variant="ghost" onclick={() => forget(voice)} data-testid="voice-forget"
+                  <Button size="sm" variant="ghost" onclick={() => ask(forgetVoiceRequest(voice, base))} data-testid="voice-forget"
                     >Forget voice</Button>
                 {:else}
                   <Button size="sm" variant="ghost" onclick={() => rememberAgain(voice)} data-testid="voice-remember"
                     >Remember again</Button>
                 {/if}
-                <Button size="sm" variant="ghost" class="text-destructive" onclick={() => deleteName(voice)}
+                <Button size="sm" variant="ghost" class="text-destructive" onclick={() => ask(deleteNameRequest(voice, base))}
                   >Delete name</Button>
               </div>
             {/if}
@@ -480,7 +480,7 @@
   </details>
 
   {#if anyRemembered || totalSamples > 0}
-    <VoiceDangerZone onforget={forgetAll} />
+    <VoiceDangerZone onforget={() => ask(forgetAllRequest(voices, base))} />
   {/if}
 
   <ForgetVoiceDialog
@@ -490,5 +490,5 @@
     keeps={forgetting?.keeps || ''}
     requireWord={forgetting?.requireWord || false}
     confirmLabel={forgetting?.confirmLabel}
-    onconfirm={() => forgetting?.run()} />
+    onconfirm={() => forgetting && router.delete(forgetting.url)} />
 </AccountSettingsLayout>

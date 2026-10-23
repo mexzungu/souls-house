@@ -66,6 +66,18 @@ test('forgetting one voice with confirmed samples also needs the word', async ()
   expect(screen.getByTestId('forget-voice-confirm')).toBeDisabled();
 });
 
+test('deleting a name lists the name loss and requires confirmation before deleting', async () => {
+  render(Voices, props);
+  await fireEvent.click(screen.getAllByTestId('voice-row').find((row) => row.textContent.includes('Tilke')));
+  await fireEvent.click(screen.getByRole('button', { name: 'Delete name', exact: true }));
+  const dialog = await screen.findByTestId('forget-voice-dialog');
+  expect(dialog.textContent).toMatch(/speakers named Tilke go back to 'Speaker N' everywhere/);
+  expect(router.delete).not.toHaveBeenCalled();
+  await fireEvent.input(screen.getByTestId('forget-voice-word'), { target: { value: 'FORGET' } });
+  await fireEvent.click(screen.getByTestId('forget-voice-confirm'));
+  expect(router.delete).toHaveBeenCalledWith('/accounts/home/field/voices/tilke');
+});
+
 test('a voice with nothing confirmed is one deliberate click, still not a browser confirm', async () => {
   const confirmSpy = vi.spyOn(window, 'confirm');
   render(Voices, props);
