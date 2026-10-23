@@ -24,6 +24,24 @@ class FieldVoicesControllerTest < ActionDispatch::IntegrationTest
     inertia_props["props"]
   end
 
+  test "a manager sees paused conversion and can explicitly retry it" do
+    Setting.instance.update!(voice_embedding_profile: FieldVoiceprints::Profiles::WESPEAKER)
+    @account.update!(voice_conversion_status: "blocked", voice_conversion_error: "Retained audio is unavailable.")
+    get account_field_voices_path(@account)
+    assert_equal "blocked", props.dig("voice_conversion", "state")
+    assert_equal "Retained audio is unavailable.", props.dig("voice_conversion", "message")
+    assert_enqueued_with(job: FieldVoices::ConvertProfileJob, args: [ @account.id ]) do
+      post retry_conversion_account_field_voices_path(@account)
+    end
+    assert_redirected_to account_field_voices_path(@account)
+    foreign = Account.create!(name: "Unrelated conversion fixture", account_type: :team)
+    assert_not foreign.accessible_by?(@user)
+    assert_no_enqueued_jobs(only: FieldVoices::ConvertProfileJob) do
+      post retry_conversion_account_field_voices_path(foreign)
+      assert_response :not_found
+    end
+  end
+
   test "forgetting works with recognition off, and so does forgetting everything" do
     @account.update!(recognise_voices: false)
     store_print!(@voice)
@@ -57,6 +75,19 @@ class FieldVoicesControllerTest < ActionDispatch::IntegrationTest
     assert_not @account.reload.recognise_voices
     patch recognition_account_field_voices_path(@account), params: { recognise_voices: true }
     assert @account.reload.recognise_voices
+  end
+
+  test "naming on a clear match is on by default, and a manager turns it off and on, with or without recognition" do
+    assert @account.auto_name_voices, "on by default"
+    patch recognition_account_field_voices_path(@account), params: { auto_name_voices: false }
+    assert_equal [ true, false ], [ @account.reload.recognise_voices, @account.auto_name_voices ]
+    patch recognition_account_field_voices_path(@account), params: { recognise_voices: false, auto_name_voices: true }
+    assert_equal [ false, true ], [ @account.reload.recognise_voices, @account.auto_name_voices ]
+    patch recognition_account_field_voices_path(@account), params: {}
+    assert_response :bad_request
+
+    get account_field_voices_path(@account)
+    assert_equal true, props["auto_name_voices"]
   end
 
   test "the Voices page lists names and what is remembered" do
@@ -154,6 +185,28 @@ class FieldVoicesControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_field_voices_path(@account)
     assert @voice.reload.remember?
     assert_not @voice.remembered?, "the forgotten print doesn't come back"
+  end
+
+  test "merging one speaker into another keeps the chosen name and opens the kept speaker" do
+    other = @account.field_voices.create!(name: "Tomás Ruiz")
+    post merge_account_field_voice_path(@account, @voice), params: { into: other.to_param, name: "Tomás Ruiz" }
+    assert_redirected_to account_field_voices_path(@account, voice: other.to_param)
+    assert @voice.reload.discarded?
+    assert_equal other, @speaker.reload.field_voice
+  end
+
+  test "a refused merge comes back as an error, and another account's voice is not found" do
+    other = @account.field_voices.create!(name: "Priya")
+    post merge_account_field_voice_path(@account, @voice), params: { into: other.to_param, name: "Someone else" }
+    assert_response :redirect
+    assert @voice.reload.kept?
+
+    theirs = accounts(:another_team).field_voices.create!(name: "Them")
+    post merge_account_field_voice_path(@account, @voice), params: { into: theirs.to_param }
+    assert @voice.reload.kept?
+    assert theirs.reload.kept?
+    post merge_account_field_voice_path(@account, theirs), params: { into: @voice.to_param }
+    assert_response :not_found
   end
 
 end

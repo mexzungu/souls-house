@@ -69,18 +69,25 @@ module FieldVoiceprints::Validation
   end
 
   # [{voice_id => stats}, Set of voice ids that pass]. Stats are each print's
-  # from the last round it was a candidate in.
+  # from the last round it was a candidate in. `named` counts its correct
+  # queries that cleared the naming line, and `named_false_accepts_into` the
+  # wrong ones that would have named someone as this voice: what automatic
+  # naming would have done on the held-out set (field:voiceprint_report).
+  # As in Identification, the naming line is measured against every print
+  # in the cohort, not only the round's candidates.
   def measure(account, prints)
     return [ {}, Set.new ] if prints.empty?
 
     by_voice = prints.index_by(&:field_voice_id)
-    samples = FieldVoiceSample.eligible.where(account:, field_voice_id: by_voice.keys, profile: prints.first.profile).to_a
-    vectors = samples.to_h { |sample| [ sample.id, sample.vector ] }
+    profile = prints.first.profile
+    samples = FieldVoiceSample.eligible.where(account:, field_voice_id: by_voice.keys).to_a
+      .select { |sample| sample.manually_confirmed? && sample.vector_for(profile) }
+    vectors = samples.to_h { |sample| [ sample.id, sample.vector_for(profile) ] }
     candidates = by_voice.keys.to_set
     final = {}
 
     loop do
-      stats = evaluate(samples, vectors, candidates)
+      stats = evaluate(samples, vectors, candidates, profile:)
       final.merge!(stats)
       passing = candidates.select { |voice_id| passes?(stats.fetch(voice_id), by_voice.fetch(voice_id)) }.to_set
       return [ final, passing ] if passing == candidates
@@ -89,22 +96,30 @@ module FieldVoiceprints::Validation
     end
   end
 
-  def evaluate(samples, vectors, candidates)
+  def evaluate(samples, vectors, candidates, profile: FieldVoiceprints::Profiles.configured)
     stats = candidates.to_h do |voice_id|
       [ voice_id, { "queries" => 0, "correct" => 0, "rejected" => 0, "wrong" => 0, "false_accepts_into" => 0,
-                    "negatives" => 0 } ]
+                    "negatives" => 0, "named" => 0, "named_false_accepts_into" => 0 } ]
     end
-    samples.group_by(&:field_recording_id).each do |recording_id, queries|
-      held_out = samples.reject { |sample| sample.field_recording_id == recording_id }
+    samples.group_by(&:source_group_key).each do |group, queries|
+      held_out = samples.reject { |sample| sample.source_group_key == group }
         .select { |sample| candidates.include?(sample.field_voice_id) }
         .group_by(&:field_voice_id)
         .to_h { |voice_id, own| [ voice_id, FieldVoiceprints.centroid(own.map { |sample| vectors[sample.id] }) ] }
         .compact
-      guesses = FieldVoiceprints::Matching.guesses(queries.to_h { |sample| [ sample.id, vectors[sample.id] ] }, held_out)
+      everyone = samples.reject { |sample| sample.source_group_key == group }
+        .group_by(&:field_voice_id)
+        .to_h { |voice_id, own| [ voice_id, FieldVoiceprints.centroid(own.map { |sample| vectors[sample.id] }) ] }
+        .compact
+      probes = queries.to_h { |sample| [ sample.id, vectors[sample.id] ] }
+      guesses = FieldVoiceprints::Matching.guesses(probes, held_out, profile:)
+      against_everyone = FieldVoiceprints::Matching.guesses(probes, everyone, profile:)
 
       queries.each do |query|
         held_out.each_key { |voice_id| stats[voice_id]["negatives"] += 1 unless voice_id == query.field_voice_id }
         guess = guesses[query.id]&.first
+        whole = against_everyone[query.id]
+        sure = guess && whole&.first == guess && FieldVoiceprints::Matching.sure?(whole, profile:)
         if held_out.key?(query.field_voice_id)
           entry = stats[query.field_voice_id]
           entry["queries"] += 1
@@ -112,12 +127,15 @@ module FieldVoiceprints::Validation
             entry["rejected"] += 1
           elsif guess == query.field_voice_id
             entry["correct"] += 1
+            entry["named"] += 1 if sure
           else
             entry["wrong"] += 1
             stats[guess]["false_accepts_into"] += 1
+            stats[guess]["named_false_accepts_into"] += 1 if sure
           end
         elsif guess
           stats[guess]["false_accepts_into"] += 1
+          stats[guess]["named_false_accepts_into"] += 1 if sure
         end
       end
     end

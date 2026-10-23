@@ -34,8 +34,11 @@ class FieldVoiceRememberTest < ActionDispatch::IntegrationTest
     post login_path, params: { email_address: @user.email_address, password: "password123" }
     with_recognition(@account) do
       @speaker.name_as!(@voice, by: @user)
+      assert_equal "pending", @speaker.reload.sample_learning_status
       delete forget_account_field_voice_path(@account, @voice)
       assert_not @voice.reload.remember?
+      assert_nil @speaker.reload.sample_learning_status
+      assert_nil @speaker.sample_confirmed_digest
       clear_enqueued_jobs
 
       assert_enqueued_with(job: FieldVoices::LearnSampleJob) do

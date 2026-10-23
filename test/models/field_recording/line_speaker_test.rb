@@ -97,6 +97,15 @@ class FieldRecording::LineSpeakerTest < ActiveSupport::TestCase
       FieldVoiceprints::Sample.stub(:cut, cut_stub) do
         assert_equal :learned, FieldVoiceprints::Learning.learn!(snapshot, client: embeddings)
       end
+      sample = voice.samples.find_by!(field_recording_speaker: anna)
+      assert anna.reload.review_sample!(sample:, digest: sample.source_digest, by: @user, included: true)
+      other = long_ready_recording(account: @account, user: @user).speakers.find_by!(label: "speaker_0")
+      other.name_as!(voice, by: @user)
+      FieldVoiceprints::Sample.stub(:cut, cut_stub) do
+        assert_equal :learned, FieldVoiceprints::Learning.learn!(FieldVoiceprints::Learning.snapshot_for(other.reload), client: embeddings)
+      end
+      second = voice.samples.find_by!(field_recording_speaker: other)
+      assert other.reload.review_sample!(sample: second, digest: second.source_digest, by: @user, included: true)
       assert voice.reload.remembered?
 
       assert_enqueued_with(job: FieldVoices::LearnSampleJob) do
@@ -104,7 +113,7 @@ class FieldRecording::LineSpeakerTest < ActiveSupport::TestCase
           revision: @recording.transcript_revision)
       end
       assert_equal 0, FieldVoiceSample.where(field_recording_speaker: anna).count
-      assert_nil FieldVoiceprint.find_by(field_voice: voice), "the print built only from that sample goes"
+      assert_nil FieldVoiceprint.find_by(field_voice: voice), "one remaining confirmed sample cannot retain enrollment"
     end
   end
 

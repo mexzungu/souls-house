@@ -110,8 +110,7 @@
                   <span class="text-xs text-muted-foreground tabular-nums pt-1 w-14">{line.clock ?? ''}</span>
                 {/if}
                 <p class="min-w-0 break-words whitespace-pre-wrap">
-                  {#if line.speaker}<span class="font-semibold">{line.speaker}:</span>
-                  {/if}{line.text}
+                  {#if line.speaker}<span class="font-semibold">{line.speaker}:</span>{' '}{/if}{line.text}
                 </p>
               </li>
             {/each}

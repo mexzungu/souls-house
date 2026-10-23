@@ -139,6 +139,7 @@ Rails.application.routes.draw do
     resources :visual_tags, only: [ :create, :update, :destroy ], module: :accounts
     resources :rooms, only: [ :index, :create, :update, :destroy ], module: :accounts
     resource :resident_room, only: :update, module: :accounts
+    resource :main_room, only: :update, module: :accounts
     resource :room_model_default, only: :update, module: :accounts
     resources :service_authorizations, only: :create
     resources :service_connections, only: [ :create, :update, :destroy ], module: :accounts do
@@ -270,9 +271,11 @@ Rails.application.routes.draw do
       end
       delete :forget, on: :member, path: "print"
       post :remember, on: :member
+      post :merge, on: :member
       delete :forget_all, on: :collection, path: "prints"
       post :prepare_samples, on: :collection
       patch :recognition, on: :collection
+      post :retry_conversion, on: :collection
     end
     resources :whiteboards, only: [ :index, :create, :update, :destroy ] do
       resources :versions, only: [ :index, :show ], controller: "whiteboard_versions"
@@ -392,7 +395,13 @@ Rails.application.routes.draw do
       end
       resources :accounts, only: :index
       resources :visual_tags, only: :index
-      resources :rooms, only: %i[index create]
+      resources :rooms, only: %i[index create update destroy] do
+        collection do
+          patch :main
+          patch :resident_room
+          patch :model_default
+        end
+      end
       resource :transcription_glossary, only: %i[show create update destroy]
       # Account administration with a person's key (the web's account pages).
       resource :account, only: %i[show update], controller: "account_administration" do
@@ -460,6 +469,7 @@ Rails.application.routes.draw do
           resource :safeguard_reset, only: :create
         end
         resource :agent_trigger, only: :create
+        resource :quiet_reason, only: :create
         resource :model, only: [ :show, :create ], controller: "conversation_models"
         resources :participants, only: :create
         resource :archive, only: [ :create, :destroy ], controller: "conversation_archives"
@@ -505,6 +515,13 @@ Rails.application.routes.draw do
       resources :youtube_reads, only: :create
       resources :x_reads, only: :create
       resources :x_posts, only: %i[create update]
+      # A resident connecting a service itself (issue #500).
+      scope :resident, as: :resident do
+        resources :service_connections, only: %i[index create update destroy], controller: "resident_service_connections" do
+          get :providers, on: :collection
+          patch "residents/:resident_id", action: :resident_access, on: :member, as: :resident_access
+        end
+      end
       resources :service_connections, only: [] do
         resource :access_token, only: :show, controller: "service_connection_tokens"
         namespace :comms do
@@ -550,7 +567,14 @@ Rails.application.routes.draw do
           resources :speakers, only: :update
           resource :tags, only: :update, controller: "item_tags"
         end
-        resources :voices, only: [ :index, :update, :destroy ] do
+        resources :samples, controller: "voice_samples", only: [ :show, :update, :destroy ] do
+          get :audio, on: :member
+        end
+        resources :voices, only: [ :index, :create, :update, :destroy ] do
+          get :resolve, on: :collection
+          resources :samples, controller: "voice_samples", only: [ :index, :show, :create, :update, :destroy ] do
+            get :audio, on: :member
+          end
           delete :forget, on: :member, path: "print"
           post :remember, on: :member
           delete :forget_all, on: :collection, path: "prints"

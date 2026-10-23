@@ -43,8 +43,21 @@ module FieldVoiceprints::Learning
     speaker = FieldRecordingSpeaker.find_by(id: snapshot["speaker_id"])
     return unless speaker
 
-    set_status!(snapshot, "pending")
-    FieldVoices::LearnSampleJob.perform_later(snapshot)
+    recording = speaker.field_recording
+    voice = speaker.field_voice
+    return false unless voice
+
+    FieldVoiceprints::Locks.with(account: recording.account, recording:, voices: [ voice ]) do |account, live_recording, voices|
+      next false unless voices.first && holds?(snapshot, account, live_recording, voices.first, speaker.reload)
+      next false if speaker.sample_learning_status == "pending"
+
+      FieldVoiceprints::Limits.pending!(voices.first, except_speaker: speaker)
+      speaker.update!(sample_learning_status: "pending", sample_learning_error: nil)
+      ActiveRecord.after_all_transactions_commit { FieldVoices::LearnSampleJob.perform_later(snapshot) }
+      true
+    end
+  rescue FieldVoiceprints::Limits::Reached
+    false
   end
 
   # Returns :learned, :stale, :no_sample or :gone.
@@ -59,6 +72,10 @@ module FieldVoiceprints::Learning
     segments = FieldVoiceprints::Sample.segments_for(speaker)
     source_digest = FieldVoiceSample.source_digest_for(speaker, segments)
     result = FieldVoiceprints::Sample.cut(recording, segments) { |path| client.embed(File.binread(path)) }
+    unless FieldVoiceprints::Profiles.valid_vector?(result.embedding, result.profile) &&
+        result.profile == FieldVoiceprints::Profiles.configured
+      raise FieldVoiceprints::VoiceEmbeddings::Unavailable
+    end
     speech_ms = segments.sum { |from, to| to - from }
 
     FieldVoiceprints::Locks.with(account: recording.account, recording:, voices: [ voice ]) do |account, live_recording, voices|
@@ -66,15 +83,39 @@ module FieldVoiceprints::Learning
       next :stale unless live_voice && holds?(snapshot, account, live_recording, live_voice, speaker.reload)
 
       sample = FieldVoiceSample.find_or_initialize_by(field_voice: live_voice, field_recording_speaker: speaker)
+      # An ordinary retry must not replace a confirmed old-engine reference
+      # without its rollback copy. Engine conversion has its own writer.
+      if sample.persisted? && sample.manually_confirmed?(speaker:) &&
+          sample.source_digest == source_digest && sample.profile != result.profile
+        FieldVoiceprints::Conversion.queue!(account)
+        speaker.update!(sample_learning_status: "learned", sample_learning_error: nil)
+        next :stale
+      end
+      next :stale unless result.profile == FieldVoiceprints::Profiles.configured
+
+      # A naming is a candidate, not testimony that someone heard this cut.
+      # A retry of an unchanged, already confirmed cut may keep its inclusion.
+      included = sample.persisted? && sample.eligible? && sample.source_digest == source_digest &&
+        sample.manually_confirmed?(speaker:)
+      FieldVoiceprints::Limits.active!(live_voice, except: sample) if included
+      FieldVoiceprints::Limits.pending!(live_voice, except_sample: sample, except_speaker: speaker) unless included
+      if sample.source_digest != source_digest
+        sample.assign_attributes(rollback_embedding: nil, rollback_profile: nil)
+      end
       sample.assign_attributes(account:, field_recording_id: live_recording.id, speech_ms:, profile: result.profile,
-        label_origin: speaker.naming_source, eligible: !speaker.sample_excluded?,
+        label_origin: speaker.naming_source, eligible: included && !speaker.sample_excluded?,
         source_segments: segments, source_digest:)
+      sample.removed_at = nil if snapshot["allow_excluded"]
       sample.vector = result.embedding
       sample.save!
-      speaker.update!(sample_learning_status: "learned", sample_learning_error: nil)
+      review = included ? {} : { sample_confirmed_digest: nil, sample_confirmed_by_id: nil, sample_confirmed_at: nil }
+      speaker.update!(**review, sample_learning_status: "learned", sample_learning_error: nil)
       rebuild!(live_voice)
       :learned
     end
+  rescue FieldVoiceprints::Limits::Reached
+    set_status!(snapshot, "no_sample")
+    :no_sample
   rescue FieldVoiceprints::Sample::Refused
     set_status!(snapshot, "no_sample")
     :no_sample
@@ -108,21 +149,25 @@ module FieldVoiceprints::Learning
     recording = speaker.field_recording
     FieldVoiceprints::Locks.with(account: recording.account, recording:, voices: [ voice ]) do |account, live_recording, voices|
       next unless voices.first && holds?(snapshot, account, live_recording, voices.first, speaker.reload)
+      if status == "pending"
+        FieldVoiceprints::Limits.pending!(voices.first, except_speaker: speaker)
+      end
 
       speaker.update!(sample_learning_status: status, sample_learning_error: error)
     end
+  rescue FieldVoiceprints::Limits::Reached
+    false
   end
 
   # Rebuild a voice's print from all its current eligible samples. The caller
-  # holds the voice lock. The print uses one profile, the newest sample's;
-  # samples on another profile wait to be learned again (field:learn_voices).
+  # holds the voice lock. Only the explicit account profile is used, reading
+  # compatible retained rollback pairs while conversion is in progress.
   # Every rebuild moves the generation on, clears guesses made from the old
   # print and leaves the new one unvalidated until Validation runs.
-  def rebuild!(voice)
-    samples = FieldVoiceSample.eligible.where(field_voice: voice).order(:updated_at, :id).to_a
-    profile = samples.last&.profile
-    used = samples.select { |sample| sample.profile == profile }
-    vector = FieldVoiceprints.centroid(used.map(&:vector))
+  def rebuild!(voice, profile: FieldVoiceprints::Profiles.active(voice.account))
+    samples = FieldVoiceprints::Limits.confirmed_samples(voice).sort_by { |sample| [ sample.updated_at, sample.id ] }
+    used = samples.select { |sample| sample.vector_for(profile) }
+    vector = FieldVoiceprints.centroid(used.map { |sample| sample.vector_for(profile) }) if used.size >= FieldVoiceprints::Limits::MIN_CONFIRMED
 
     generation = voice.print_generation + 1
     voice.update_columns(print_generation: generation, updated_at: Time.current)
@@ -131,13 +176,17 @@ module FieldVoiceprints::Learning
     if vector
       print = FieldVoiceprint.find_or_initialize_by(field_voice: voice)
       print.assign_attributes(account: voice.account, print: JSON.generate(vector), generation:, profile:,
-        engine: "ecapa", sample_count: used.size, recording_count: used.map(&:field_recording_id).uniq.size,
+        engine: FieldVoiceprints::Profiles.recipe(profile).fetch(:engine),
+        sample_count: used.size, recording_count: used.map(&:source_group_key).uniq.size,
         speech_ms: used.sum(&:speech_ms), sample_digest: digest(used), validated: false)
       print.save!
     else
       FieldVoiceprint.where(field_voice: voice).destroy_all
     end
     FieldVoices::ValidatePrintsJob.queue!(voice.account)
+    unless FieldVoiceprints::Conversion.ready?(voice.account)
+      FieldVoiceprints::Conversion.queue!(voice.account)
+    end
   end
 
   # Which samples a print is built from, so a validation computed on another
@@ -192,13 +241,12 @@ module FieldVoiceprints::Learning
       .where(field_recordings: { account_id: account.id }, naming_source: FieldRecordingSpeaker::TRAINING_SOURCES)
       .where.not(field_voice_id: nil)
     scope = scope.where(field_voice_id: voice.id) if voice
-    learned = FieldVoiceSample.where(account:).pluck(:field_recording_speaker_id).to_set
+    learned = FieldVoiceSample.where(account:).where.not(field_recording_speaker_id: nil).pluck(:field_recording_speaker_id).to_set
     scope.includes(:field_voice, :field_recording).find_each.count do |speaker|
       next false if learned.include?(speaker.id)
 
       snapshot = snapshot_for(speaker)
-      enqueue!(snapshot) if snapshot
-      snapshot.present?
+      snapshot && enqueue!(snapshot) == true
     end
   end
 
@@ -211,6 +259,7 @@ module FieldVoiceprints::Learning
 
     FieldVoiceSample.where(field_voice: voice).includes(field_recording_speaker: :field_recording).to_a.count do |sample|
       speaker = sample.field_recording_speaker
+      next false unless speaker
       next false unless speaker.field_voice_id == voice.id && speaker.field_recording.kept?
       next false if speaker.sample_learning_status == "pending" || sample.source_current?(speaker:)
 

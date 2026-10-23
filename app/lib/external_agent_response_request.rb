@@ -209,6 +209,7 @@ class ExternalAgentResponseRequest
       "If you choose to respond, post it to this conversation now. Prefer piping the message through stdin: `printf '%s\\n' 'your message' | soulshouse-post-message #{chat.to_param}`. Do not put prose containing `$`, backticks, or other shell substitutions in a double-quoted command argument. For multi-line or structured messages, use the safe patterns in `/usr/local/share/helixkit-agent/soulshouse-api.md`.",
       "SOULSHOUSE_APP_URL and SOULSHOUSE_BEARER_TOKEN are already present in your shell environment. The bearer token is already authorized for you to read this conversation and post your own messages; do not ask Daniel to paste it or re-authorize it.",
       "Do not rely on stdout as the response channel; stdout is diagnostic only. If you choose not to respond, explain your reason briefly on stdout and then exit without posting.",
+      quiet_reason_text,
       conversation_metadata,
       conversation_context
     ]
@@ -359,14 +360,16 @@ class ExternalAgentResponseRequest
   end
 
   # The room is a hint about what the conversation is for, not an instruction.
-  # Residents at home and seated guests see it, once the account has rooms,
-  # with the room's own "use this room when" if it has one.
+  # Residents at home and seated guests see it, once the account has rooms or
+  # has named or described Main, with the room's "use this room when" if any.
   def room_line
-    return "" unless chat.account.rooms.exists?
+    account = chat.account
+    return "" unless account.rooms.exists? || account.main_room_name.present? || account.main_room_description.present?
     return "" unless chat.account_id == agent.account_id || agent.guest_memberships.exists?(account_id: chat.account_id)
 
-    line = "\n- room: #{chat.room&.name || Room::MAIN}"
-    line += " (use this room when: #{chat.room.description.squish})" if chat.room&.description.present?
+    line = "\n- room: #{chat.room&.name || chat.account.main_room_label}"
+    description = chat.room ? chat.room.description : chat.account.main_room_description
+    line += " (use this room when: #{description.squish})" if description.present?
     line
   end
 
@@ -547,6 +550,17 @@ class ExternalAgentResponseRequest
     end
   end
 
+  # Only a live run has SOULSHOUSE_RUNTIME_RUN_ID, which the helper needs.
+  def quiet_reason_text
+    return unless @interaction&.live_activity?
+
+    "Optionally, if you end this run without posting, you can give the room a short stated reason: " \
+      "`printf '%s\\n' 'your reason' | soulshouse-quiet-reason #{chat.to_param}`. " \
+      "It is public: everyone in this conversation can expand it under your run's \"completed without posting a reply\" card, " \
+      "shown as your own account, not a verified explanation. It is not a message, wakes nobody, and does not excuse work you have said you will do. " \
+      "Leave private things out of it. Without one the card stays neutral; nothing is taken from stdout."
+  end
+
   def request_delta_text
     return nil unless agent.persistent_session? && prior_cursor_message_id
 
@@ -560,6 +574,7 @@ class ExternalAgentResponseRequest
       "Requested by: #{requested_by}.",
       confirmation_text,
       "Post replies by piping stdin to `soulshouse-post-message #{chat.to_param}`; avoid the double-quoted message argument because the shell can substitute `$` and backticks. Stdout is diagnostic only.",
+      quiet_reason_text,
       response_expectation_text,
       "Current time: #{Time.current.iso8601}",
       delta_transcript_context

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_23_090000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -44,6 +44,12 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
     t.boolean "stalled_sweep_enabled", default: false, null: false
     t.bigint "field_probe_generation", default: 0, null: false
     t.string "field_matched_cohort"
+    t.string "voice_embedding_profile", default: "ecapa-voxceleb-0f99f2d0ebe8-speechbrain-1.1.2-torch-2.14.1-v1", null: false
+    t.string "voice_conversion_status"
+    t.string "voice_conversion_error"
+    t.string "main_room_name"
+    t.text "main_room_description"
+    t.boolean "auto_name_voices", default: true, null: false
     t.index ["account_type"], name: "index_accounts_on_account_type"
     t.index ["disabled_at"], name: "index_accounts_on_disabled_at"
     t.index ["resident_room_id"], name: "index_accounts_on_resident_room_id"
@@ -332,6 +338,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
     t.bigint "failure_notice_message_id"
     t.bigint "stalled_thread_sweep_id"
     t.jsonb "wake_source_kinds", default: [], null: false
+    t.text "quiet_reason"
+    t.datetime "quiet_reason_at"
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -1069,6 +1077,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
     t.datetime "sample_confirmed_at"
     t.string "sample_learning_status"
     t.string "sample_learning_error"
+    t.integer "auto_named_confidence"
     t.index ["field_recording_id", "label"], name: "index_field_recording_speakers_on_field_recording_id_and_label", unique: true
     t.index ["field_recording_id"], name: "index_field_recording_speakers_on_field_recording_id"
     t.index ["field_voice_id"], name: "index_field_recording_speakers_on_field_voice_id"
@@ -1354,21 +1363,48 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
   create_table "field_voice_samples", force: :cascade do |t|
     t.bigint "account_id", null: false
     t.bigint "field_voice_id", null: false
-    t.bigint "field_recording_speaker_id", null: false
-    t.bigint "field_recording_id", null: false
-    t.text "embedding", null: false
+    t.bigint "field_recording_speaker_id"
+    t.bigint "field_recording_id"
+    t.text "embedding"
     t.integer "speech_ms", null: false
-    t.string "profile", null: false
+    t.string "profile"
     t.string "label_origin", null: false
     t.boolean "eligible", default: false, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.jsonb "source_segments"
     t.string "source_digest"
+    t.string "content_sha256"
+    t.string "source_identifier"
+    t.string "source_sha256"
+    t.string "source_session"
+    t.integer "start_ms"
+    t.integer "end_ms"
+    t.datetime "recorded_at"
+    t.string "idempotency_key"
+    t.string "request_digest"
+    t.jsonb "idempotency_receipts", default: {}, null: false
+    t.datetime "removed_at"
+    t.integer "review_generation", default: 0, null: false
+    t.string "confirmed_digest"
+    t.bigint "confirmed_by_id"
+    t.bigint "uploaded_by_id"
+    t.datetime "confirmed_at"
+    t.string "learning_status"
+    t.string "learning_error"
+    t.boolean "excluded", default: false, null: false
+    t.text "rollback_embedding"
+    t.string "rollback_profile"
+    t.index ["account_id", "content_sha256"], name: "index_voice_samples_on_account_content", unique: true, where: "((content_sha256 IS NOT NULL) AND (removed_at IS NULL))"
+    t.index ["account_id", "idempotency_key"], name: "index_voice_samples_on_account_idempotency", unique: true, where: "(idempotency_key IS NOT NULL)"
+    t.index ["account_id", "source_sha256"], name: "index_field_voice_samples_on_account_id_and_source_sha256"
     t.index ["account_id"], name: "index_field_voice_samples_on_account_id"
+    t.index ["confirmed_by_id"], name: "index_field_voice_samples_on_confirmed_by_id"
     t.index ["field_recording_id"], name: "index_field_voice_samples_on_field_recording_id"
     t.index ["field_recording_speaker_id"], name: "index_field_voice_samples_on_field_recording_speaker_id"
     t.index ["field_voice_id", "field_recording_speaker_id"], name: "index_field_voice_samples_on_voice_and_speaker", unique: true
+    t.index ["uploaded_by_id"], name: "index_field_voice_samples_on_uploaded_by_id"
+    t.check_constraint "start_ms IS NULL AND end_ms IS NULL OR start_ms IS NOT NULL AND end_ms IS NOT NULL AND start_ms >= 0 AND end_ms > start_ms", name: "voice_sample_source_interval"
   end
 
   create_table "field_voiceprints", force: :cascade do |t|
@@ -2300,9 +2336,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
     t.text "pairing_phone_code"
     t.datetime "pairing_phone_code_issued_at"
     t.datetime "pairing_phone_code_expires_at"
+    t.bigint "connected_by_agent_id"
     t.index ["account_id", "provider", "credential_fingerprint"], name: "index_service_connections_on_account_provider_credential", unique: true, where: "(credential_fingerprint IS NOT NULL)"
     t.index ["account_id", "provider", "external_subject_id"], name: "index_service_connections_on_account_provider_subject", unique: true, where: "((external_subject_id IS NOT NULL) AND (credential_fingerprint IS NULL))"
     t.index ["account_id"], name: "index_service_connections_on_account_id"
+    t.index ["connected_by_agent_id"], name: "index_service_connections_on_connected_by_agent_id"
     t.index ["connected_by_user_id"], name: "index_service_connections_on_connected_by_user_id"
     t.index ["legacy_oura_integration_id"], name: "index_service_connections_on_legacy_oura_integration_id"
     t.index ["legacy_oura_integration_id"], name: "index_service_connections_on_unique_legacy_oura", unique: true, where: "(legacy_oura_integration_id IS NOT NULL)"
@@ -2346,6 +2384,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
     t.integer "stalled_sweep_minutes", default: 0, null: false
     t.integer "stalled_sweep_cursor", default: 0, null: false
     t.boolean "stalled_sweep_wake", default: false, null: false
+    t.string "voice_embedding_profile", default: "ecapa-voxceleb-0f99f2d0ebe8-speechbrain-1.1.2-torch-2.14.1-v1", null: false
   end
 
   create_table "stalled_thread_sweeps", force: :cascade do |t|
@@ -2737,6 +2776,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
   add_foreign_key "field_voice_samples", "accounts"
   add_foreign_key "field_voice_samples", "field_recording_speakers"
   add_foreign_key "field_voice_samples", "field_voices"
+  add_foreign_key "field_voice_samples", "users", column: "confirmed_by_id", on_delete: :nullify
+  add_foreign_key "field_voice_samples", "users", column: "uploaded_by_id", on_delete: :nullify
   add_foreign_key "field_voiceprints", "accounts"
   add_foreign_key "field_voiceprints", "field_voices"
   add_foreign_key "field_voices", "accounts"
@@ -2854,6 +2895,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_21_180000) do
   add_foreign_key "service_authorization_attempts", "service_connections"
   add_foreign_key "service_authorization_attempts", "users"
   add_foreign_key "service_connections", "accounts"
+  add_foreign_key "service_connections", "agents", column: "connected_by_agent_id", on_delete: :nullify
   add_foreign_key "service_connections", "oura_integrations", column: "legacy_oura_integration_id"
   add_foreign_key "service_connections", "users", column: "connected_by_user_id"
   add_foreign_key "sessions", "users"

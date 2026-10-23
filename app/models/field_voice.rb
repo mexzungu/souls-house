@@ -15,7 +15,7 @@ class FieldVoice < ApplicationRecord
   belongs_to :created_by, polymorphic: true, optional: true
   has_many :speakers, class_name: "FieldRecordingSpeaker", dependent: :nullify
   has_one :voiceprint, class_name: "FieldVoiceprint", dependent: :destroy
-  has_many :samples, class_name: "FieldVoiceSample", dependent: :delete_all
+  has_many :samples, class_name: "FieldVoiceSample", dependent: :destroy
 
   validates :name, presence: true, length: { maximum: MAX_NAME_LENGTH }
   validate :name_unique_among_kept, if: -> { kept? && (new_record? || will_save_change_to_name?) }
@@ -104,6 +104,12 @@ class FieldVoice < ApplicationRecord
     end
   end
 
+  # Merge this voice into another that is the same person (FieldVoice::Merge).
+  # The other voice is kept, under whichever of the two names is chosen.
+  def merge_into!(other, name: nil)
+    FieldVoice::Merge.call(source: self, into: other, name:)
+  end
+
   private
 
   def forget_locked!
@@ -111,7 +117,11 @@ class FieldVoice < ApplicationRecord
     update_columns(print_generation: print_generation + 1, learning_generation: learning_generation + 1,
       remember: false, updated_at: Time.current)
     FieldVoiceprint.where(field_voice_id: id).destroy_all
-    FieldVoiceSample.where(field_voice_id: id).delete_all
+    FieldVoiceSample.where(field_voice_id: id).destroy_all
+    # Old jobs have lost their learning generation. Their pending reservations
+    # and listening receipts must not survive into "Remember again".
+    speakers.update_all(sample_learning_status: nil, sample_learning_error: nil,
+      sample_confirmed_digest: nil, sample_confirmed_by_id: nil, sample_confirmed_at: nil)
     FieldVoiceActivity.refresh!([ account_id ])
     # Every other print's verdict was measured with this one in the cohort.
     FieldVoices::ValidatePrintsJob.queue!(account)

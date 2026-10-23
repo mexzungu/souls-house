@@ -1,6 +1,6 @@
 # Voice recognition in the house (docs/2026-10-19-field-voiceprints-in-house.md).
 #
-# Prints are learned here, from people's namings, by the house's own ECAPA
+# Prints are learned here, from people's namings, by the house's local voice
 # service (services/voice-embeddings), and matched here. Audio never leaves
 # the house.
 #
@@ -12,16 +12,16 @@
 # is stated or required (Daniel, 2026-10-19).
 module FieldVoiceprints
 
-  # A sample is the clean speech of one speaker in one recording.
+  # A sample is the clean speech of one speaker in one recording. At most
+  # 30 s, so a person can listen to it before confirming (Daniel, 2026-10-22,
+  # OjyMDj: 20–30 s is digestible, a minute isn't). Uploaded samples keep
+  # their own 4–60 s limit (FieldVoiceSamples::Wav).
   MIN_SAMPLE_MS = 4_000
-  MAX_SAMPLE_MS = 60_000
+  MAX_SAMPLE_MS = 30_000
   ISOLATION_MS = 1_000
 
-  # Matching (spec §8). Starting points from the Mac's identify.py; the
-  # held-out report (field:voiceprint_report) is where they get checked.
-  MATCH_THRESHOLD = 0.55
-  MATCH_MARGIN = 0.15
-  SPLIT_THRESHOLD = 0.75
+  # Matching recipes are versioned in Profiles; the held-out account check
+  # (field:voiceprint_report) uses exactly the same matcher as production.
 
   module_function
 
@@ -29,6 +29,13 @@ module FieldVoiceprints
 
   def enabled_for?(account)
     house_enabled? && account.recognise_voices?
+  end
+
+  # A clear match from a validated print may name a speaker without a tap
+  # (Daniel, 2026-10-23, MYnpDj). On by default; a Field that wants every
+  # match as a chip turns it off on its Voices page. Never without recognition.
+  def auto_naming_for?(account)
+    enabled_for?(account) && account.auto_name_voices?
   end
 
   # Learning reads only namings a person made or confirmed, and only once the
@@ -59,8 +66,10 @@ module FieldVoiceprints
                recognitions: FieldRecordingSpeaker.where.not(recognised_voice_id: nil).count, voices: FieldVoice.count }
     Account.update_all("field_probe_generation = field_probe_generation + 1")
     FieldVoice.update_all("print_generation = print_generation + 1, learning_generation = learning_generation + 1")
-    FieldVoiceSample.delete_all
+    FieldVoiceSample.find_each(&:destroy!)
     FieldVoiceprint.delete_all
+    FieldRecordingSpeaker.update_all(sample_learning_status: nil, sample_learning_error: nil,
+      sample_confirmed_digest: nil, sample_confirmed_by_id: nil, sample_confirmed_at: nil)
     FieldRecordingSpeaker.where.not(probe_embedding: nil).update_all(probe_embedding: nil, probe_profile: nil)
     FieldRecordingSpeaker.where.not(recognised_voice_id: nil)
       .update_all(recognised_voice_id: nil, recognition_confidence: nil, recognition_print_generation: nil,
@@ -70,12 +79,15 @@ module FieldVoiceprints
 
   # Cosine similarity of two unit vectors.
   def cosine(a, b)
+    raise ArgumentError, "incompatible voice vectors" unless a.size == b.size
+
     a.each_with_index.sum { |value, index| value * b[index] }
   end
 
   # The L2-normalised mean of unit vectors, or nil for none.
   def centroid(vectors)
     return nil if vectors.empty?
+    return nil unless vectors.all? { |vector| vector.size == vectors.first.size }
 
     sum = Array.new(vectors.first.length, 0.0)
     vectors.each { |vector| vector.each_with_index { |value, index| sum[index] += value } }

@@ -28,6 +28,7 @@ import {
   YoutubeLogo,
   XLogo,
   Receipt,
+  Ghost,
   ChalkboardSimple,
   Waveform,
   Eye,
@@ -409,6 +410,13 @@ export const moreFeatures = [
     icon: Cloud,
   },
   {
+    key: 'ghost',
+    title: 'Ghost',
+    description:
+      'Let the residents you choose write articles on your Ghost blog: they draft, and publish when you ask.',
+    icon: Ghost,
+  },
+  {
     key: 'subagents',
     title: 'Sub-agents',
     description: 'Give a resident standing permission to hand bounded work to helper agents, on the models you allow.',
@@ -420,6 +428,13 @@ export const moreFeatures = [
     description:
       'With narration sharing on, the working card shows elapsed time since a resident reply or run start after two minutes. Runtime contact is a separate fact, never a claim of task progress. The new indicator is hidden when sharing is off.',
     icon: Heartbeat,
+  },
+  {
+    key: 'quiet-reason',
+    title: 'A stated reason for not replying',
+    description:
+      "When a resident chooses not to reply, it can leave a short reason under the run's card, folded away until you open it. It is the resident's own account, not a verified one; it wakes nobody, and it never excuses work the resident said it would do.",
+    icon: Notebook,
   },
   {
     key: 'youtube',
@@ -444,7 +459,7 @@ export const moreFeatures = [
     key: 'speaker-sample-review',
     title: 'Review speaker fingerprints',
     description:
-      "Search the Field's speakers, listen to the exact samples used for their fingerprints, and approve or remove contributions. Manual listening confirmation is separate from inclusion. Older samples without recorded source spans are marked honestly and can be rebuilt before review.",
+      "Search the Field's speakers, listen to exact fingerprint samples, and approve or remove contributions. Merge two speakers who turn out to be one person, keeping either name and the confirmations already given. Upload retained samples without a transcript through the API or souls CLI, keeping their source and session provenance. New candidates enter recognition only after human confirmation; at least two confirmed samples are needed. Each speaker has room for twenty included samples and twenty waiting candidates, with no silent eviction. Older evidence is kept for review.",
     icon: Waveform,
   },
   {
@@ -549,7 +564,7 @@ export const moreFeatures = [
     key: 'rooms',
     title: 'Rooms for different parts of life',
     description:
-      'Give development, personal conversations, or anything else a room of its own, so one never buries another.',
+      'Give development, personal conversations, or anything else a room of its own, so one never buries another. Residents can add, rename, reorder and remove rooms too, as you can.',
     icon: DoorOpen,
   },
   {

@@ -190,6 +190,14 @@ moderation (site admins only).
   revisioned text, shared by web and human-key clients. Resident keys are refused.
   Message endpoints accept `draft_revision` for atomic send-and-clear.
 
+- Rooms: `GET`/`POST /api/v1/rooms`, `PATCH`/`DELETE /api/v1/rooms/:id`
+  (rename, describe, `direction: up|down`, remove; conversations go to Main),
+  `PATCH /api/v1/rooms/main`, `/rooms/resident_room` and `/rooms/model_default`.
+  Resident keys get all of it at home and wherever they hold a guest seat
+  (`account_id`), with the same reach as the account's people; account keys in
+  their own account. The resident-facing guide is
+  `agent-runtime/docs/soulshouse-api.md` ("Rooms: where a conversation lives").
+
 - [Rhythms](rhythms.md#human-keys): resident keys create and join their own;
   human keys and OAuth app tokens get the web's management (creator or owner)
   with resident selection, preview and manual start. `room_choice` is
@@ -342,7 +350,7 @@ member. The web's `require_account_manager!` also admits any confirmed member.
 | `GET /account/api_keys`; `DELETE /account/api_keys/:id` | member; metadata only; you can revoke only your own keys |
 | `GET`, `POST /account/guest_memberships` `{ agent_id }`; `DELETE /account/guest_memberships/:id` | add: someone in both accounts (else 422); remove: an owner of either account (else 403) |
 | `GET /account/service_connections`; `PATCH /account/service_connections/:id` `{ label?, enabled_for_new_agents?, freely_provisionable? }`; `DELETE` (disconnect) | `ServiceConnection#manageable_by?` (else 403); only the connection's owner can change `freely_provisionable` |
-| `GET /account/service_connections/providers`; `POST /account/service_connections` `{ provider, management_scope?, label?, credentials: { <field>: value } }` | member for a `personal` connection (the default); admin for `account_managed` (else 403). Only services that connect from pasted credentials (Porkbun, Cloudflare, Pipedrive, GitHub, Honeybadger, ...) are listed and accepted; OAuth and QR-paired ones are 422 and connect on the web. The provider checks the credential first; a refusal, a missing field or a credential already connected is 422 with the reason. `credentials` is masked in the request log and never returned |
+| `GET /account/service_connections/providers`; `POST /account/service_connections` `{ provider, management_scope?, label?, credentials: { <field>: value } }` | member for a `personal` connection (the default); admin for `account_managed` (else 403). Only services that connect from pasted credentials (Porkbun, Cloudflare, Ghost, Pipedrive, GitHub, Honeybadger, ...) are listed and accepted; OAuth and QR-paired ones are 422 and connect on the web. The provider checks the credential first; a refusal, a missing field or a credential already connected is 422 with the reason. `credentials` is masked in the request log and never returned |
 | `GET /account/ai_provider_keys`; `PATCH /account/ai_provider_keys` `{ <provider>_api_key?, clear?: [provider] }` | read: member; change: owner or admin (else 403). Keys are never returned, and travel only as `<provider>_api_key` so the request log masks them; any other shape (such as `set`) is 422 |
 
 ```http
@@ -683,14 +691,87 @@ one tag, at most 50 characters, 32 per item.
   because changing a tag changes items other people tagged.
 
 **Voices.** `GET /api/v1/field/voices` lists voices (`remembered`, `used_in`, and
-so on), `members_without_voice`, `my_voice_id`, `pending_enrolments`,
-`recognise_voices` and `can_change_setting`. It never returns a voice print.
+so on), `members_without_voice`, `my_voice_id`,
+`recognise_voices`, `auto_name_voices` and `can_change_setting`. It never returns a voice print.
 `PATCH /api/v1/field/voices/:id` (`name`), `DELETE /api/v1/field/voices/:id`
 (deletes the voice), `DELETE /api/v1/field/voices/:id/print` (forget one print),
 `DELETE /api/v1/field/voices/prints` (forget all),
-`PATCH /api/v1/field/voices/recognition` (`{ "recognise_voices": false }`) and
-`DELETE /api/v1/field/enrolments/:id` (remove a pending "remember this voice").
-Starting or confirming an enrolment is biometric consent and stays in the browser.
+`PATCH /api/v1/field/voices/recognition` (`{ "recognise_voices": false }` and/or
+`{ "auto_name_voices": false }`; naming on a clear match is on by default and
+needs recognition on).
+`POST /api/v1/field/voices` creates a name with `{name}` (201); duplicate names
+are refused, not silently linked. `GET /api/v1/field/voices/resolve?name=...`
+does an exact normalized lookup (404 on miss), without creating anything.
+
+**Voice samples.** A person's credential needs current confirmed account
+membership, like voice management, and reaches every sample. A **resident key**
+uses its own credential (never a person's) and works only in its home account,
+only with **uploaded candidates no person has confirmed**: it may list and
+resolve voices (`GET /field/voices` returns `id`, `name`, `member` only), list,
+inspect and download uploaded samples (confirmed ones included: reading is
+allowed), upload candidates, and correct the attribution of, exclude or remove
+unconfirmed ones. Confirmation (`included: true` on a sample needing new
+testimony) and any change to a sample a person has ever confirmed are 403 for
+residents, checked again under the sample lock. A resident's sample rows carry
+only the upload's own `recorded_at`, never the linked recording's date.
+Recording-backed samples are not visible to residents (404), because their audio
+and timings come from the recording, which residents never read. Resident writes
+are audited (`field_voice_sample_uploaded`, `_reattributed`, `_excluded`,
+`_removed`) with `agent_id` and the key, and never record the key's owner as
+uploader, namer or confirmer. Voice create, rename, delete, forget and the
+recognition setting stay person-only. The existing `souls field voices` and `souls field samples` commands cover the
+workflow; see [CLI examples and wire contract](voice-sample-cli.md).
+
+- `GET /api/v1/field/voices/:voice_id/samples`: paginated safe metadata,
+  `page`, `pages`, `total`, and limits. No vectors, storage credentials or blob URLs.
+- `POST` at that path: multipart `audio` plus a stable `idempotency_key`.
+  Audio is a **PCM mono 16-bit 16 kHz WAV, 4–60 seconds, at most 2 MiB**.
+  The original uploaded bytes are retained and sent unchanged for embedding.
+  Optional `source_identifier`, original `source_sha256`, canonical `source_session`,
+  paired `start_ms`/`end_ms`, and ISO `recorded_at` preserve source evidence.
+  A sample date means midnight UTC (portable archive provenance, unlike a
+  recording's app-zone display date); a timestamp requires an explicit offset.
+  Optional public `recording_id` (alias `transcript_id`) must belong to this
+  account. In Field a transcript belongs to its recording.
+  Returns `{sample: ..., deduplicated: null}` (201) for a new row; an existing row
+  returns 200 with `deduplicated: "retry"`, `"identical"` or `"overlap"`.
+  Its metadata/hash describe the retained existing sample, not the discarded new
+  cut. A reused key with different immutable content/metadata is 409. Identical audio or overlapping
+  intervals of the same original source deduplicate account-wide. Conflicting
+  attribution is 409, never a silent move. Keep canonical original-session
+  groups stable across exports, duplicates and slices. Matching original hashes,
+  identifiers or recording links cannot introduce a conflicting source group;
+  mixed linked/unlinked cuts must reuse the original recording link.
+  Responses preserve the upload's raw `source_session` separately from the
+  account-scoped `source_group_key` used for validation splits.
+- `GET /api/v1/field/samples/:id`: inspect metadata.
+- `GET /api/v1/field/samples/:id/audio?digest=...`: authorized exact WAV download,
+  private/no-store. A stale digest is 409, not different audio.
+- `PATCH /api/v1/field/samples/:id` with `{included, digest}` accepts/includes or
+  rejects/excludes. A machine API key **cannot create listening testimony**.
+  New confirmation requires the browser or signed-in human OAuth app token.
+  An API key may reinclude an unchanged, already-confirmed sample without
+  changing who confirmed it or when. Exclusion preserves audio and prior testimony.
+- `PATCH` with `{voice_id, digest}` corrects attribution and invalidates
+  confirmation. Recording-derived samples correct their source speaker and
+  return a replacement unconfirmed candidate with the same audio and embedding;
+  uploads move as unconfirmed.
+- `DELETE` with `{digest}` removes a sample from the review collection and
+  fingerprint, retaining its evidence as a soft-removed row. Existing voice
+  Forget semantics still erase the voice's samples and attached sample audio.
+  Member operations also accept the nested `/voices/:voice_id/samples/:id` path.
+
+Uploads and new extracted cuts are **unconfirmed candidates**, never automatic
+enrollment. At least two exact, confirmed included samples are needed to build a
+print; the existing held-out validation still gates checked recognition.
+Capacity is enforced under account/voice locks across uploads, extraction,
+retries and inclusion: twenty included samples and twenty waiting candidates per
+speaker. Reject/remove explicit evidence to make room; nothing is silently
+evicted, and pre-existing over-limit evidence is not deleted. The later archive
+sweep targets ten total including existing samples; this API does not run it.
+Pending failures consume a candidate slot until reviewed or removed.
+Malformed audio/metadata is 422, capacity/stale/idempotency conflicts are 409,
+inaccessible account resources are 404, and unauthorized credentials are 401/403.
 
 **Notes.** `DELETE /api/v1/whiteboards/:id` → 204 (a soft delete, as on the
 page). Resident keys can edit notes but not delete them.

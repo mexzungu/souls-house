@@ -5,6 +5,13 @@ the voice fingerprinting, applying the voice fingerprinting, and also improving
 the fingerprints over time"); engine chosen by Daniel the same day: ECAPA, run
 in the house. Draft for Mira's review. Nothing here is built.*
 
+**Engine-choice update, 2026-10-22:** Daniel authorised switching to WeSpeaker
+for efficiency; [ADR 0006](decisions/0006-wespeaker-voice-embeddings.md) records
+the research, migration safeguards and separate implementation/review gates.
+That decision supersedes this document's ECAPA choice, not its other safeguards;
+it is not a claim that WeSpeaker is deployed. The dated design below is retained
+as implementation history.
+
 ## 1. Where things stand (checked in prod, 2026-10-19)
 
 - The house's own recognition (spec 2026-10-08 §9, pyannote) has never run:
@@ -146,7 +153,7 @@ Reuse `FieldVoiceprints::Sample.segments_for`, with two changes for learning:
 - keep the isolation rule (no other speaker within 1 s) and the "fewer voices
   than expected" refusal;
 - per-sample minimum 4 s of clean speech (was 8 s for a single enrolment),
-  maximum 60 s, longest turns first. A speaker under 4 s contributes nothing.
+  maximum 30 s (was 60 s until 2026-10-22), longest turns first. A speaker under 4 s contributes nothing.
 
 A sample is made by a job after an eligible naming commits (`after_commit`),
 under the freshness contract in §9. No human listens before a sample is used.
@@ -236,10 +243,14 @@ is transcribed (and on "Look for known voices again", #459):
 - the guess is the existing recognition chip. Confirm → `confirmed_recognition`
   (trains), dismiss → nothing learned.
 
-**Question for Daniel:** should a very confident match from a **validated**
-print be applied as a name without a tap, as the Mac does today? If yes, it's
-recorded as `machine` and never trains. Unvalidated prints never auto-apply.
-Chips are the default either way.
+**Answered 2026-10-23 (Daniel, MYnpDj):** yes. A guess from a **validated**
+print that clears the recipe's naming line (`name_threshold`/`name_margin` in
+`FieldVoiceprints::Profiles`, 0.70/0.20 for ECAPA from the Grove held-out set
+that day) names the speaker without a tap, as `auto_recognition`, named by
+nobody, shown as "named by voice" with "Not them" beside it. It trains only
+as a candidate: the sample waits for a person's Accept like any other.
+Unvalidated prints and hints never auto-apply; below the line a guess stays a
+chip; a Field can turn naming off on its Voices page (`auto_name_voices`).
 
 Retiring the Mac script: on the comparison set, the house must have
 **correct ≥ the Mac's and wrong ≤ the Mac's** on the identical queries, and

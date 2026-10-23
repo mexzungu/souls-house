@@ -575,9 +575,13 @@ module Chat::ModelSelection
     { model_id: "moonshotai/kimi-k2-0905", label: "Kimi K2 0905", group: "Moonshot / Kimi" },
 
     # MiniMax
+    { model_id: "minimax/minimax-m3.1-flash", label: "MiniMax M3.1 Flash", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m3", label: "MiniMax M3", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m2.7", label: "MiniMax M2.7", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m2", label: "MiniMax M2", group: "MiniMax", thinking: { supported: true } },
+
+    # Inception
+    { model_id: "inception/mercury-3", label: "Mercury 3", group: "Inception", thinking: { supported: true } },
 
     # Mistral
     { model_id: "mistralai/devstral-2512", label: "Devstral 2512", group: "Mistral" },
@@ -801,7 +805,7 @@ module Chat::ModelSelection
         REASONING_PROFILES[:grok_fast]
       when %r{\Ax-ai/grok-}
         REASONING_PROFILES[:grok]
-      when %r{\A(?:deepseek|meta|moonshotai|minimax|qwen|xiaomi|z-ai)/}
+      when %r{\A(?:deepseek|inception|meta|moonshotai|minimax|qwen|xiaomi|z-ai)/}
         REASONING_PROFILES[:thinking_mode] if supports_thinking?(model_id)
       end
     end

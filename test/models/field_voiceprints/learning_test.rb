@@ -31,7 +31,13 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
     FieldVoiceprints::Learning.snapshot_for(speaker.reload)
   end
 
-  test "a person's naming queues learning, and learning stores a sample and a print" do
+  def confirm_sample(speaker = @speaker)
+    sample = FieldVoiceSample.find_by!(field_recording_speaker: speaker)
+    assert speaker.reload.review_sample!(sample:, digest: sample.source_digest, by: @user, included: true)
+    sample.reload
+  end
+
+  test "a person's naming queues a candidate and two exact reviews create an unchecked print" do
     with_recognition(@account) do
       assert_enqueued_with(job: FieldVoices::LearnSampleJob) { @speaker.name_as!(@voice, by: @user) }
       snapshot = FieldVoiceprints::Learning.snapshot_for(@speaker.reload)
@@ -40,12 +46,21 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
       sample = FieldVoiceSample.sole
       assert_equal [ @voice.id, @speaker.id, @recording.id ], [ sample.field_voice_id, sample.field_recording_speaker_id, sample.field_recording_id ]
       assert_equal 17_000, sample.speech_ms
-      assert sample.eligible
+      assert_not sample.eligible
+      assert_not sample.manually_confirmed?
       assert_equal "human", sample.label_origin
+      assert_nil @voice.reload.voiceprint
+      assert confirm_sample.manually_confirmed?
+      assert_nil @voice.reload.voiceprint, "one exact confirmation is not enough"
+
+      second = long_ready_recording(account: @account, user: @user).speakers.find_by!(label: "speaker_0")
+      assert_equal :learned, learn(named_snapshot(second))
+      assert_nil @voice.reload.voiceprint, "a second unreviewed candidate is not testimony"
+      confirm_sample(second)
 
       print = @voice.reload.voiceprint
       assert_equal @voice.print_generation, print.generation
-      assert_equal [ 1, 1 ], [ print.sample_count, print.recording_count ]
+      assert_equal [ 2, 2 ], [ print.sample_count, print.recording_count ]
       assert_in_delta 1.0, FieldVoiceprints.cosine(print.vector, voice_vector(3)), 1e-9
       assert_not_includes FieldVoiceprints::Identification.active_prints(@account), print,
         "a new print is unchecked until validation runs"
@@ -112,7 +127,11 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
 
       [ [ a, b ], [ b, a ] ].map do |order|
         FieldVoiceSample.delete_all
-        order.each { |snapshot| learn(snapshot, vector: vectors[snapshot]) }
+        order.each do |snapshot|
+          speaker = FieldRecordingSpeaker.find(snapshot["speaker_id"])
+          assert_equal :learned, learn(FieldVoiceprints::Learning.snapshot_for(speaker), vector: vectors[snapshot])
+          confirm_sample(speaker)
+        end
         print = @voice.reload.voiceprint
         assert_equal [ 2, 2 ], [ print.sample_count, print.recording_count ]
         print.vector
@@ -125,17 +144,23 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
     with_recognition(@account) do
       second = long_ready_recording(account: @account, user: @user)
       other = second.speakers.find_by!(label: "speaker_0")
+      third = long_ready_recording(account: @account, user: @user).speakers.find_by!(label: "speaker_0")
       learn(named_snapshot)
+      confirm_sample
       learn(named_snapshot(other))
-      assert_equal 2, @voice.reload.voiceprint.sample_count
+      confirm_sample(other)
+      learn(named_snapshot(third))
+      confirm_sample(third)
+      assert_equal 3, @voice.reload.voiceprint.sample_count
 
       other.reload.unname!
-      assert_equal [ 1, 1 ], [ @voice.reload.voiceprint.sample_count, FieldVoiceSample.count ]
+      assert_equal [ 2, 2 ], [ @voice.reload.voiceprint.sample_count, FieldVoiceSample.count ]
 
       elsewhere = @account.field_voices.create!(name: "Priya")
       @speaker.reload.name_as!(elsewhere, by: @user)
-      assert_nil @voice.reload.voiceprint, "no samples left, no print"
-      assert_equal 0, FieldVoiceSample.count
+      assert_nil @voice.reload.voiceprint, "one retained confirmed sample is insufficient"
+      assert_equal 1, FieldVoiceSample.count
+      assert FieldVoiceSample.sole.manually_confirmed?, "the remaining evidence is not erased"
     end
   end
 
@@ -163,11 +188,16 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
     with_recognition(@account) do
       unnamed = @recording.speakers.find_by!(label: "speaker_1")
       learn(named_snapshot)
+      confirm_sample
+      second = long_ready_recording(account: @account, user: @user).speakers.find_by!(label: "speaker_0")
+      learn(named_snapshot(second))
+      confirm_sample(second)
+      assert_equal 2, @voice.reload.voiceprint.sample_count
       unnamed.update!(recognised_voice_id: @voice.id, recognition_confidence: 80,
         recognition_print_generation: @voice.reload.print_generation, recognition_decision_generation: 0)
 
-      second = long_ready_recording(account: @account, user: @user)
-      learn(named_snapshot(second.speakers.find_by!(label: "speaker_0")))
+      third = long_ready_recording(account: @account, user: @user)
+      learn(named_snapshot(third.speakers.find_by!(label: "speaker_0")))
       assert_nil unnamed.reload.recognised_voice_id
     end
   end
@@ -195,6 +225,8 @@ class FieldVoiceprints::LearningTest < ActiveSupport::TestCase
       second.speakers.find_by!(label: "speaker_1").name_as!(@voice, by: nil, source: "machine")
       clear_enqueued_jobs
 
+      assert_equal 0, FieldVoiceprints::Learning.queue_account!(@account), "already pending work is not queued twice"
+      second.speakers.find_by!(label: "speaker_0").update!(sample_learning_status: nil)
       assert_equal 1, FieldVoiceprints::Learning.queue_account!(@account)
       assert_enqueued_jobs 1, only: FieldVoices::LearnSampleJob
     end
