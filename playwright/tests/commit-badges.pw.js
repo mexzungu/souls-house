@@ -74,7 +74,7 @@ test("an account's connected repository badges its own commits, never as deploye
   await page.route('**/accounts/acct1/commit_statuses**', (route) => {
     const refs = new URL(route.request().url()).searchParams.get('refs').split(',');
     requests.push(refs);
-    const known = { '51625a7': 'merged', 'acme/web@783ab2e': 'unmerged' };
+    const known = { '51625a7': 'on_default', 'acme/web@783ab2e': 'off_default' };
     const body = { statuses: Object.fromEntries(refs.map((ref) => [ref, known[ref] ?? null])), revision: 'acme/web=f' };
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
@@ -95,8 +95,15 @@ test("an account's connected repository badges its own commits, never as deploye
   });
 
   await expect(component.locator('[data-commit-status]')).toHaveCount(2);
-  await expect(component.locator('[data-commit-status="merged"]')).toHaveCount(1);
-  await expect(component.locator('[data-commit-status="unmerged"]')).toHaveCount(1);
+  await expect(component.locator('[data-commit-status="on_default"]')).toHaveAttribute(
+    'title',
+    'On the default branch'
+  );
+  await expect(component.locator('[data-commit-status="off_default"]')).toHaveAttribute(
+    'aria-label',
+    'Not on the default branch'
+  );
+  await expect(component.locator('[data-commit-status*="deployed"], [title*="master"]')).toHaveCount(0);
   expect(requests[0].sort()).toEqual(['51625a7', 'acme/web@783ab2e']);
   await page.screenshot({ path: 'tmp/commit-badges-account.png' });
 });

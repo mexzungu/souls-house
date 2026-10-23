@@ -28,7 +28,7 @@
 {#snippet icon()}{#if status === 'deployed'}<RocketLaunch
       size="1em"
       weight="fill"
-      class="text-green-600 dark:text-green-400" />{:else if status === 'merged'}<CheckCircle
+      class="text-green-600 dark:text-green-400" />{:else if status === 'merged' || status === 'on_default'}<CheckCircle
       size="1em"
       weight="fill"
       class="text-green-600 dark:text-green-400" />{:else}<XCircle

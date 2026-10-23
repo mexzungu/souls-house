@@ -122,7 +122,7 @@ test("an account's own repository badges its commit URLs, and other repositories
   });
   fetchMock = vi.fn(async () => ({
     ok: true,
-    json: async () => ({ statuses: { 'acme/web@783ab2e': 'merged' }, revision: 'acme/web=fff' }),
+    json: async () => ({ statuses: { 'acme/web@783ab2e': 'on_default' }, revision: 'acme/web=fff' }),
   }));
   vi.stubGlobal('fetch', fetchMock);
 
@@ -136,7 +136,12 @@ test("an account's own repository badges its commit URLs, and other repositories
     },
   });
 
-  await waitFor(() => expect(badges(container)).toEqual(['merged']));
+  await waitFor(() => expect(badges(container)).toEqual(['on_default']));
+  // An account's repository is measured against its own default branch: no
+  // "master", no deployment.
+  const badge = container.querySelector('[data-commit-status]');
+  expect(badge.getAttribute('title')).toBe('On the default branch');
+  expect(badge.getAttribute('aria-label')).toBe('On the default branch');
   expect(fetchMock).toHaveBeenCalledTimes(1);
   expect(fetchMock.mock.calls[0][0]).toBe('/accounts/acct1/commit_statuses?refs=acme%2Fweb%40783ab2e');
   expect([...container.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual([

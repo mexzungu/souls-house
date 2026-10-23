@@ -46,7 +46,7 @@ class CommitBadgesTest < ActiveSupport::TestCase
     assert_equal({ house_repo: HOUSE, repos: [ WEB ] }, CommitBadges.config_for(@account, users(:site_admin_user)))
   end
 
-  test "an account repository is merged or unmerged against its default branch, read with the connection's token, never deployed" do
+  test "an account repository is on or off its default branch, read with the connection's token, never deployed" do
     repository(WEB, commit_badges: true)
     default_branch(WEB, "main", WEB_MAIN)
     commit(WEB, SHORT, COMMIT)
@@ -54,7 +54,7 @@ class CommitBadgesTest < ActiveSupport::TestCase
 
     result = CommitBadges.new(account: @account, user: @owner).lookup([ SHORT, "#{WEB}@#{SHORT}" ])
 
-    assert_equal({ SHORT => "merged", "#{WEB}@#{SHORT}" => "merged" }, result[:statuses])
+    assert_equal({ SHORT => "on_default", "#{WEB}@#{SHORT}" => "on_default" }, result[:statuses])
     assert_equal "#{WEB}=#{WEB_MAIN}", result[:revision]
     assert @tokens.all? { |_, token| token == "github_pat_test" }
     assert @tokens.none? { |path, _| path.include?(DEPLOYED) }
@@ -68,8 +68,9 @@ class CommitBadgesTest < ActiveSupport::TestCase
     commit(WEB, SHORT, COMMIT)
     compare(WEB, COMMIT, WEB_MAIN, "diverged")
     @responses["/repos/#{WEB}/commits/#{COMMIT}/pulls"] = [ 200, [] ]
+    absent(API, SHORT)
 
-    assert_equal({ SHORT => "unmerged" }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+    assert_equal({ SHORT => "off_default" }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
   end
 
   test "a bare sha two repositories both have, or one could not answer for, gets no badge" do
@@ -89,6 +90,34 @@ class CommitBadgesTest < ActiveSupport::TestCase
     assert_equal({ SHORT => nil }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
   end
 
+  test "an ambiguous prefix, or a repository the token can no longer read, is not proof a bare sha is elsewhere" do
+    repository(WEB, commit_badges: true)
+    repository(API, commit_badges: true)
+    default_branch(WEB, "main", WEB_MAIN)
+    default_branch(API, "trunk", API_MAIN)
+    commit(WEB, SHORT, COMMIT)
+    compare(WEB, COMMIT, WEB_MAIN, "ahead")
+
+    # GitHub's answer for a prefix that names several commits.
+    @responses["/repos/#{API}/commits/#{SHORT}"] = [ 422, { "message" => "The SHA #{SHORT} is ambiguous" } ]
+    assert_equal({ SHORT => nil }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+    assert_equal({ SHORT => nil }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses], "an ambiguous answer is not cached as missing")
+
+    # Access to a private repository lost while the connection still says connected.
+    Rails.cache.clear
+    @responses.delete("/repos/#{API}")
+    @responses.delete("/repos/#{API}/commits/trunk")
+    @responses["/repos/#{API}/commits/#{SHORT}"] = [ 404, { "message" => "Not Found" } ]
+    assert_equal "connected", @connection.reload.status
+    assert_equal({ SHORT => nil }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+
+    # Only "No commit found" from a readable repository rules it out.
+    Rails.cache.clear
+    default_branch(API, "trunk", API_MAIN)
+    absent(API, SHORT)
+    assert_equal({ SHORT => "on_default" }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+  end
+
   test "a URL naming a repository is only asked of that repository, and an unknown one gets nothing" do
     repository(WEB, commit_badges: true)
     default_branch(WEB, "main", WEB_MAIN)
@@ -97,12 +126,13 @@ class CommitBadgesTest < ActiveSupport::TestCase
 
     statuses = CommitBadges.new(account: @account, user: @owner).lookup([ "acme/WEB@#{SHORT}", "other/repo@#{SHORT}" ])[:statuses]
 
-    assert_equal({ "#{WEB}@#{SHORT}" => "merged", "other/repo@#{SHORT}" => nil }, statuses)
+    assert_equal({ "#{WEB}@#{SHORT}" => "on_default", "other/repo@#{SHORT}" => nil }, statuses)
   end
 
   test "site admins keep deployed for the house repository alongside the account's" do
     repository(WEB, commit_badges: true)
     default_branch(WEB, "main", WEB_MAIN)
+    absent(WEB, SHORT)
     commit(HOUSE, SHORT, COMMIT)
     compare(HOUSE, COMMIT, DEPLOYED, "ahead")
 
@@ -161,6 +191,11 @@ class CommitBadgesTest < ActiveSupport::TestCase
   def commit(repo, ref, full)
     @responses["/repos/#{repo}/commits/#{ref}"] = [ 200, { "sha" => full } ]
     @responses["/repos/#{repo}/commits/#{full}"] = [ 200, { "sha" => full } ]
+  end
+
+  # What GitHub says when it can read the repository and it has no such commit.
+  def absent(repo, ref)
+    @responses["/repos/#{repo}/commits/#{ref}"] = [ 422, { "message" => "No commit found for SHA: #{ref}" } ]
   end
 
   def compare(repo, full, target, status)

@@ -39,6 +39,11 @@ class CommitStatus
   FACT_TTL = 30.days
   RESOLUTION_TTL = 1.hour
   MISSING_TTL = 10.minutes
+  NO_SUCH_COMMIT = "No commit found for SHA"
+  # An account's repository is measured against its default branch, whatever
+  # it is called, and never for deployment, so its answers have their own
+  # names rather than borrowing the house's "merged" (on master, not deployed).
+  DEFAULT_BRANCH_STATUSES = { "merged" => "on_default", "unmerged" => "off_default" }.freeze
   TIMEOUT = 3
 
   # ->(path, token: nil) { [code, body] }
@@ -123,10 +128,9 @@ class CommitStatus
   def status_of(full)
     return nil unless measurable?
 
-    case (status = placement(full))
-    when "unmerged" then landed_as(full) || status
-    else status
-    end
+    status = placement(full)
+    status = landed_as(full) || status if status == "unmerged"
+    @tracks_deploys ? status : DEFAULT_BRANCH_STATUSES[status]
   end
 
   def placement(full)
@@ -179,7 +183,11 @@ class CommitStatus
     resolution(sha).last
   end
 
-  # [presence, full sha]; see probe.
+  # [presence, full sha]; see probe. Only GitHub's "No commit found for SHA"
+  # (a 422 it gives only when it can read the repository) is proof that the
+  # repository has no such commit. Any other 422 (an ambiguous prefix, say)
+  # and every 404 (which is also what a repository the token can no longer
+  # read looks like) stay unknown, and are not cached.
   def resolution(sha)
     return [ :found, sha ] if sha.match?(FULL) && !@confirm_full
 
@@ -189,7 +197,7 @@ class CommitStatus
     return [ nil, nil ] unless budget?
 
     code, data = @fetch.call("/repos/#{@repo}/commits/#{sha}")
-    if [ 404, 422 ].include?(code)
+    if no_such_commit?(code, data)
       Rails.cache.write(key, "", expires_in: MISSING_TTL)
       return [ :missing, nil ]
     end
@@ -201,6 +209,10 @@ class CommitStatus
   rescue StandardError => e
     Rails.logger.warn("[CommitStatus] resolve #{sha}: #{e.class}: #{e.message}")
     [ nil, nil ]
+  end
+
+  def no_such_commit?(code, data)
+    code == 422 && data.is_a?(Hash) && data["message"].to_s.start_with?(NO_SUCH_COMMIT)
   end
 
   # true / false when GitHub answered for exactly these two commits; nil otherwise.

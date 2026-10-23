@@ -8,8 +8,9 @@
 # - Each repository the account has connected (WatchedRepository) with
 #   commit badges switched on, for anyone in the account, read with that
 #   GitHub connection's token. Nothing is known about what an account has
-#   deployed, so these are only ever merged (on the default branch) or
-#   unmerged; "deployed" is never claimed for them.
+#   deployed, so these are only ever "on_default" or "off_default" (on its
+#   default branch or not, whatever that branch is called); "deployed" and
+#   "master" are never claimed for them.
 #
 # A reference is either a bare sha ("51625a7") or a sha named in a commit URL
 # ("owner/name@51625a7"). A URL names its repository, so only that source is

@@ -22,7 +22,7 @@ const FRESH_MS = 3 * 60 * 1000;
 const UNKNOWN_RETRY_MS = 60 * 1000;
 const EXPIRE_MS = 6 * 60 * 1000;
 const TICK_MS = 30 * 1000;
-const KNOWN = ['deployed', 'merged', 'unmerged'];
+const KNOWN = ['deployed', 'merged', 'unmerged', 'on_default', 'off_default'];
 
 const entries = $state({}); // sha -> { status, at }
 let clock = $state(0);
