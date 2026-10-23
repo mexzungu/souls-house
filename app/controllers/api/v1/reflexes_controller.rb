@@ -13,7 +13,11 @@ module Api
       def index
         scope = current_api_agent.reflexes.order(:id)
         scope = scope.kept unless params[:include_discarded].to_s == "true"
-        render json: { reflexes: scope.map(&:as_json), enabled: ReflexCheck.enabled_for?(current_api_agent) }
+        render json: {
+          reflexes: scope.map(&:as_json),
+          enabled: ReflexCheck.enabled_for?(current_api_agent),
+          threshold: ReflexCheck::THRESHOLD
+        }
       end
 
       def create
