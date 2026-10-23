@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_22_224000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_23_070000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -47,6 +47,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_22_224000) do
     t.string "voice_embedding_profile", default: "ecapa-voxceleb-0f99f2d0ebe8-speechbrain-1.1.2-torch-2.14.1-v1", null: false
     t.string "voice_conversion_status"
     t.string "voice_conversion_error"
+    t.string "main_room_name"
+    t.text "main_room_description"
     t.index ["account_type"], name: "index_accounts_on_account_type"
     t.index ["disabled_at"], name: "index_accounts_on_disabled_at"
     t.index ["resident_room_id"], name: "index_accounts_on_resident_room_id"
