@@ -32,12 +32,14 @@ module Api
       end
 
       def update
-        unless [ true, false ].include?(params[:live])
+        given = params.except(:controller, :action, :id, :format, :reflex).keys
+        live = { true => true, false => false, "true" => true, "false" => false }[params[:live]]
+        if given != [ "live" ] || live.nil?
           return render json: { errors: [ "Only live (true or false) can change; to change a reflex's shape, discard it and write a new one" ] },
             status: :unprocessable_entity
         end
 
-        @reflex.update!(live: params[:live])
+        @reflex.update!(live: live)
         render json: { reflex: @reflex.as_json }
       end
 
