@@ -15,6 +15,7 @@
   import VoiceSamples from '$lib/components/field/VoiceSamples.svelte';
   import VoiceMerge from '$lib/components/field/VoiceMerge.svelte';
   import ForgetVoiceDialog from '$lib/components/field/ForgetVoiceDialog.svelte';
+  import VoiceDangerZone from '$lib/components/field/VoiceDangerZone.svelte';
   import AccountSettingsLayout from '$lib/components/accounts/AccountSettingsLayout.svelte';
   import { CaretLeft, MagnifyingGlass } from 'phosphor-svelte';
 
@@ -479,17 +480,7 @@
   </details>
 
   {#if anyRemembered || totalSamples > 0}
-    <details class="text-sm rounded-lg border border-destructive/30 p-3" data-testid="voices-danger-zone">
-      <summary class="cursor-pointer font-medium text-destructive">Danger zone</summary>
-      <div class="mt-2 space-y-2">
-        <p class="text-muted-foreground">
-          Forget every learned voice print and every sample in this Field, with the reviews given to them. Names on
-          transcripts stay. Turning the switch above off is not this: it keeps everything.
-        </p>
-        <Button variant="destructive" size="sm" onclick={forgetAll} data-testid="voices-forget-all"
-          >Forget all voices…</Button>
-      </div>
-    </details>
+    <VoiceDangerZone onforget={forgetAll} />
   {/if}
 
   <ForgetVoiceDialog
