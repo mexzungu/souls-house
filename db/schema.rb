@@ -2629,6 +2629,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_23_090000) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.bigint "created_by_agent_id"
+    t.boolean "commit_badges", default: false, null: false
     t.index ["account_id", "provider", "full_name"], name: "index_watched_repositories_on_live_full_name", unique: true, where: "(removed_at IS NULL)"
     t.index ["account_id"], name: "index_watched_repositories_on_account_id"
     t.index ["created_by_agent_id"], name: "index_watched_repositories_on_created_by_agent_id"

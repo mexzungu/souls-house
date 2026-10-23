@@ -157,7 +157,8 @@ Rails.application.routes.draw do
       end
     end
     # Repository watches on the Integrations page's GitHub card.
-    resources :watched_repositories, path: "repositories", only: [ :create, :destroy ], module: :accounts
+    resources :watched_repositories, path: "repositories", only: [ :create, :update, :destroy ], module: :accounts
+    resources :commit_statuses, only: :index, module: :accounts
     resources :repository_watches, path: "watches", only: :destroy, module: :accounts
     resources :github_resident_imports, only: [ :new, :create, :show ] do
       post :approve, on: :member
@@ -292,7 +293,6 @@ Rails.application.routes.draw do
   namespace :admin do
     resource :dashboard, only: :show
     resource :deploy_info, only: :show
-    resources :commit_statuses, only: :index
     resources :deploys, only: [ :index, :create ] do
       get :status, on: :collection
     end
