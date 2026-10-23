@@ -11,11 +11,13 @@ class HouseDeployTest < ActiveSupport::TestCase
     HouseDeploy.transport = ->(method, path, body) { calls << [ method, path, body ]; test.instance_variable_get(:@reply) }
     @original_token_source = HouseDeploy.token_source
     HouseDeploy.token_source = -> { "github_pat_test" }
+    @original_deployed = HouseDeploy.deployed_version_source
   end
 
   teardown do
     HouseDeploy.transport = @original_transport
     HouseDeploy.token_source = @original_token_source
+    HouseDeploy.deployed_version_source = @original_deployed
   end
 
   test "dispatch posts to the workflow pinned to master" do
@@ -285,6 +287,51 @@ class HouseDeployTest < ActiveSupport::TestCase
     @calls.clear
     assert_nil HouseDeploy.deploying?
     assert_empty @calls
+  end
+
+  # Master is 7591bb2..., live is 8d7edfc..., CI on master is in the given state.
+  def next_deploy_with(ci_runs:, automatic: [], ci_status: 200, live: "8d7edfc" + "0" * 33)
+    master = "7591bb2" + "1" * 33
+    HouseDeploy.deployed_version_source = -> { live }
+    HouseDeploy.transport = ->(_method, path, _body) {
+      if path.end_with?("/commits/master")
+        [ 200, {}, { "sha" => master, "html_url" => "https://github.com/c/#{master}",
+                     "commit" => { "message" => "Added stripe credentials\n\nmore" } } ]
+      elsif path.include?("ci.yml/runs")
+        assert_includes path, "head_sha=#{master}"
+        [ ci_status, {}, { "workflow_runs" => ci_runs } ]
+      elsif path.include?("deploy-rails-on-green.yml/runs")
+        [ 200, {}, { "workflow_runs" => automatic } ]
+      else
+        [ 200, {}, { "workflow_runs" => [] } ]
+      end
+    }
+    HouseDeploy.status[:next]
+  end
+
+  test "next deploy: master ahead of live and CI still running says it deploys when green" do
+    upcoming = next_deploy_with(ci_runs: [ { "status" => "in_progress", "html_url" => "https://ci/1" } ])
+
+    assert_equal "7591bb2", upcoming[:head_sha]
+    assert_equal "Added stripe credentials", upcoming[:message]
+    assert_equal "waiting_ci", upcoming[:state]
+    assert_equal "https://ci/1", upcoming[:url]
+  end
+
+  test "next deploy: CI not listed yet is still waiting; green is starting; red and cancelled won't deploy" do
+    assert_equal "waiting_ci", next_deploy_with(ci_runs: [])[:state]
+    assert_equal "starting", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "success" } ])[:state]
+    assert_equal "ci_failed", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "failure" } ])[:state]
+    assert_equal "ci_cancelled", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "cancelled" } ])[:state]
+    assert_equal "ci_unknown", next_deploy_with(ci_runs: [], ci_status: 500)[:state]
+  end
+
+  test "next deploy: nothing when live is master, when its automatic run is listed, or when live is unknown" do
+    assert_nil next_deploy_with(ci_runs: [], live: "7591bb2" + "1" * 33)
+    assert_nil next_deploy_with(ci_runs: [], live: nil)
+    listed = { "id" => 30, "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "in_progress",
+               "display_title" => "Deploy Rails #{"7591bb2" + "1" * 33}", "created_at" => "2026-10-23T19:30:00Z" }
+    assert_nil next_deploy_with(ci_runs: [], automatic: [ listed ])
   end
 
 end
