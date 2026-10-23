@@ -21,7 +21,8 @@ class ReflexCheckJob < ApplicationJob
     return unless check
     return if Reflex::Judgment.where(message_id: message_id, reflex_id: check.reflexes.map(&:id)).where.not(score: nil).count == check.reflexes.size
 
-    check.call(raise_errors: true)
+    # Off the post path there is no response to carry a cue: never offer.
+    check.call(raise_errors: true, offer: false)
   end
 
   def record_failure(message_id)

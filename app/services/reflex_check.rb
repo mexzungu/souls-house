@@ -60,12 +60,14 @@ class ReflexCheck
   # Judges and records; returns the cues for live reflexes at or above the
   # threshold. With raise_errors, a classifier failure propagates (for the
   # job's retries) after nothing is recorded; without, it is recorded as
-  # unscored rows and answers no cues.
-  def call(timeout: UtilityInference::REQUEST_TIMEOUT, raise_errors: false)
+  # unscored rows and answers no cues. With offer: false (the job), nothing
+  # is offered or marked offered, even if a reflex went live after the post:
+  # a cue only exists in the post's own response.
+  def call(timeout: UtilityInference::REQUEST_TIMEOUT, raise_errors: false, offer: true)
     return [] if reflexes.empty?
 
     scores = judge(timeout)
-    record(scores)
+    record(scores, offer: offer)
   rescue UtilityInference::Error => error
     raise if raise_errors
 
@@ -94,8 +96,8 @@ class ReflexCheck
     UtilityInference.decide(state: state, questions: questions, timeout: timeout)
   end
 
-  def record(scores)
-    offered = reflexes.select { |reflex| reflex.live? && scores.fetch(reflex.to_param) >= THRESHOLD }
+  def record(scores, offer:)
+    offered = offer ? reflexes.select { |reflex| reflex.live? && scores.fetch(reflex.to_param) >= THRESHOLD } : []
     write(reflexes.map { |reflex| row(reflex, scores.fetch(reflex.to_param), offered.include?(reflex)) })
     offered.map { |reflex| Cue.new(id: reflex.to_param, name: reflex.name, reminder: reflex.reminder) }
   end

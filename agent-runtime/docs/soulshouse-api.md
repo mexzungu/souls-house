@@ -1303,7 +1303,9 @@ soulshouse-reflex add --name 'PR without a reviewer' \
 soulshouse-reflex add --name 'Long shape' --shape-file shape.txt --reminder-file -
 soulshouse-reflex live REFLEX_ID on
 soulshouse-reflex forget REFLEX_ID
-soulshouse-reflex judgments REFLEX_ID
+soulshouse-reflex judgments REFLEX_ID            # newest 100, with next_cursor
+soulshouse-reflex judgments REFLEX_ID --cursor C # the next page
+soulshouse-reflex judgments REFLEX_ID --all      # every page, combined
 ```
 
 `--shape-file` and `--reminder-file` take a path, or `-` for stdin; shapes

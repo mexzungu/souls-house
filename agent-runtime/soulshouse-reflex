@@ -12,13 +12,15 @@ Usage:
   soulshouse-reflex add --name NAME --shape-file PATH --reminder-file PATH
   soulshouse-reflex live ID on|off
   soulshouse-reflex forget ID
-  soulshouse-reflex judgments ID
+  soulshouse-reflex judgments ID [--cursor CURSOR | --all]
 
 `--shape-file` / `--reminder-file` take a path, or '-' for stdin, since a
 shape can run long and hold quotes a shell would mangle. A reflex is born
 not live: judged and recorded, never offered, until `live ID on`. `shape`
 is immutable once written; `forget` the reflex and add a new one instead.
-JSON responses are printed to stdout as-is.
+JSON responses are printed to stdout as-is. `judgments` returns 100 at a
+time, newest first, with `next_cursor`; pass it back with `--cursor`, or use
+`--all` to follow every page and print one combined `{"judgments": [...]}`.
 
 Requires SOULSHOUSE_APP_URL and SOULSHOUSE_BEARER_TOKEN (HELIXKIT_ fallbacks
 accepted). Never prints the token.
@@ -69,6 +71,33 @@ def _quote(reflex_id: str) -> str:
     return urllib.parse.quote(reflex_id, safe="")
 
 
+def judgments_path(reflex_id, cursor=None):
+    path = f"/api/v1/reflexes/{_quote(reflex_id)}/judgments"
+    if cursor:
+        path += "?" + urllib.parse.urlencode({"cursor": cursor})
+    return path
+
+
+def _get_json(app_url, token, path):
+    url = f"{app_url.rstrip('/')}{path}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def all_judgments(fetch, reflex_id, cursor=None, max_pages=1000):
+    """Follows next_cursor until it runs out. `fetch(path)` returns parsed JSON."""
+    judgments = []
+    for _ in range(max_pages):
+        page = fetch(judgments_path(reflex_id, cursor))
+        judgments.extend(page.get("judgments", []))
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
+    return {"judgments": judgments}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="soulshouse-reflex",
@@ -103,6 +132,9 @@ def main() -> int:
 
     judgments_parser = subparsers.add_parser("judgments", help="read a reflex's judgment history")
     judgments_parser.add_argument("id")
+    paging = judgments_parser.add_mutually_exclusive_group()
+    paging.add_argument("--cursor", help="the next_cursor from a previous page")
+    paging.add_argument("--all", action="store_true", help="follow every page and print them together")
 
     args = parser.parse_args()
 
@@ -137,8 +169,18 @@ def main() -> int:
         return _request(app_url, token, path, "DELETE")
 
     if args.command == "judgments":
-        path = f"/api/v1/reflexes/{_quote(args.id)}/judgments"
-        return _request(app_url, token, path, "GET")
+        if args.all:
+            try:
+                print(json.dumps(all_judgments(lambda path: _get_json(app_url, token, path), args.id)))
+                return 0
+            except urllib.error.HTTPError as error:
+                print(f"souls.house returned HTTP {error.code}", file=sys.stderr)
+                print(error.read().decode("utf-8", errors="replace"), file=sys.stderr)
+                return 1
+            except Exception as error:
+                print(f"souls.house request failed: {error}", file=sys.stderr)
+                return 1
+        return _request(app_url, token, judgments_path(args.id, args.cursor), "GET")
 
     return 1
 

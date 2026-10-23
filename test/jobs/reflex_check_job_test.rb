@@ -26,6 +26,33 @@ class ReflexCheckJobTest < ActiveSupport::TestCase
     assert rows.all? { |r| r.score == 0.9 && !r.offered }
   end
 
+  test "a reflex switched live after the post is judged but never offered by the job" do
+    @first.update!(live: true)
+    result = nil
+    UtilityInference.stub :decide, ->(questions:, **) { questions.keys.index_with(0.95) } do
+      result = ReflexCheckJob.new(@message.id).perform(@message.id)
+    end
+    assert_equal [], Array(result)
+    rows = Reflex::Judgment.where(message: @message)
+    assert_equal 2, rows.count
+    assert rows.all? { |r| r.score == 0.95 && !r.offered }
+  end
+
+  test "a retry after the reflex went live still offers nothing" do
+    attempts = 0
+    UtilityInference.stub :decide, ->(questions:, **) {
+      attempts += 1
+      raise UtilityInference::InvalidResponse, "bad" if attempts == 1
+      questions.keys.index_with(0.95)
+    } do
+      assert_raises(UtilityInference::InvalidResponse) { ReflexCheckJob.new(@message.id).perform(@message.id) }
+      @first.update!(live: true)
+      ReflexCheckJob.new(@message.id).perform(@message.id)
+    end
+    assert_equal 2, attempts
+    assert Reflex::Judgment.where(message: @message).all? { |r| r.score == 0.95 && !r.offered }
+  end
+
   test "an invalid response is retried and records nothing until the attempts run out" do
     UtilityInference.stub :decide, ->(**) { raise UtilityInference::InvalidResponse, "bad" } do
       assert_enqueued_with(job: ReflexCheckJob, args: [ @message.id ]) do
