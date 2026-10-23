@@ -5,6 +5,13 @@ the voice fingerprinting, applying the voice fingerprinting, and also improving
 the fingerprints over time"); engine chosen by Daniel the same day: ECAPA, run
 in the house. Draft for Mira's review. Nothing here is built.*
 
+**Engine-choice update, 2026-10-22:** Daniel authorised switching to WeSpeaker
+for efficiency; [ADR 0006](decisions/0006-wespeaker-voice-embeddings.md) records
+the research, migration safeguards and separate implementation/review gates.
+That decision supersedes this document's ECAPA choice, not its other safeguards;
+it is not a claim that WeSpeaker is deployed. The dated design below is retained
+as implementation history.
+
 ## 1. Where things stand (checked in prod, 2026-10-19)
 
 - The house's own recognition (spec 2026-10-08 §9, pyannote) has never run:

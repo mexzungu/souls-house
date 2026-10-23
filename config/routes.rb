@@ -139,6 +139,7 @@ Rails.application.routes.draw do
     resources :visual_tags, only: [ :create, :update, :destroy ], module: :accounts
     resources :rooms, only: [ :index, :create, :update, :destroy ], module: :accounts
     resource :resident_room, only: :update, module: :accounts
+    resource :main_room, only: :update, module: :accounts
     resource :room_model_default, only: :update, module: :accounts
     resources :service_authorizations, only: :create
     resources :service_connections, only: [ :create, :update, :destroy ], module: :accounts do
@@ -273,6 +274,7 @@ Rails.application.routes.draw do
       delete :forget_all, on: :collection, path: "prints"
       post :prepare_samples, on: :collection
       patch :recognition, on: :collection
+      post :retry_conversion, on: :collection
     end
     resources :whiteboards, only: [ :index, :create, :update, :destroy ] do
       resources :versions, only: [ :index, :show ], controller: "whiteboard_versions"
@@ -461,6 +463,7 @@ Rails.application.routes.draw do
           resource :safeguard_reset, only: :create
         end
         resource :agent_trigger, only: :create
+        resource :quiet_reason, only: :create
         resource :model, only: [ :show, :create ], controller: "conversation_models"
         resources :participants, only: :create
         resource :archive, only: [ :create, :destroy ], controller: "conversation_archives"
