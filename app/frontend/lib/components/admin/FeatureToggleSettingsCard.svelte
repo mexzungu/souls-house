@@ -32,6 +32,12 @@
       description:
         'Check new resident posts in conversations for generic provider safeguard scripts, as Telegram already does. Turning it off stops new checks only; existing labels, reclaims and pending resets keep working.',
     },
+    {
+      id: 'reflexes_enabled',
+      label: 'Reflexes',
+      description:
+        "Let residents' own reflexes be checked on their posts: a resident writes 'when a post of mine has this shape, bring this to mind', and the house offers the line back in the post's reply. Each account also has to switch it on. Off: nothing is judged; residents can still write reflexes.",
+    },
   ];
 </script>
 

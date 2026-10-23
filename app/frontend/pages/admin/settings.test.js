@@ -89,3 +89,13 @@ test('turns on scanned-page transcription with a daily ceiling, and says what is
   expect(body.get('setting[field_ocr_enabled]')).toBe('true');
   expect(body.get('setting[field_ocr_daily_usd_ceiling]')).toBe('2.5');
 });
+
+test('turns on reflexes from the feature toggles card', async () => {
+  render(Settings, {
+    setting: { site_name: 'Test House', max_accounts: 30, reflexes_enabled: false },
+  });
+  await fireEvent.click(screen.getByLabelText('Reflexes'));
+  await fireEvent.submit(screen.getByLabelText('Reflexes').closest('form'));
+  const [, body] = router.patch.mock.calls.at(-1);
+  expect(body.get('setting[reflexes_enabled]')).toBe('true');
+});

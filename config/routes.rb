@@ -441,6 +441,9 @@ Rails.application.routes.draw do
       get "streams/:stream_key/sessions/:session_id", to: "streams#show_session"
       post "runtime_runs/:run_id/events", to: "runtime_events#create"
       get "agent/bookmarks", to: "agent_bookmarks#index", as: :agent_bookmarks
+      resources :reflexes, only: %i[index create update destroy] do
+        resources :judgments, only: :index, module: :reflexes
+      end
       patch "agent/activity_preferences", to: "agents#activity_preferences"
       get "agent/github_import_approval", to: "github_import_approvals#show"
       namespace :memory do
