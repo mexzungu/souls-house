@@ -50,7 +50,10 @@ class CommitStatus
   class_attribute :fetcher, default: ->(path, token: nil) { CommitStatus.github_get(path, token:) }
 
   # Returns [http_status, parsed_body]; raises on network failure. A token
-  # reaches private repositories and the authenticated rate limit.
+  # reaches private repositories and the authenticated rate limit. An error's
+  # JSON body is kept too: telling "No commit found for SHA" (a readable
+  # repository without the commit) from other 422s depends on its message.
+  # A body that isn't JSON is nil.
   def self.github_get(path, token: nil)
     uri = URI("https://api.github.com#{path}")
     request = Net::HTTP::Get.new(uri)
@@ -60,8 +63,15 @@ class CommitStatus
     response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true, open_timeout: TIMEOUT, read_timeout: TIMEOUT) do |http|
       http.request(request)
     end
-    body = response.is_a?(Net::HTTPSuccess) ? JSON.parse(response.body) : nil
-    [ response.code.to_i, body ]
+    [ response.code.to_i, parse_body(response) ]
+  end
+
+  def self.parse_body(response)
+    JSON.parse(response.body.to_s)
+  rescue JSON::ParserError
+    raise if response.is_a?(Net::HTTPSuccess)
+
+    nil
   end
 
   def self.lookup(shas, summary: DeployInfo.summary)

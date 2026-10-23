@@ -1,4 +1,5 @@
 require "test_helper"
+require "webmock/minitest"
 
 class CommitBadgesTest < ActiveSupport::TestCase
 
@@ -116,6 +117,27 @@ class CommitBadgesTest < ActiveSupport::TestCase
     default_branch(API, "trunk", API_MAIN)
     absent(API, SHORT)
     assert_equal({ SHORT => "on_default" }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+  end
+
+  test "through the real GitHub adapter, a readable repository's \"No commit found\" lets another repository's bare sha be badged" do
+    CommitStatus.fetcher = @original_fetcher
+    repository(WEB, commit_badges: true)
+    repository(API, commit_badges: true)
+    api = "https://api.github.com/repos"
+    json = ->(status, body) { { status:, body: body.to_json, headers: { "Content-Type" => "application/json" } } }
+    stub_request(:get, "#{api}/#{WEB}").to_return(json.(200, default_branch: "main"))
+    stub_request(:get, "#{api}/#{WEB}/commits/main").to_return(json.(200, sha: WEB_MAIN))
+    stub_request(:get, "#{api}/#{WEB}/commits/#{SHORT}").to_return(json.(200, sha: COMMIT))
+    stub_request(:get, "#{api}/#{WEB}/compare/#{COMMIT}...#{WEB_MAIN}").to_return(json.(200, status: "ahead", base_commit: { sha: COMMIT }))
+    stub_request(:get, "#{api}/#{API}").to_return(json.(200, default_branch: "trunk"))
+    stub_request(:get, "#{api}/#{API}/commits/trunk").to_return(json.(200, sha: API_MAIN))
+    stub_request(:get, "#{api}/#{API}/commits/#{SHORT}").to_return(json.(422, message: "No commit found for SHA: #{SHORT}"))
+
+    assert_equal({ SHORT => "on_default" }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
+
+    Rails.cache.clear
+    stub_request(:get, "#{api}/#{API}/commits/#{SHORT}").to_return(json.(422, message: "The SHA #{SHORT} is ambiguous"))
+    assert_equal({ SHORT => nil }, CommitBadges.new(account: @account, user: @owner).lookup([ SHORT ])[:statuses])
   end
 
   test "a URL naming a repository is only asked of that repository, and an unknown one gets nothing" do
