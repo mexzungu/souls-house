@@ -103,7 +103,7 @@ class GithubResidentImportsController < ApplicationController
       retry_activation_url: can_manage_import ? retry_activation_account_github_resident_import_path(current_account, @import) : nil,
       can_approve: can_manage_import,
       future_branch_trust_notice: GithubResidentImport::FUTURE_BRANCH_TRUST_NOTICE,
-      runtime_trust_notice: GithubResidentImport::RUNTIME_TRUST_NOTICE
+      runtime_trust_notice: @import ? @import.runtime_trust_notice : GithubResidentImport::RUNTIME_TRUST_NOTICE
     }
   end
 

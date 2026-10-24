@@ -21,6 +21,10 @@ class ProvisionVmAgentJob < ApplicationJob
   class_attribute :procurement_factory, default: -> { CloudProcurement.from_credentials }
   SEED_ATTEMPTS = 3
   BACKUP_ATTEMPTS = 3
+  TRUST_CHECK_ATTEMPTS = 3
+  TRUST_RELEASED = "Its server was released after waiting #{Agents::VmBirthPolicy::BIRTH_DEADLINE.in_minutes.to_i} minutes " \
+                   "for runtime trust. Its reviewed home is kept: Retry activation orders a new server, and trust " \
+                   "must be granted on that one.".freeze
 
   class Failed < StandardError; end
 
@@ -54,7 +58,10 @@ class ProvisionVmAgentJob < ApplicationJob
 
   def advance(agent_id)
     agent = Agent.find_by(id: agent_id)
-    return :done if agent.nil? || agent.runtime_ready_at.present?
+    return :done if agent.nil?
+    if agent.runtime_ready_at.present?
+      return reapproval_pending?(agent) ? reapprove!(agent) : :done
+    end
 
     placement = Agents::RemoteRuntime.placement_for(agent)
     return :done unless placement&.vm_birth?
@@ -65,7 +72,8 @@ class ProvisionVmAgentJob < ApplicationJob
     end
 
     step!(agent, placement)
-  rescue Failed, CloudProcurement::NotAllowed, Agents::VmSeed::Unavailable, Agents::RemoteRuntime::Unavailable => e
+  rescue Failed, CloudProcurement::NotAllowed, Agents::VmSeed::Unavailable, Agents::RemoteRuntime::Unavailable,
+         Agent::RuntimeAvailability::Unavailable => e
     fail_birth!(agent, placement, e.message)
     :failed
   rescue StandardError => e
@@ -83,6 +91,7 @@ class ProvisionVmAgentJob < ApplicationJob
     return :wait unless server_ready?(placement)
     return :wait unless enrolled?(placement)
     return :wait unless seeded?(agent)
+    return :wait unless github_import?(placement) ? trusted?(agent, placement) : true
     return :wait unless started?(agent, placement)
     return :wait unless backed_up?(placement)
 
@@ -128,6 +137,100 @@ class ProvisionVmAgentJob < ApplicationJob
       raise Failed, "the home could not be seeded (#{status.error})"
     end
     false
+  end
+
+  # A GitHub import starts only once Chaos in its own runtime home trusts it
+  # (docs/2026-10-10-vm-imports.md, points 4 and 5): the same check the house
+  # runs locally, run by the runner. Untrusted, it waits with its server in
+  # needs_runtime_trust, inactive and paused, for a person to grant trust on
+  # Chaos's own screen there and retry; the deadline bounds that paid wait.
+  # Nothing about trust is inferred here: only the runner's "trusted" counts.
+  def trusted?(agent, placement)
+    checks = RunnerCommand.where(agent_placement_id: placement.id, kind: "check_runtime_trust", generation: placement.generation)
+    last = checks.order(:id).last
+    if last.nil?
+      Agents::RemoteRuntime.check_runtime_trust!(agent)
+      return false
+    end
+
+    request = agent.github_resident_import
+    case Agents::RemoteRuntime.runtime_trust_outcome(last)
+    when :trusted
+      request.update!(status: "provisioning", last_error: nil) if request.status == "needs_runtime_trust"
+      true
+    when :pending then false
+    when :untrusted
+      unless request.status == "needs_runtime_trust"
+        request.update!(status: "needs_runtime_trust", last_error: nil)
+        agent.update_columns(active: false, paused: true, runtime: "offline", updated_at: Time.current)
+      end
+      false
+    when :unsupported then raise Failed, "its runtime image does not support managed GitHub imports"
+    else
+      raise Failed, "the runtime trust check failed (#{last.result&.dig('error') || last.state})" if checks.count >= TRUST_CHECK_ATTEMPTS
+
+      Agents::RemoteRuntime.check_runtime_trust!(agent)
+      false
+    end
+  end
+
+  # A ready GitHub import approved again (GithubResidentImportJob sent a
+  # fresh trust check). As on the house: trusted, the runtime is refreshed
+  # with the approved values between turns (begin_refresh!, the credential
+  # and service restart) and the request is ready again; not trusted, the
+  # request waits in needs_runtime_trust and the resident is paused. A
+  # refresh refused as busy is tried again by the next sweep. Nothing here
+  # fails the birth or touches its server's lifecycle.
+  def reapproval_pending?(agent)
+    placement = Agents::RemoteRuntime.placement_for(agent)
+    github_import?(placement) && placement.state == "ready" && agent.github_resident_import&.status == "provisioning"
+  end
+
+  def reapprove!(agent)
+    placement = Agents::RemoteRuntime.placement_for(agent)
+    request = agent.github_resident_import
+    last = RunnerCommand.where(agent_placement_id: placement.id, kind: "check_runtime_trust", generation: placement.generation)
+      .order(:id).last
+    case last && Agents::RemoteRuntime.runtime_trust_outcome(last)
+    when :pending then :wait
+    when :trusted
+      request.require_approval!
+      # Ready only once the restart carrying the approved values is
+      # confirmed, as the house's own recreate is done before it says ready.
+      refreshing = RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident", generation: placement.generation)
+        .where("id > ?", last.id).exists?
+      unless refreshing
+        return :wait if Agents::RemoteRuntime.begin_refresh!(agent) == :busy
+
+        RemoteRefreshSettleJob.set(wait: RemoteRefreshSettleJob::RECHECK_AFTER).perform_later(placement.id)
+        return :wait
+      end
+      case Agents::RemoteRuntime.settle_refresh!(placement)
+      when :done
+        agent.update_columns(active: true, paused: false, updated_at: Time.current)
+        request.update!(status: "ready", last_error: nil)
+        :done
+      when :held
+        # Its turns stay held by the refresh (an operator can release it).
+        request.update!(status: "failed", last_error: "Its runtime restart with the newly approved values did not " \
+                                                    "settle: #{placement.reload.refresh_last_error.presence || 'no detail'}".first(1000))
+        :done
+      else :wait
+      end
+    when :untrusted
+      agent.update_columns(active: false, paused: true, updated_at: Time.current)
+      request.update!(status: "needs_runtime_trust", last_error: nil)
+      :done
+    else
+      agent.update_columns(active: false, paused: true, updated_at: Time.current)
+      request.update!(status: "failed", last_error: "The runtime trust check on its server did not answer trusted " \
+                                                  "(#{last&.result&.dig('error') || last&.result&.dig('result', 'trust') || 'no check'}).")
+      :done
+    end
+  rescue Agent::RuntimeAvailability::Unavailable => e
+    agent.update_columns(active: false, paused: true, updated_at: Time.current)
+    request&.update!(status: "failed", last_error: e.message.to_s.first(1000))
+    :done
   end
 
   # The placement becomes ready only now, after a seeded home, and the start
@@ -205,9 +308,10 @@ class ProvisionVmAgentJob < ApplicationJob
     attributes = { runtime: "external", health_state: "healthy", consecutive_health_failures: 0,
       runtime_ready_at: now, identity_seeded_at: agent.identity_seeded_at || now,
       sandbox_last_error: nil, sandbox_last_error_at: nil }
-    if archive_import?(agent)
+    if archive_import?(agent) || github_import?(agent.placement)
       # Direct columns, as the local activation does: no model-change orientation callbacks.
       agent.update_columns(attributes.merge(active: true, paused: false, scheduled_wakes_enabled: false, updated_at: now))
+      agent.github_resident_import&.update!(status: "ready", last_error: nil)
       HomeResidentRoster.refresh!([ agent.account_id ])
     else
       agent.update!(attributes)
@@ -216,6 +320,7 @@ class ProvisionVmAgentJob < ApplicationJob
   end
 
   def archive_import?(agent) = Agents::RemoteRuntime.placement_for(agent)&.kind == "archive_import"
+  def github_import?(placement) = placement&.kind == "github_import"
 
   # The birth stops here: no start, no orientation. The resident keeps its
   # record and says why; the server goes to cleanup, which keeps it counted
@@ -227,6 +332,19 @@ class ProvisionVmAgentJob < ApplicationJob
       # Still inactive and paused, its stage kept; Activate can be asked again.
       agent.update!(runtime: "offline", health_state: "unhealthy",
         sandbox_last_error: "Activation on its own server failed: #{reason}".first(1000), sandbox_last_error_at: Time.current)
+    elsif github_import?(placement)
+      # Inactive and paused, its reviewed home and import record kept. Waiting
+      # for trust past the deadline is not a failure of the import: it keeps
+      # its retry; anything else fails it, plainly.
+      agent.update_columns(active: false, paused: true, runtime: "offline", health_state: "unhealthy",
+        sandbox_last_error: "Starting on its own server failed: #{reason}".first(1000), sandbox_last_error_at: Time.current,
+        updated_at: Time.current)
+      request = agent.github_resident_import
+      if request&.status == "needs_runtime_trust"
+        request.update!(last_error: TRUST_RELEASED)
+      elsif request
+        request.update!(status: "failed", last_error: "Starting on its own server failed: #{reason}".first(1000))
+      end
     else
       agent.update!(health_state: "unhealthy", sandbox_last_error: "VM birth failed: #{reason}".first(1000),
         sandbox_last_error_at: Time.current)

@@ -53,6 +53,18 @@ class Api::V1::HostRunner::SeedsControllerTest < ActionDispatch::IntegrationTest
     assert_response :not_found
   end
 
+  test "a GitHub import's staged identity is served by its digest to its own runner" do
+    @placement.update!(kind: "github_import")
+    @agent.update_columns(home_profile: "portable_v1", portable_home_id: "synthetic-portable-home")
+    bytes = Zlib.gzip("reviewed home")
+    stage = @agent.import_stages.create!(role: "identity", archive: bytes, sha256: Digest::SHA256.hexdigest(bytes), bytes: bytes.bytesize)
+    Agents::VmSeed.new(@agent.reload).issue!.deliver!(now: Time.current)
+    fetch(stage.sha256)
+    assert_response :ok
+    assert_equal bytes, response.body.b
+    assert_nil @placement.reload.seed_archive, "a GitHub import is never seeded from a house-built birth archive"
+  end
+
   test "a digest nobody asked for is not served and spends no nonce" do
     issue
     assert_no_difference -> { RunnerRequestNonce.count } do
