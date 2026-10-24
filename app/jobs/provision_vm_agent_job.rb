@@ -90,10 +90,13 @@ class ProvisionVmAgentJob < ApplicationJob
     :done
   end
 
-  # One purchase per birth. A refusal or anything an operator must look at
-  # fails the birth; cleanup then reconciles whatever might exist.
+  # One purchase per birth, or per attempt of a retried activation: only a
+  # purchase made for the placement's current generation counts, so the last
+  # attempt's deleted server is never read as this one's. A refusal or
+  # anything an operator must look at fails the birth; cleanup then
+  # reconciles whatever might exist.
   def server_ready?(placement)
-    operation = placement.cloud_procurement_operations.order(:id).last ||
+    operation = placement.cloud_procurement_operations.where(placement_generation: placement.generation).order(:id).last ||
       procurement.plan_for_vm_birth!(placement:)
 
     case operation.reload.state

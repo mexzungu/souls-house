@@ -98,13 +98,7 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
     client = @client
     config = @config
     ProvisionVmAgentJob.procurement_factory = -> { CloudProcurement.new(client:, config:, renderer:) }
-    @client.on_create = lambda do |kwargs|
-      server = fake_server(id: 4242, status: "initializing", name: kwargs[:name], placement_id: kwargs[:placement_id],
-        operation_id: kwargs[:labels][HetznerCloudClient::OPERATION_LABEL], location: kwargs[:location])
-      @client.servers[server.id] = server
-      @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "running", error_code: nil)
-      HetznerCloudClient::Created.new(server:, action_id: 77, action_status: "running")
-    end
+    serve_creates_as(4242)
     @backups = FakeBackups.new
     @previous_env = %w[SOULSHOUSE_DOMAIN HOUSE_INFERENCE_OPENROUTER_API_KEY].to_h { |key| [ key, ENV[key] ] }
     ENV["SOULSHOUSE_DOMAIN"] = "souls.example"
@@ -114,6 +108,19 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
   teardown do
     ProvisionVmAgentJob.procurement_factory = -> { CloudProcurement.from_credentials }
     @previous_env.each { |key, value| ENV[key] = value }
+  end
+
+  # The next create answers with this server id. A retried activation buys a
+  # new server, which the provider gives a new id.
+  def serve_creates_as(server_id)
+    @server_id = server_id
+    @client.on_create = lambda do |kwargs|
+      server = fake_server(id: server_id, status: "initializing", name: kwargs[:name], placement_id: kwargs[:placement_id],
+        operation_id: kwargs[:labels][HetznerCloudClient::OPERATION_LABEL], location: kwargs[:location])
+      @client.servers[server.id] = server
+      @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "running", error_code: nil)
+      HetznerCloudClient::Created.new(server:, action_id: 77, action_status: "running")
+    end
   end
 
   def fake_server(id:, status:, name:, placement_id:, operation_id:, location:)
@@ -175,13 +182,13 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
 
   def boot_and_enroll!(agent)
     @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "success", error_code: nil)
-    @client.servers[4242] = @client.servers[4242].with(status: "running")
+    @client.servers[@server_id] = @client.servers[@server_id].with(status: "running")
     run_job(agent)
     assert_equal "provisioned", operation(agent).state
     enrollment = operation(agent).runner_enrollment
-    enrollment.enroll!(token: @tokens.last, public_key: Base64.strict_encode64("k" * 32), reported_server_id: 4242,
+    enrollment.enroll!(token: @tokens.last, public_key: Base64.strict_encode64("k" * 32), reported_server_id: @server_id,
       facts: {}, nonce: SecureRandom.hex(16))
-    enrollment.heartbeat!(reported_server_id: 4242, facts: {}, nonce: SecureRandom.hex(16))
+    enrollment.heartbeat!(reported_server_id: @server_id, facts: {}, nonce: SecureRandom.hex(16))
   end
 
   test "a whole birth: order, enroll, seed, start, verified backup, and only then dispatchable" do
@@ -320,6 +327,208 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       assert_equal 0, RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "seed_home").count
       assert_not agent.active?
       assert_equal 3, agent.import_stages.count
+    end
+  end
+
+  # Seeds every role of the current generation and answers them done.
+  def seed_all!(placement)
+    seeds = RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: placement.reload.generation).order(:id)
+    assert_equal %w[identity repo work], seeds.map(&:seed_role)
+    seeds.each { |command| command.deliver!(now: Time.current); command.record_result!({ "outcome" => "done" }, now: Time.current) }
+    seeds
+  end
+
+  def roles_enrolled!(agent)
+    operation(agent).runner_enrollment.update!(last_facts: { "seed_roles" => AgentImportStage::ROLES })
+  end
+
+  test "past its deadline an activation fails and releases its server; Activate again buys one new server and finishes" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      first_seeds = seed_all!(placement)
+      staged_digests = agent.import_stages.order(:role).pluck(:role, :sha256)
+
+      travel 46.minutes do
+        assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+        assert_match(/\AActivation on its own server failed: .*deadline/, agent.sandbox_last_error)
+        assert_equal "failed", placement.reload.state
+        assert_not agent.active?
+        assert agent.paused?
+
+        # Its server is not yet confirmed gone: the retry is refused, nothing bought.
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::STILL_RELEASING, error.message
+        assert_equal 1, @client.creates.size
+        assert_equal 1, policy.vm_count, "the slot is held until deletion is confirmed"
+
+        VmCleanupJob.perform_now(placement.id)
+        assert_equal [ [ 4242, placement.id.to_s ] ], @client.deletes
+        assert_equal "deleted", operation(agent).state
+        assert_equal "retired", placement.reload.state
+        assert_equal 0, policy.vm_count
+        assert_equal 3, agent.reload.import_stages.count, "the staged homes outlive the server"
+
+        serve_creates_as(4343)
+        policy.admit_import!(placement:, requested_by: @user)
+        placement.reload
+        assert_equal "pending", placement.state
+        assert_equal 2, placement.generation
+        assert_nil placement.cleanup_requested_at
+        assert_nil placement.first_backup_command_id
+        assert_in_delta 45.minutes.from_now, placement.birth_deadline_at, 5
+        assert_equal 1, policy.vm_count
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::ALREADY_ACTIVATING, error.message, "a second Activate on the retry buys nothing"
+
+        run_job(agent)
+        assert_equal 2, @client.creates.size, "one new server for the new attempt"
+        run_job(agent)
+        assert_equal 2, @client.creates.size, "never a second order for it"
+        assert_equal 2, operation(agent).placement_generation
+        boot_and_enroll!(agent)
+        roles_enrolled!(agent)
+        run_job(agent)
+        second_seeds = seed_all!(placement)
+        assert_equal staged_digests, agent.reload.import_stages.order(:role).pluck(:role, :sha256),
+          "the retry seeds the same staged bytes"
+        assert_equal first_seeds.size, second_seeds.size
+
+        run_job(agent)
+        assert_equal "ready", placement.reload.state
+        answer_latest(placement, "start_resident")
+        run_job(agent)
+        assert_nil agent.runtime_ready_at, "no turn before the first verified backup"
+        assert_nil Agents::RemoteRuntime.enrollment_for(agent)
+        @backups.state = "verified"
+        assert_no_enqueued_jobs(only: OrientNewAgentJob) { run_job(agent) }
+        assert agent.runtime_ready_at
+        assert agent.active?
+        assert_not agent.scheduled_wakes_enabled?
+        assert_nil agent.sandbox_last_error
+        assert_equal [ 1, 2 ], placement.cloud_procurement_operations.order(:id).pluck(:placement_generation)
+        assert_equal %w[deleted provisioned], placement.cloud_procurement_operations.order(:id).pluck(:state)
+      end
+    end
+  end
+
+  test "a retry waits for a backup hold left by the failed attempt to be released" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      @client.on_create = ->(_) { raise HetznerCloudClient::Error.new("no capacity", status: 412, code: "resource_unavailable") }
+      run_job(agent)
+      VmCleanupJob.perform_now(placement.id)
+      assert_equal "retired", placement.reload.state
+
+      held = Object.new
+      held.define_singleton_method(:exists?) { |agent_id:| agent_id == agent.id }
+      VmBackup.stub(:holding, held) do
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::STILL_RELEASING, error.message
+      end
+      assert_equal "retired", placement.reload.state
+      assert_equal 1, placement.generation
+
+      policy.admit_import!(placement:, requested_by: @user)
+      assert_equal 2, placement.reload.generation
+    end
+  end
+
+  test "a retry is capped like any admission and stays retryable when refused" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      @client.on_create = ->(_) { raise HetznerCloudClient::Error.new("no capacity", status: 412, code: "resource_unavailable") }
+      run_job(agent)
+      VmCleanupJob.perform_now(placement.id)
+
+      @setting.update!(vm_resident_limit: 1)
+      born!
+      error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+      assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, error.message
+      assert_equal "retired", placement.reload.state
+      assert_equal 1, placement.generation
+      assert placement.cleanup_requested?, "nothing about the failed attempt is reset by a refused retry"
+
+      @setting.update!(vm_resident_limit: 2)
+      @setting.update!(new_residents_on_vm: false)
+      error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+      assert_equal Agents::VmBirthPolicy::IMPORT_SWITCHED_OFF, error.message
+      assert_equal "retired", placement.reload.state
+    end
+  end
+
+  test "a ready import is never failed or cleaned up by its deadline, and a late run does nothing" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      seed_all!(placement)
+      run_job(agent)
+      answer_latest(placement, "start_resident")
+      run_job(agent)
+      @backups.state = "verified"
+      run_job(agent)
+      assert agent.runtime_ready_at
+
+      travel 46.minutes do
+        assert_no_enqueued_jobs(only: VmCleanupJob) { run_job(agent) }
+        assert_equal "ready", placement.reload.state
+        assert_not placement.cleanup_requested?
+        assert agent.active?
+        error = assert_raises(Agents::VmBirthPolicy::Refused) do
+          Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: @user)
+        end
+        assert_equal Agents::VmBirthPolicy::ALREADY_ACTIVATING, error.message
+      end
+      assert_equal 1, @client.creates.size
+      assert_empty @client.deletes
+    end
+  end
+
+  test "a runner command from the failed attempt never counts for the retry" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      old_seeds = RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home").to_a
+      travel 46.minutes do
+        run_job(agent)
+        VmCleanupJob.perform_now(placement.id)
+        VmCleanupJob.perform_now(placement.id)
+        serve_creates_as(4343)
+        policy.admit_import!(placement:, requested_by: @user)
+
+        # The old attempt's seeds, answered late, are not this attempt's seeds.
+        old_seeds.each { |command| command.update_columns(state: "done", finished_at: Time.current) }
+        assert Agents::VmSeed.new(agent.reload).status.none?
+        run_job(agent)
+        boot_and_enroll!(agent)
+        roles_enrolled!(agent)
+        run_job(agent)
+        assert_equal 3, RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: 2).count
+        assert_not Agents::VmSeed.new(agent.reload).status.done?
+      end
     end
   end
 
