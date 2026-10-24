@@ -3,6 +3,10 @@ module Authenticatable
 
   extend ActiveSupport::Concern
 
+  # The one password length rule. Forms read it from here so the hint the
+  # user sees and the validation that runs cannot drift apart again.
+  PASSWORD_LENGTH = 8..72
+
   included do
     has_secure_password validations: false
     has_many :sessions, dependent: :destroy
@@ -11,11 +15,9 @@ module Authenticatable
       password_salt&.last(10)
     end
 
-    # Password validations
-    validates :password, presence: true, length: { minimum: 8 },
-                        if: -> { password.present? },
-                        unless: :created_via_invitation?
-    validates :password, confirmation: true, length: { in: 6..72 },
+    # Password validations: whenever a password is being set. Invited users
+    # with no password yet set nothing, so they pass until they choose one.
+    validates :password, confirmation: true, length: { in: PASSWORD_LENGTH },
                         if: :password_digest_changed?
   end
 

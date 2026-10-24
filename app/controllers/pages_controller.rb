@@ -5,6 +5,7 @@ class PagesController < ApplicationController
   HOME_CHANGELOG_SIZE = 10
 
   def home
+    @share_video = true
     render inertia: "home", props: { changelog: Changelog.clipped(HOME_CHANGELOG_SIZE) }
   end
 

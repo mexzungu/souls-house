@@ -37,6 +37,22 @@ class PagesControllerTest < ActionDispatch::IntegrationTest
     assert latest.all? { |entry| entry["clip"].present? }
   end
 
+  test "home page link previews carry the house film" do
+    get root_path
+
+    assert_select "meta[property='og:video'][content$='/hero/film.mp4']"
+    assert_select "meta[property='og:video:type'][content='video/mp4']"
+    assert_select "meta[property='og:image'][content$='/hero/film.jpg']"
+    assert_select "meta[name='twitter:card'][content='player']"
+    assert_select "meta[name='twitter:player'][content$='/hero/player.html']"
+  end
+
+  test "other pages do not claim the house film as their preview" do
+    get privacy_path
+
+    assert_select "meta[property='og:video']", count: 0
+  end
+
   test "should get privacy policy without authentication" do
     get privacy_path
 

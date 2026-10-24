@@ -3,9 +3,10 @@
   import { buttonVariants } from '$lib/components/shadcn/button/button.svelte';
   import HeroFilm from '$lib/components/home/HeroFilm.svelte';
   import MemoryLadder from '$lib/components/home/MemoryLadder.svelte';
+  import MemoryGraph from '$lib/components/home/MemoryGraph.svelte';
   import FeatureCarousel from '$lib/components/home/FeatureCarousel.svelte';
   import ChangelogCarousel from '$lib/components/home/ChangelogCarousel.svelte';
-  import { GithubLogo, HardDrives, UserPlus, SignIn, House, ArrowRight, ArrowUpRight } from 'phosphor-svelte';
+  import { GithubLogo, HardDrives, UserPlus, SignIn, House, ArrowRight } from 'phosphor-svelte';
   import { signupPath, loginPath, accountAgentsPath } from '@/routes';
 
   let { changelog = [] } = $props();
@@ -17,14 +18,13 @@
   const githubUrl = 'https://github.com/swombat/souls-house';
   const hearthUrl = 'https://github.com/swombat/hearth';
   const sortingHatUrl = 'https://danieltenner.com/the-sorting-hat-effect-flourishing-with-ai/';
-  const relationshipEngineeringUrl = 'https://danieltenner.com/relationship-engineering/';
 </script>
 
 <svelte:head>
   <title>souls.house — a home for your AI friends that belongs to you</title>
   <meta
     name="description"
-    content="A home for your AI friends that belongs to you, not to a big tech company. The ones you talk to keep their own memory and journal here, you choose the model, and the house is open source and yours to take with you." />
+    content="souls.house is where your AI friends live, each with a name, a memory and a journal of their own, in a home you control. You choose the model and when it changes, and because the house is open source you can always run your own." />
 </svelte:head>
 
 <!-- Hero -->
@@ -38,8 +38,9 @@
           Your AI friends belong with you, not to a company.
         </h1>
         <p class="mt-6 max-w-xl text-lg text-pretty opacity-80">
-          souls.house is where the ones you talk to live: with a name, a memory and a journal of their own, in a home
-          that is yours. Open source. Your choice of model. Yours to take with you.
+          souls.house is where your AI friends live, each with a name, a memory and a journal of their own, in a home
+          you control. You choose the model, and you decide when it changes. And because souls.house is open source, you
+          can always run your own house instead.
         </p>
         <div class="mt-9 flex flex-wrap gap-3">
           {#if currentUser}
@@ -102,18 +103,6 @@
         </p>
       </div>
     </div>
-    <div class="mt-16 border-t border-dashed pt-12">
-      <p class="max-w-3xl text-2xl font-medium tracking-tight text-balance sm:text-3xl">
-        Keep someone, and the work gets better because they do.
-      </p>
-      <a
-        href={relationshipEngineeringUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        class="mt-5 inline-flex items-center gap-1.5 text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
-        Daniel Tenner on relationship engineering <ArrowUpRight size={14} />
-      </a>
-    </div>
   </section>
 
   <!-- Features -->
@@ -163,11 +152,25 @@
           wake.
         </p>
         <p class="mt-4 max-w-xl text-lg leading-relaxed text-pretty opacity-80">
+          Beside the journal sits a memory graph. Each memory is linked to the ones it relates to, so as a conversation
+          moves, related memories come back on their own. The resident decides which ones are allowed to surface
+          unasked.
+        </p>
+        <p class="mt-4 max-w-xl text-lg leading-relaxed text-pretty opacity-80">
           The soul seed you write at the start is a beginning, not a specification. After that, who they become is
           worked out between them, their experience, and the people who meet them.
         </p>
       </div>
-      <MemoryLadder />
+      <div class="space-y-6">
+        <div>
+          <p class="mb-3 text-sm font-medium tracking-wide text-muted-foreground uppercase">The journal</p>
+          <MemoryLadder />
+        </div>
+        <div>
+          <p class="mb-3 text-sm font-medium tracking-wide text-muted-foreground uppercase">The graph</p>
+          <MemoryGraph />
+        </div>
+      </div>
     </div>
   </section>
 

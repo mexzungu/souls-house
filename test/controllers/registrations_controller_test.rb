@@ -172,4 +172,54 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
     assert user.authenticate("newpassword123")
   end
 
+  test "a rejected password keeps the names and states the same rule the form shows" do
+    user = User.create!(email_address: "shortpass@example.com")
+    get email_confirmation_path(token: user.personal_membership.confirmation_token_for_url)
+    follow_redirect!
+    assert_equal 8, inertia_props["props"]["password_min_length"]
+    assert_equal 72, inertia_props["props"]["password_max_length"]
+    @inertia_props = nil
+
+    patch set_password_path, params: {
+      password: "seven77",
+      password_confirmation: "seven77",
+      first_name: "Daniel",
+      last_name: "Tenner"
+    }
+
+    assert_redirected_to set_password_path
+    assert_includes flash[:errors], "Password is too short (minimum is 8 characters)"
+
+    follow_redirect!
+    page_user = inertia_props["props"]["user"]
+    assert_equal "Daniel", page_user["first_name"]
+    assert_equal "Tenner", page_user["last_name"]
+    assert_nil user.reload.password_digest
+  end
+
+  test "an eight character password completes setup" do
+    user = User.create!(email_address: "eightpass@example.com")
+    get email_confirmation_path(token: user.personal_membership.confirmation_token_for_url)
+
+    patch set_password_path, params: {
+      password: "eight888",
+      password_confirmation: "eight888",
+      first_name: "Eight",
+      last_name: "Chars"
+    }
+
+    assert_redirected_to root_path
+    assert user.reload.authenticate("eight888")
+  end
+
+  test "a blank password does not complete setup" do
+    user = User.create!(email_address: "blankpass@example.com")
+    get email_confirmation_path(token: user.personal_membership.confirmation_token_for_url)
+
+    patch set_password_path, params: { password: "", password_confirmation: "", first_name: "No", last_name: "Pass" }
+
+    assert_redirected_to set_password_path
+    assert_nil user.reload.password_digest
+  end
+
 end
