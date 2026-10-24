@@ -1,6 +1,11 @@
 package ids
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"go.mau.fi/whatsmeow"
+)
 
 func TestConnectionRefs(t *testing.T) {
 	for _, ok := range []string{"svc_1", "svc_12", "svc_9223372036854775807"} {
@@ -35,6 +40,37 @@ func TestE164(t *testing.T) {
 	for _, bad := range []string{"", "447700900123", "+0447700900123", "+44 7700 900123", "+44-7700900123",
 		"+12345", "+1234567890123456", "+44770090012a", "+447700900123\n", "++447700900123"} {
 		if ValidE164(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestSendIDs(t *testing.T) {
+	for _, ok := range []string{"a", "snd_1", "Ab-_9", strings.Repeat("x", 64)} {
+		if !ValidSendID(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"", strings.Repeat("x", 65), "snd 1", "snd/1", "snd.1", "snd_1\n", "é"} {
+		if ValidSendID(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+// The accepted message id is exactly what the pinned whatsmeow's
+// GenerateMessageID returns.
+func TestMessageIDsAreWhatsmeowsShape(t *testing.T) {
+	for i := 0; i < 2000; i++ {
+		if id := string(whatsmeow.GenerateMessageID()); !ValidMessageID(id) {
+			t.Fatalf("whatsmeow's own id %q refused", id)
+		}
+	}
+	for _, bad := range []string{"", "3EB0", "3EB00123456789ABCDE", "3EB00123456789ABCDEF0", "3eb00123456789abcdef",
+		"3EB00123456789abcdef", "4EB00123456789ABCDEF", "3EB00123456789ABCDEG", "3EB00123456789ABCDEF\n",
+		"3EB0123456789ABCDEF012", // the 22-character form cli.GenerateMessageID makes
+	} {
+		if ValidMessageID(bad) {
 			t.Errorf("%q accepted", bad)
 		}
 	}

@@ -34,9 +34,19 @@ type Synthetic struct {
 	// PhoneCodeLifetime is how long a phone code is reported to last
 	// (default QRLifetime).
 	PhoneCodeLifetime time.Duration
+	// SendHook, when set, decides what SendText does (tests: success,
+	// refusal, an ambiguous error, a hang until ctx ends, a crash). Unset,
+	// a send succeeds at the current second. See SendRefusing,
+	// SendAmbiguous and SendHanging.
+	SendHook func(ctx context.Context, chat, messageID, text string) (time.Time, error)
+	// EchoSends: after a successful send, the session reports the message
+	// back as received, from the paired account, with the same message id,
+	// as WhatsApp does on the account's other devices.
+	EchoSends bool
 
 	logouts     atomic.Int32
 	phoneCodes  atomic.Int32
+	sends       atomic.Int32
 	lastPhoneMu sync.Mutex
 	lastPhone   string
 	eventsMu    sync.Mutex // Chats and MessagesPerChat, once sessions run
@@ -46,9 +56,35 @@ func DefaultSynthetic() *Synthetic {
 	return &Synthetic{
 		QRCodes: 2, QRInterval: 200 * time.Millisecond, QRLifetime: 20 * time.Second,
 		Chats: 3, MessagesPerChat: 5,
-		Base: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+		Base:      time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC),
+		EchoSends: true,
 	}
 }
+
+// SyntheticOwnID is the synthetic paired account's user id.
+const SyntheticOwnID = "447700900000"
+
+// SendRefusing is a SendHook that refuses every send with reason.
+func SendRefusing(reason string) func(context.Context, string, string, string) (time.Time, error) {
+	return func(context.Context, string, string, string) (time.Time, error) {
+		return time.Time{}, &RefusedError{Reason: reason}
+	}
+}
+
+// SendAmbiguous is a SendHook whose every send has an unknown outcome.
+func SendAmbiguous(context.Context, string, string, string) (time.Time, error) {
+	return time.Time{}, ErrSendUnknown
+}
+
+// SendHanging is a SendHook that never answers: it returns ctx's error
+// once ctx ends, as whatsmeow does while waiting for the server's ack.
+func SendHanging(ctx context.Context, _, _, _ string) (time.Time, error) {
+	<-ctx.Done()
+	return time.Time{}, ctx.Err()
+}
+
+// Sends counts SendText calls that reached the provider (tests).
+func (s *Synthetic) Sends() int { return int(s.sends.Load()) }
 
 // Factory returns a provider.Factory sharing this configuration.
 func (s *Synthetic) Factory() Factory {
@@ -120,6 +156,10 @@ type syntheticSession struct {
 	ended     chan struct{} // closed when pairing ends, either way
 	readyOnce sync.Once
 	endOnce   sync.Once
+
+	mu     sync.Mutex
+	online bool
+	sink   Sink // Run's, while online
 }
 
 const syntheticPaired = "synthetic_paired"
@@ -155,7 +195,17 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 		}
 	}
 	s.endOnce.Do(func() { close(s.ended) })
-	if err := sink.Connected(ctx, Identity{UserID: "447700900000", DisplayName: "Synthetic " + s.cfg.Marker}); err != nil {
+	// Online before Connected is reported, as a whatsmeow client is
+	// connected before its Connected event.
+	s.mu.Lock()
+	s.online, s.sink = true, sink
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.online, s.sink = false, nil
+		s.mu.Unlock()
+	}()
+	if err := sink.Connected(ctx, Identity{UserID: SyntheticOwnID, DisplayName: "Synthetic " + s.cfg.Marker}); err != nil {
 		return err
 	}
 	chats, msgs := s.cfg.Events()
@@ -177,6 +227,45 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 		}
 		return ErrLoggedOut
 	}
+}
+
+func (s *syntheticSession) Online() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.online
+}
+
+// SendText checks the chat as the whatsmeow session does, counts the call,
+// then does what SendHook says (or succeeds), and echoes a success back
+// as a received message when EchoSends is set. The text is kept nowhere.
+func (s *syntheticSession) SendText(ctx context.Context, chat, messageID, text string) (time.Time, error) {
+	if _, err := ParseChat(chat); err != nil {
+		return time.Time{}, &RefusedError{Reason: RefusedBadChat}
+	}
+	s.mu.Lock()
+	online, sink := s.online, s.sink
+	s.mu.Unlock()
+	if !online {
+		return time.Time{}, &RefusedError{Reason: RefusedNotConnected}
+	}
+	s.cfg.sends.Add(1)
+	at := time.Now().UTC().Truncate(time.Second)
+	if s.cfg.SendHook != nil {
+		var err error
+		if at, err = s.cfg.SendHook(ctx, chat, messageID, text); err != nil {
+			return time.Time{}, err
+		}
+	}
+	if s.cfg.EchoSends {
+		own := SyntheticOwnID + "@s.whatsapp.net"
+		body := text
+		echo := Message{ProviderMessageID: messageID, Chat: chat, SenderID: own,
+			SenderName: "Synthetic " + s.cfg.Marker, SentAt: at, Body: &body}
+		// Best effort, like WhatsApp's own echo: the send has succeeded
+		// whether or not the echo is stored.
+		_ = sink.Messages(context.WithoutCancel(ctx), []Message{echo})
+	}
+	return at, nil
 }
 
 // RequestPhoneCode waits for the first QR, as whatsmeow's PairPhone needs,

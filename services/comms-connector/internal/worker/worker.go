@@ -118,6 +118,13 @@ type Worker struct {
 	state    string // idle | pairing | connected | logged_out | not_paired
 	revoked  sync.Once
 
+	// storeMu: SendText reads the store under RLock, also while the
+	// session is stopped; closeStore takes the write lock, so the store is
+	// never closed under a read. closed is set (under the write lock) once
+	// it is.
+	storeMu sync.RWMutex
+	closed  bool
+
 	// refusals counts consecutive content refusals of the head event: any
 	// other outcome of a delivery attempt (a transport failure, another
 	// status) sets it back to zero. It is kept in memory only, so a process
@@ -366,8 +373,17 @@ func (w *Worker) PairPhone(phone string, attempt int64, request string, seq int6
 // Close stops the worker, closes the store and releases the lease.
 func (w *Worker) Close() {
 	w.Stop()
-	w.st.Close()
+	w.closeStore()
 	w.lease.Release()
+}
+
+func (w *Worker) closeStore() {
+	w.storeMu.Lock()
+	defer w.storeMu.Unlock()
+	if !w.closed {
+		w.st.Close()
+		w.closed = true
+	}
 }
 
 // Unpair stops the worker, logs the linked device out at the network side
@@ -378,7 +394,7 @@ func (w *Worker) Close() {
 func (w *Worker) Unpair(ctx context.Context) error {
 	w.Stop()
 	w.logout(ctx)
-	w.st.Close()
+	w.closeStore()
 	err := store.Remove(filepath.Join(w.dir, StoreFile))
 	if err == nil {
 		if rmErr := os.RemoveAll(w.dir); rmErr != nil {

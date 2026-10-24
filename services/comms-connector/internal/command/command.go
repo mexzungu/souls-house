@@ -30,7 +30,9 @@ func (r *Refused) Error() string { return "command refused: " + r.Code }
 func refuse(code string) error { return &Refused{Code: code} }
 
 // Command is a verified command. CallbackSecret is only set by
-// start_pairing; PhoneNumber, Attempt and PhoneRequest only by pair_phone.
+// start_pairing; PhoneNumber and PhoneRequest only by pair_phone; SendID,
+// MessageID, Chat and Text only by send_text; Attempt by pair_phone and
+// send_text.
 type Command struct {
 	Connection            string
 	Operation             string
@@ -46,12 +48,22 @@ type Command struct {
 	// PhoneRequestSeq is that request's place in Rails' order (a positive
 	// integer, increasing per connection): which of two requests is newer.
 	PhoneRequestSeq int64
+	// send_text: the house CommsSend id, the Rails-minted WhatsApp message
+	// id, the chat as the connector reported it, and the text. Chat and
+	// Text are content: never printed (String, GoString) or logged.
+	SendID    string
+	MessageID string
+	Chat      string
+	Text      string
 }
 
-// String never shows the secret or the phone number.
+// String never shows the secret, the phone number, the chat or the text.
 func (c Command) String() string {
 	return "command(" + c.Operation + " " + c.Connection + ")"
 }
+
+// GoString keeps %#v as quiet as %v.
+func (c Command) GoString() string { return c.String() }
 
 type body struct {
 	Connection            *string         `json:"connection"`
@@ -63,6 +75,10 @@ type body struct {
 	PhoneNumber           *string         `json:"phone_number"`
 	PhoneRequest          *string         `json:"request_id"`
 	PhoneRequestSeq       json.RawMessage `json:"request_seq"`
+	SendID                *string         `json:"send_id"`
+	MessageID             *string         `json:"message_id"`
+	Chat                  *string         `json:"chat"`
+	Text                  *string         `json:"text"`
 	// RawMessage, not json.Number: json.Number also takes "2" (a string),
 	// and the attempt must be the integer Rails sends.
 	Attempt json.RawMessage `json:"attempt"`
@@ -140,6 +156,18 @@ func (v *Verifier) Verify(ref, op string, h http.Header, raw []byte) (Command, e
 	}
 	if b.PhoneRequest != nil {
 		cmd.PhoneRequest = *b.PhoneRequest
+	}
+	if b.SendID != nil {
+		cmd.SendID = *b.SendID
+	}
+	if b.MessageID != nil {
+		cmd.MessageID = *b.MessageID
+	}
+	if b.Chat != nil {
+		cmd.Chat = *b.Chat
+	}
+	if b.Text != nil {
+		cmd.Text = *b.Text
 	}
 	if b.PhoneRequestSeq != nil {
 		// A bare JSON integer, like the attempt.

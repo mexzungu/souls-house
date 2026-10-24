@@ -325,27 +325,55 @@ func TestSecondManagerCannotTakeALiveConnection(t *testing.T) {
 }
 
 // §3: the connector logs no bodies, names, JIDs, QR codes or keys. Run the
-// whole lifecycle and grep the logs for the canary, the secret and the ref.
+// whole lifecycle, sends included (sent, replayed, mismatched, refused,
+// unknown, stale, not connected, refused fields), and grep the logs for
+// the canary, the secret, the ref, the chat, the message and send ids.
 func TestLogsCarryNoContent(t *testing.T) {
 	r := newRig(t)
 	r.rails.expect(ref, secret)
 	signal := make(chan struct{})
 	r.syn.LogoutSignal = signal
+	r.syn.SendHook = outcomeByMessageID
 	r.rails.setDown(true)
 	m := r.manager()
+	srv := r.commandServer(m)
 	m.StartPairing(context.Background(), ref, secret, 1)
 	time.Sleep(200 * time.Millisecond)
 	r.rails.setDown(false)
 	r.wantAllDelivered(15)
+
+	text := "Send text " + canary
+	sends := []map[string]any{
+		sendTo("snd_log_1", okMsgID, text), sendTo("snd_log_1", okMsgID, text), sendTo("snd_log_1", okMsgID, text+"x"),
+		sendTo("snd_log_2", refuseMsgID, text), sendTo("snd_log_3", unsureMsgID, text), sendTo("snd_log_3", unsureMsgID, text),
+		sendTo("snd_log_4", "3EB0000000000000EEEE", ""),
+	}
+	stale := sendTo("snd_log_5", "3EB0000000000000FFFF", text)
+	stale["attempt"] = 9
+	unsupported := sendTo("snd_log_6", "3EB00000000000001111", text)
+	unsupported["chat"] = "447700900001@newsletter"
+	for _, fields := range append(sends, stale, unsupported) {
+		post(t, srv, ref, "send_text", fields)
+	}
+	eventually(t, "the echo at Rails", func() bool { return r.rails.messages(ref)[okMsgID] == 1 })
+	if r.syn.Sends() != 3 {
+		t.Fatalf("sends reached the provider %d times", r.syn.Sends())
+	}
+
 	close(signal)
 	eventually(t, "logout", func() bool { s, _, _, _ := r.rails.snapshot(ref); return s == "reauthorizing" })
+	post(t, srv, ref, "send_text", sendTo("snd_log_7", "3EB00000000000002222", text)) // not connected
 	m.Unpair(context.Background(), ref)
 
 	logs := r.logs.String()
 	if logs == "" {
 		t.Fatal("no logs captured; the check would prove nothing")
 	}
-	for _, needle := range []string{canary, secret, ref, "4477009", "synthetic-0", "Synthetic"} {
+	if !strings.Contains(logs, `"op":"send_text"`) || !strings.Contains(logs, `"refused":"not_on_whatsapp"`) {
+		t.Fatalf("the sends were not logged at all; the check would prove nothing: %s", logs)
+	}
+	for _, needle := range []string{canary, secret, ref, "4477009", "synthetic-0", "Synthetic", "Send text",
+		"3EB0", "snd_log", "newsletter"} {
 		if strings.Contains(logs, needle) {
 			t.Errorf("logs contain %q", needle)
 		}
