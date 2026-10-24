@@ -10,6 +10,11 @@
 #     schedule: at 5am every day
 
 production:
+  abandoned_app_uploads:
+    class: AbandonedAppUploadsJob
+    queue: default
+    schedule: every hour at minute 20
+
   companion_sweep:
     class: CompanionSweepJob
     queue: default
@@ -26,10 +31,11 @@ production:
     queue: default
     schedule: every minute
 
-  field_voice_enrolment_sweep:
-    class: FieldVoices::EnrolmentSweepJob
+  # Xero refresh tokens die after 60 days unused (Services::XeroAdapter).
+  xero_keep_alive:
+    class: Services::XeroKeepAliveJob
     queue: default
-    schedule: every 15 minutes
+    schedule: every day at 4:40am
 
   field_recordings_stuck_sweep:
     class: FieldRecordings::StuckSweepJob

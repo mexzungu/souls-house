@@ -49,7 +49,7 @@ module Chat::ModelSelection
     { model_id: "mistralai/mistral-large-2512", label: "Mistral Large 2512", group: "Top Models" },
     { model_id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", group: "Top Models" },
     { model_id: "minimax/minimax-m3", label: "MiniMax M3", group: "Top Models", thinking: { supported: true } },
-    { model_id: "moonshotai/kimi-k3", label: "Kimi K3", group: "Top Models", thinking: { supported: true } },
+    { model_id: "moonshotai/kimi-k3.1-pro", label: "Kimi K3.1 Pro", group: "Top Models", thinking: { supported: true } },
     { model_id: "qwen/qwen3.8-max", label: "Qwen3.8 Max", group: "Top Models", thinking: { supported: true } },
     { model_id: "xiaomi/mimo-v2.6-pro", label: "MiMo V2.6 Pro", group: "Top Models", thinking: { supported: true } },
     { model_id: "z-ai/glm-5.2", label: "GLM 5.2", group: "Top Models", thinking: { supported: true } },
@@ -549,6 +549,7 @@ module Chat::ModelSelection
     },
 
     # DeepSeek
+    { model_id: "deepseek/deepseek-v4.1-flash-1017", label: "DeepSeek V4.1 Flash 1017", group: "DeepSeek", thinking: { supported: true } },
     { model_id: "deepseek/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", group: "DeepSeek" },
     { model_id: "deepseek/deepseek-chat", label: "DeepSeek Chat", group: "DeepSeek" },
     { model_id: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2", group: "DeepSeek" },
@@ -565,6 +566,7 @@ module Chat::ModelSelection
     { model_id: "deepseek/deepseek-v3", label: "DeepSeek V3", group: "DeepSeek" },
 
     # Moonshot / Kimi
+    { model_id: "moonshotai/kimi-k3.1-pro", label: "Kimi K3.1 Pro", group: "Moonshot / Kimi", thinking: { supported: true } },
     { model_id: "moonshotai/kimi-k3", label: "Kimi K3", group: "Moonshot / Kimi", thinking: { supported: true } },
     { model_id: "moonshotai/kimi-k2.7-code", label: "Kimi K2.7 Code", group: "Moonshot / Kimi" },
     { model_id: "moonshotai/kimi-coding", label: "Kimi Coding", group: "Moonshot / Kimi" },
@@ -574,9 +576,13 @@ module Chat::ModelSelection
     { model_id: "moonshotai/kimi-k2-0905", label: "Kimi K2 0905", group: "Moonshot / Kimi" },
 
     # MiniMax
+    { model_id: "minimax/minimax-m3.1-flash", label: "MiniMax M3.1 Flash", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m3", label: "MiniMax M3", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m2.7", label: "MiniMax M2.7", group: "MiniMax", thinking: { supported: true } },
     { model_id: "minimax/minimax-m2", label: "MiniMax M2", group: "MiniMax", thinking: { supported: true } },
+
+    # Inception
+    { model_id: "inception/mercury-3", label: "Mercury 3", group: "Inception", thinking: { supported: true } },
 
     # Mistral
     { model_id: "mistralai/devstral-2512", label: "Devstral 2512", group: "Mistral" },
@@ -800,7 +806,7 @@ module Chat::ModelSelection
         REASONING_PROFILES[:grok_fast]
       when %r{\Ax-ai/grok-}
         REASONING_PROFILES[:grok]
-      when %r{\A(?:deepseek|meta|moonshotai|minimax|qwen|xiaomi|z-ai)/}
+      when %r{\A(?:deepseek|inception|meta|moonshotai|minimax|qwen|xiaomi|z-ai)/}
         REASONING_PROFILES[:thinking_mode] if supports_thinking?(model_id)
       end
     end

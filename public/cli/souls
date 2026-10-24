@@ -13,12 +13,14 @@ Credentials, first match wins:
     --token / --url flags
     SOULS_TOKEN / SOULS_URL
     SOULSHOUSE_BEARER_TOKEN / SOULSHOUSE_APP_URL   (set inside a resident runtime)
+    HELIXKIT_BEARER_TOKEN / HELIXKIT_APP_URL      (legacy aliases)
     ~/.config/souls/config.json, written by `souls login` (profile via --profile)
 
 Run `souls help` for the commands, `souls help <command>` for one of them.
 """
 
 import argparse
+import hashlib
 import json
 import mimetypes
 import os
@@ -110,6 +112,9 @@ def resolve_credentials(args):
         elif os.environ.get("SOULSHOUSE_BEARER_TOKEN"):
             token, source = os.environ["SOULSHOUSE_BEARER_TOKEN"], "SOULSHOUSE_BEARER_TOKEN"
             url = url or os.environ.get("SOULSHOUSE_APP_URL")
+        elif os.environ.get("HELIXKIT_BEARER_TOKEN"):
+            token, source = os.environ["HELIXKIT_BEARER_TOKEN"], "HELIXKIT_BEARER_TOKEN"
+            url = url or os.environ.get("HELIXKIT_APP_URL")
     if not token:
         config = load_config()
         name = profile_name or config.get("default_profile") or "default"
@@ -131,6 +136,14 @@ class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _opener = urllib.request.build_opener(_StripAuthOnRedirect())
+
+
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_no_redirect_opener = urllib.request.build_opener(_RefuseRedirect())
 
 
 def encode_multipart(fields, files):
@@ -163,6 +176,7 @@ class Client:
         self.token = token
         self.account = account
         self.verbose = verbose
+        self.allow_redirects = True
 
     def origin(self, url):
         parts = urllib.parse.urlsplit(url)
@@ -205,7 +219,8 @@ class Client:
         if self.verbose:
             print(f"> {method.upper()} {url}", file=sys.stderr)
         try:
-            with _opener.open(req, timeout=self.timeout) as resp:
+            opener = _opener if self.allow_redirects else _no_redirect_opener
+            with opener.open(req, timeout=self.timeout) as resp:
                 body = resp.read()
                 status = resp.status
         except urllib.error.HTTPError as err:
@@ -587,6 +602,47 @@ def cmd_residents(client, args):
         emit(client.get("agents"))
 
 
+def cmd_who(client, args):
+    """Who can read here, and why. With a conversation id, that one
+    conversation; without, the whole account (--account for another)."""
+    if args.room:
+        data = client.get(f"conversations/{args.room}/who")
+        if args.json:
+            emit(data)
+            return
+        conv = data.get("conversation") or {}
+        print(f"# Who can read {conv.get('title') or '(untitled)'} ({conv.get('id')}) in {(data.get('account') or {}).get('name')}")
+        for reader in data.get("readers") or []:
+            extra = " · site admin" if reader.get("site_admin") else ""
+            if reader.get("closed_for_initiation"):
+                extra += " · won't start conversations here"
+            print(f"- {reader.get('name')} ({reader.get('kind', '?').replace('_', ' ')}): {reader.get('why')}{extra}")
+    else:
+        data = client.get("who")
+        if args.json:
+            emit(data)
+            return
+        print(f"# Who can read conversations in {(data.get('account') or {}).get('name')}")
+        print("\nPeople (members, including logins an agent drives):")
+        for person in data.get("people") or []:
+            extra = " · site admin" if person.get("site_admin") else ""
+            print(f"- {person.get('name')} ({person.get('role')}): {person.get('reads')}{extra}")
+        print("\nResidents:")
+        for resident in data.get("residents") or []:
+            kind = "guest resident" if resident.get("kind") == "guest_resident" else "resident"
+            paused = " · paused" if resident.get("paused") else ""
+            if resident.get("active") is False:
+                paused += " · inactive"
+            print(f"- {resident.get('name')} ({kind}): {resident.get('reads')} ({resident.get('seats', 0)} seats){paused}")
+        admins = data.get("site_admins") or []
+        if admins:
+            print("\nSite admins who are not members:")
+            for admin in admins:
+                print(f"- {admin.get('name')}: {admin.get('reads')}")
+    if data.get("not_covered"):
+        print(f"\n{data['not_covered']}")
+
+
 def cmd_field_upload(client, args):
     if not os.path.isfile(args.file):
         raise CliError(f"no such file: {args.file}", EXIT_USAGE)
@@ -718,6 +774,109 @@ def cmd_field_date(client, args):
         note = client.get(f"{path}/{args.id}").get("whiteboard") or {}
         body["lock_version"] = note.get("lock_version")
     emit(client.patch(f"{path}/{args.id}", json_body=body))
+
+
+def voice_resource_id(value):
+    """Public IDs are opaque strings, not numbers or paths."""
+    if not value.strip() or value in (".", ".."):
+        raise CliError("a nonblank public resource ID is required", EXIT_USAGE)
+    return urllib.parse.quote(value, safe="")
+
+
+def voice_client(client):
+    parts = urllib.parse.urlsplit(client.url)
+    if (parts.scheme not in ("http", "https") or not parts.hostname or
+            parts.username is not None or parts.password is not None or parts.query or parts.fragment):
+        raise CliError("house URL must be HTTP(S), without userinfo, query or fragment", EXIT_USAGE)
+    # Unlike general attachment downloads, these endpoints must serve their own
+    # audio. Refuse even same-origin redirects rather than replaying a mutation.
+    client.allow_redirects = False
+
+
+def cmd_field_voices(client, args):
+    voice_client(client)
+    path = "field/voices"
+    action = args.voice_action or "list"
+    if action == "list":
+        result = client.get(path)
+    elif action == "resolve":
+        # The server owns exact name normalization. Never create on a miss.
+        result = client.get(path + "/resolve", query=[("name", args.name)])
+    elif action == "create":
+        result = client.post(path, json_body={"name": args.name})
+    elif action == "rename":
+        result = client.patch(path + "/" + voice_resource_id(args.voice), json_body={"name": args.name})
+    else:
+        result = client.delete(path + "/" + voice_resource_id(args.voice))
+    emit(result)
+
+
+def sample_upload(client, args):
+    if not os.path.isfile(args.file):
+        raise CliError("audio file does not exist or is not a regular file", EXIT_USAGE)
+    for name in ("source_identifier", "source_session", "idempotency_key"):
+        if not getattr(args, name).strip():
+            raise CliError(f"--{name.replace('_', '-')} must not be blank", EXIT_USAGE)
+    digest = args.source_sha256
+    if args.source_file:
+        hasher = hashlib.sha256()
+        with open(args.source_file, "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        original_digest = hasher.hexdigest()
+        if digest and digest.lower() != original_digest:
+            raise CliError("--source-sha256 does not match --source-file", EXIT_USAGE)
+        digest = original_digest
+    if not digest or len(digest) != 64 or any(c not in "0123456789abcdefABCDEF" for c in digest):
+        raise CliError("give the original file's --source-sha256 (64 hex digits), or --source-file to hash it",
+                       EXIT_USAGE)
+    if (args.start_ms is None) != (args.end_ms is None):
+        raise CliError("--start-ms and --end-ms must be given together", EXIT_USAGE)
+    if args.start_ms is not None and not (0 <= args.start_ms < args.end_ms):
+        raise CliError("require 0 <= --start-ms < --end-ms", EXIT_USAGE)
+    fields = [("source_identifier", args.source_identifier), ("source_sha256", digest.lower()),
+              ("source_session", args.source_session), ("idempotency_key", args.idempotency_key)]
+    fields += [(name, getattr(args, name)) for name in ("start_ms", "end_ms", "recorded_at", "recording_id")
+               if getattr(args, name) is not None]
+    path = f"field/voices/{voice_resource_id(args.voice)}/samples"
+    return client.post(path, fields=fields, files=[("audio", args.file)])
+
+
+def cmd_field_samples(client, args):
+    voice_client(client)
+    action = args.sample_action
+    if action == "list":
+        emit(client.get(f"field/voices/{voice_resource_id(args.voice)}/samples"))
+        return
+    if action == "upload":
+        emit(sample_upload(client, args))
+        return
+    path = f"field/samples/{voice_resource_id(args.sample)}"
+    if action == "inspect":
+        result = client.get(path)
+    elif action == "download":
+        # Require a destination so machine-readable stdout is never audio.
+        body = client.get(path + "/audio", query=[("digest", args.digest)], raw=True)
+        with open(args.output, "wb") as target:
+            target.write(body)
+        result = {"output": args.output, "bytes": len(body)}
+    elif action in ("accept", "reject"):
+        if action == "accept" and not args.listened:
+            raise CliError("accept requires --listened after you listen; new human confirmation requires "
+                           "a human OAuth app-token or browser, not a CLI API key", EXIT_USAGE)
+        try:
+            result = client.patch(path, json_body={"included": action == "accept", "digest": args.digest})
+        except CliError as err:
+            if action == "accept" and err.status in (401, 403):
+                raise CliError(f"{err}; confirmation requires a human OAuth app-token or the browser; "
+                               "--listened does not upgrade a CLI API key",
+                               err.code, body=err.body, status=err.status) from None
+            raise
+    elif action == "correct":
+        result = client.patch(path, json_body={"voice_id": args.voice, "digest": args.digest})
+    else:
+        result = client.delete(path, json_body={"digest": args.digest})
+    emit(result)
 
 
 def cmd_glossary(client, args):
@@ -959,6 +1118,12 @@ def cmd_integrations_disconnect(client, args):
 
 # ---------------------------------------------------------------- parser
 
+class VoiceArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        print(json.dumps({"error": message, "exit_code": EXIT_USAGE, "status": None}), file=sys.stderr)
+        self.exit(EXIT_USAGE)
+
+
 COMMAND_GROUPS = [
     ("Setup", ["login", "logout", "config", "whoami", "accounts"]),
     ("Rooms", ["rooms", "read", "new", "post", "edit", "delete", "wake", "watch", "changes", "activity",
@@ -967,7 +1132,7 @@ COMMAND_GROUPS = [
     ("Repository watches", ["repos", "watches"]),
     ("Integrations", ["integrations"]),
     ("Field", ["field"]),
-    ("Other", ["residents", "glossary", "download", "api"]),
+    ("Other", ["residents", "who", "glossary", "download", "api"]),
 ]
 
 
@@ -1094,6 +1259,10 @@ def build_parser():
     p = add("residents", cmd_residents, "List residents you can see, or show one")
     p.add_argument("id", nargs="?")
 
+    p = add("who", cmd_who, "Who can read conversations here, and why; give a conversation id for one room")
+    p.add_argument("room", nargs="?", metavar="CONVERSATION_ID")
+    p.add_argument("--json", action="store_true")
+
     p = add("repos", cmd_repos, "Connected repositories: list, connect, or disconnect (souls repos --help)")
     rsub = p.add_subparsers(dest="repos_command", metavar="list|connect|disconnect")
     rp = rsub.add_parser("list", parents=[common], help="Connected repositories you may watch")
@@ -1184,7 +1353,51 @@ def build_parser():
                    "  souls field date recording REC_ID 2019-03-14\n"
                    "Recordings take recorded_at instead: see docs/api.md.",
             formatter_class=argparse.RawDescriptionHelpFormatter)
-    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|date|lines|correct|speaker")
+    fsub = p.add_subparsers(dest="field_command", metavar="upload|note|date|lines|correct|speaker|voices|samples")
+
+    fp = fsub.add_parser("voices", parents=[common], help="Manage voices (human credentials; JSON output)")
+    fp.set_defaults(func=cmd_field_voices, voice_action="list")
+    vsub = fp.add_subparsers(dest="voice_action", parser_class=VoiceArgumentParser)
+    for action in ("list", "create", "resolve", "rename", "delete"):
+        vp = vsub.add_parser(action, parents=[common])
+        vp.set_defaults(func=cmd_field_voices)
+        if action in ("rename", "delete"):
+            vp.add_argument("voice", metavar="VOICE_ID")
+        if action in ("create", "resolve", "rename"):
+            vp.add_argument("name", metavar="NAME")
+
+    fp = fsub.add_parser("samples", parents=[common],
+                         help="Manage voice samples (human credentials; JSON output)",
+                         epilog="Accept requires --listened. New human confirmation requires an OAuth app-token "
+                                "or browser; API keys may only reinclude unchanged already-confirmed samples.")
+    fp.set_defaults(func=cmd_field_samples, sample_action=None)
+    ssub = fp.add_subparsers(dest="sample_action", parser_class=VoiceArgumentParser)
+    for action in ("list", "upload", "inspect", "download", "accept", "reject", "correct", "delete"):
+        sp = ssub.add_parser(action, parents=[common])
+        sp.set_defaults(func=cmd_field_samples)
+        if action in ("list", "upload"):
+            sp.add_argument("voice", metavar="VOICE_ID")
+        else:
+            sp.add_argument("sample", metavar="SAMPLE_ID", help="opaque public sample ID, for any sample kind")
+        if action == "upload":
+            sp.add_argument("file", metavar="AUDIO_FILE", help="prepared audio clip to upload")
+            sp.add_argument("--source-identifier", required=True, help="stable source identifier")
+            sp.add_argument("--source-session", required=True, help="canonical source group; same for sibling clips")
+            sp.add_argument("--source-sha256", help="SHA-256 of the ORIGINAL file, not the prepared clip")
+            sp.add_argument("--source-file", help="hash this original file; never infer the hash from AUDIO_FILE")
+            sp.add_argument("--idempotency-key", required=True, help="reuse this key on retry of the same upload")
+            sp.add_argument("--start-ms", type=int)
+            sp.add_argument("--end-ms", type=int)
+            sp.add_argument("--recorded-at", metavar="ISO_DATE")
+            sp.add_argument("--recording-id", help="optional existing recording's public ID")
+        if action in ("download", "accept", "reject", "correct", "delete"):
+            sp.add_argument("--digest", required=True, help="current sample digest from inspect/list")
+        if action == "download":
+            sp.add_argument("-o", "--output", required=True, help="audio destination file (stdout stays JSON)")
+        if action == "accept":
+            sp.add_argument("--listened", action="store_true", help="you listened to this exact sample; never an agent proxy")
+        if action == "correct":
+            sp.add_argument("--voice", required=True, help="correct target voice's public ID")
 
     fp = fsub.add_parser("upload", parents=[common], help="Upload a file (a document, an old transcript)")
     fp.add_argument("file", metavar="FILE")
@@ -1308,6 +1521,8 @@ def main(argv=None):
         else:
             print_overview(parser, sub)
         return EXIT_OK
+    voice_command = args.command == "field" and args.field_command in ("voices", "samples")
+    token = None
     try:
         if args.command == "field" and not args.field_command:
             sub.choices["field"].print_help()
@@ -1315,13 +1530,20 @@ def main(argv=None):
         if args.command in ("login", "logout"):
             args.func(None, args)
             return EXIT_OK
+        if voice_command and args.field_command == "samples" and not args.sample_action:
+            raise CliError("give a samples subcommand: list, upload, inspect, download, accept, reject, correct, delete",
+                           EXIT_USAGE)
         url, token, _source = resolve_credentials(args)
         client = Client(url, token, account=args.account, verbose=args.verbose, timeout=http_timeout())
         args.func(client, args)
         sys.stdout.flush()
         return EXIT_OK
     except CliError as err:
-        print(f"souls: {err}", file=sys.stderr)
+        if voice_command:
+            message = str(err).replace(token, "[REDACTED]") if token else str(err)
+            print(json.dumps({"error": message, "exit_code": err.code, "status": err.status}), file=sys.stderr)
+        else:
+            print(f"souls: {err}", file=sys.stderr)
         return err.code
     except KeyboardInterrupt:
         return 130
@@ -1331,6 +1553,14 @@ def main(argv=None):
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())
         return EXIT_OK
+    except (OSError, ValueError):
+        if not voice_command:
+            raise
+        # Do not echo filenames, URLs or exception values that could contain a
+        # credential. Local I/O failures still have a stable machine-readable exit.
+        print(json.dumps({"error": "cannot read/write a local file or invalid request configuration",
+                          "exit_code": EXIT_USAGE, "status": None}), file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":

@@ -55,6 +55,39 @@ lists no cache-write price and no implicit caching for it, so cache writes fall
 back to the input rate. There is no direct Meta route in souls.house; it runs
 through OpenRouter only.
 
+MiniMax M3.1 Flash (added October 22, 2026, three days after MiniMax released
+it): input 0.15, cache read 0.015, output 0.6, from the OpenRouter endpoint for
+`minimax/minimax-m3.1-flash` (Minimax provider, `minimax/minimax-m3.1-flash-20261019`)
+on 2026-10-22. No cache-write price is listed, so cache writes fall back to the
+input rate. OpenRouter only, like MiniMax M3.
+
+Mercury 3 (added October 22, 2026, three days after Inception released it):
+input 0.10, cache read 0.01, output 0.35, from the OpenRouter endpoint for
+`inception/mercury-3` (Inception provider) on 2026-10-22. These are Inception's
+launch rates, 50% off the list price of 0.20 in / 0.70 out (Inception's
+announcement, inceptionlabs.ai/blog/introducing-mercury-3). When the launch
+discount ends, the row should move to the list price. No cache-write price is
+listed, so cache writes fall back to the input rate. OpenRouter only; Inception
+is a new group in souls.house.
+
+Kimi K3.1 Pro (added October 24, 2026, the day Moonshot AI released it,
+kimi.com/en/blog/kimi-k3-1-pro): input 2, cache read 0.20, output 10, from the
+OpenRouter standard endpoint for `moonshotai/kimi-k3.1-pro` (Moonshot AI
+provider, `moonshotai/kimi-k3.1-pro-20261023`, mxfp4) on 2026-10-24. The same
+provider also lists a "Highspeed" priority tier at 4 in / 20 out; souls.house
+requests no service tier, so the standard rate applies. No cache-write price is
+listed, so cache writes fall back to the input rate. OpenRouter only, like Kimi
+K3, which it replaces in Top Models as Moonshot's flagship.
+
+DeepSeek V4.1 Flash 1017 (added October 19, 2026, two days after DeepSeek
+released the snapshot): input 0.15, cache read 0.003, output 0.6, from the
+OpenRouter endpoint for `deepseek/deepseek-v4.1-flash-1017` (DeepSeek provider)
+and DeepSeek's pricing page on 2026-10-19. These are the off-peak rates; DeepSeek
+charges double at peak (01:00-04:00 and 06:00-10:00 UTC on weekdays), and the
+estimate does not model the time of day. Cheaper third-party hosts exist on
+OpenRouter. No cache-write price is listed, so cache writes fall back to the
+input rate. OpenRouter only (no direct DeepSeek id for the dated snapshot).
+
 Muse Spark Open (added October 16, 2026, the day after Meta released the open
 weights): input 1.25, cache read 0.15, output 4.25, from the OpenRouter endpoint
 for `meta/muse-spark-open` (Modal provider, `meta/muse-spark-open-20261015`, the
