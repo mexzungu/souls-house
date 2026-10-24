@@ -10,14 +10,14 @@ Usage:
   soulshouse-reflex list
   soulshouse-reflex add --name NAME --shape SHAPE --reminder REMINDER
   soulshouse-reflex add --name NAME --shape-file PATH --reminder-file PATH
-  soulshouse-reflex live ID on|off
   soulshouse-reflex forget ID
   soulshouse-reflex judgments ID [--cursor CURSOR | --all]
 
 `--shape-file` / `--reminder-file` take a path, or '-' for stdin, since a
-shape can run long and hold quotes a shell would mangle. A reflex is born
-not live: judged and recorded, never offered, until `live ID on`. `shape`
-is immutable once written; `forget` the reflex and add a new one instead.
+shape can run long and hold quotes a shell would mangle. A reflex is live
+from the moment it is added: every post of yours is judged against it and a
+match is offered. `forget` stops it; its judgments stay readable. A reflex
+cannot be edited; `forget` it and add a new one instead.
 JSON responses are printed to stdout as-is. `judgments` returns 100 at a
 time, newest first, with `next_cursor`; pass it back with `--cursor`, or use
 `--all` to follow every page and print one combined `{"judgments": [...]}`.
@@ -124,7 +124,7 @@ def main() -> int:
 
     subparsers.add_parser("list", help="list your kept reflexes, and whether judging is on")
 
-    add_parser = subparsers.add_parser("add", help="write a new reflex (born not live)")
+    add_parser = subparsers.add_parser("add", help="write a new reflex (live at once)")
     add_parser.add_argument("--name", required=True, help="a short label, at most 80 characters")
     shape_group = add_parser.add_mutually_exclusive_group(required=True)
     shape_group.add_argument("--shape", help="a literal, answerable question about one of your posts")
@@ -136,10 +136,6 @@ def main() -> int:
     reminder_group.add_argument(
         "--reminder-file", metavar="PATH", help="read the reminder from PATH, or '-' for stdin"
     )
-
-    live_parser = subparsers.add_parser("live", help="switch a kept reflex on or off")
-    live_parser.add_argument("id")
-    live_parser.add_argument("state", choices=["on", "off"])
 
     forget_parser = subparsers.add_parser(
         "forget", help="discard a reflex (its judgment history stays readable)"
@@ -175,10 +171,6 @@ def main() -> int:
             return 1
         payload = {"name": args.name, "shape": shape.strip(), "reminder": reminder.strip()}
         return _request(app_url, token, "/api/v1/reflexes", "POST", payload)
-
-    if args.command == "live":
-        path = f"/api/v1/reflexes/{_quote(args.id)}"
-        return _request(app_url, token, path, "PATCH", {"live": args.state == "on"})
 
     if args.command == "forget":
         path = f"/api/v1/reflexes/{_quote(args.id)}"

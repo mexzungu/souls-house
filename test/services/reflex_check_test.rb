@@ -7,8 +7,8 @@ class ReflexCheckTest < ActiveSupport::TestCase
     @other = agents(:code_reviewer)
     @chat = @agent.account.chats.create!(title: "Reflexes", manual_responses: true, agents: [ @agent, @other ])
     switches(scope: "account_choice", account: true)
-    @live = reflex("Live", live: true)
-    @shadow = reflex("Shadow")
+    @first = reflex("First")
+    @second = reflex("Second")
   end
 
   test "one decide call with one question per kept reflex, keyed by reflex id" do
@@ -24,11 +24,11 @@ class ReflexCheckTest < ActiveSupport::TestCase
 
     assert_equal 1, calls.size
     questions = calls.first[:questions]
-    assert_equal [ @live.to_param, @shadow.to_param ].sort, questions.keys.sort
-    assert_equal "noul", questions[@live.to_param][:type]
-    assert_includes questions[@live.to_param][:instructions], "Question: #{@live.shape}"
-    assert_includes questions[@live.to_param][:instructions], ReflexCheck::INSTRUCTIONS
-    assert_equal UtilityInference::REQUEST_TIMEOUT, calls.first[:timeout]
+    assert_equal [ @first.to_param, @second.to_param ].sort, questions.keys.sort
+    assert_equal "noul", questions[@first.to_param][:type]
+    assert_includes questions[@first.to_param][:instructions], "Question: #{@first.shape}"
+    assert_includes questions[@first.to_param][:instructions], ReflexCheck::INSTRUCTIONS
+    assert_equal ReflexCheck::TIMEOUT, calls.first[:timeout]
   end
 
   test "state is the post last, marked post: true, after at most six earlier messages" do
@@ -54,22 +54,22 @@ class ReflexCheckTest < ActiveSupport::TestCase
     assert entries.last[:post]
   end
 
-  test "judgments are written for every reflex, shadow ones too; only live ones at or above threshold are offered" do
-    exact = reflex("Exact", live: true)
-    low = reflex("Low", live: true)
+  test "judgments are written for every reflex; those at or above threshold are offered" do
+    exact = reflex("Exact")
+    low = reflex("Low")
     message = say("Post")
-    scores = { @live.to_param => 0.9, @shadow.to_param => 0.99, exact.to_param => ReflexCheck::THRESHOLD, low.to_param => 0.74 }
+    scores = { @first.to_param => 0.9, @second.to_param => 0.1, exact.to_param => ReflexCheck::THRESHOLD, low.to_param => 0.74 }
     cues = UtilityInference.stub(:decide, ->(**) { scores }) { ReflexCheck.new(message).call }
 
-    assert_equal [ @live.to_param, exact.to_param ].sort, cues.map(&:id).sort
-    cue = cues.find { |c| c.id == @live.to_param }
-    assert_equal({ id: @live.to_param, name: "Live", reminder: "Reminder for Live" }, cue.as_json)
+    assert_equal [ @first.to_param, exact.to_param ].sort, cues.map(&:id).sort
+    cue = cues.find { |c| c.id == @first.to_param }
+    assert_equal({ id: @first.to_param, name: "First", reminder: "Reminder for First" }, cue.as_json)
 
     judgments = Reflex::Judgment.where(message: message).index_by(&:reflex_id)
     assert_equal 4, judgments.size
-    assert_in_delta 0.99, judgments[@shadow.id].score
-    assert_not judgments[@shadow.id].offered
-    assert judgments[@live.id].offered
+    assert_in_delta 0.1, judgments[@second.id].score
+    assert_not judgments[@second.id].offered
+    assert judgments[@first.id].offered
     assert judgments[exact.id].offered
     assert_not judgments[low.id].offered
     assert_in_delta 0.74, judgments[low.id].score
@@ -91,34 +91,27 @@ class ReflexCheckTest < ActiveSupport::TestCase
     assert rows.all? { |r| r.score.nil? && !r.offered }
   end
 
-  test "with raise_errors a classifier failure propagates and records nothing" do
+  test "a reflex is offered the moment it is written" do
+    fresh = reflex("Fresh")
     message = say("Post")
-    UtilityInference.stub(:decide, ->(**) { raise UtilityInference::InvalidResponse, "bad" }) do
-      assert_raises(UtilityInference::InvalidResponse) { ReflexCheck.new(message).call(raise_errors: true) }
+    cues = UtilityInference.stub(:decide, ->(questions:, **) { questions.keys.index_with(0.0).merge(fresh.to_param => 0.9) }) do
+      ReflexCheck.after_post(message)
     end
-    assert_equal 0, Reflex::Judgment.where(message: message).count
+    assert_equal [ fresh.to_param ], cues.map(&:id)
+    assert Reflex::Judgment.find_by!(reflex: fresh, message: message).offered
   end
 
-  test "after_post enqueues the job and returns no cues while no reflex is live" do
-    @live.update!(live: false)
+  test "a forgotten reflex is not asked" do
+    @second.discard
     message = say("Post")
-    UtilityInference.stub :decide, ->(**) { flunk "the shadow path runs in the job" } do
-      assert_enqueued_with(job: ReflexCheckJob, args: [ message.id ]) do
-        assert_equal [], ReflexCheck.after_post(message)
-      end
+    calls = []
+    UtilityInference.stub(:decide, ->(questions:, **) { calls << questions.keys; questions.keys.index_with(0.9) }) do
+      assert_equal [ @first.to_param ], ReflexCheck.after_post(message).map(&:id)
     end
-    assert_equal 0, Reflex::Judgment.count
+    assert_equal [ [ @first.to_param ] ], calls
   end
 
-  test "a discarded live reflex does not make the check synchronous" do
-    @live.discard
-    message = say("Post")
-    assert_enqueued_with(job: ReflexCheckJob, args: [ message.id ]) do
-      UtilityInference.stub(:decide, ->(**) { flunk "shadow only" }) { ReflexCheck.after_post(message) }
-    end
-  end
-
-  test "after_post runs synchronously with the live timeout when a reflex is live" do
+  test "after_post runs synchronously with the short timeout" do
     message = say("Post")
     seen = nil
     cues = nil
@@ -126,20 +119,18 @@ class ReflexCheckTest < ActiveSupport::TestCase
       seen = timeout
       questions.keys.index_with(0.8)
     }) do
-      assert_no_enqueued_jobs(only: ReflexCheckJob) { cues = ReflexCheck.after_post(message) }
+      cues = ReflexCheck.after_post(message)
     end
-    assert_equal ReflexCheck::LIVE_TIMEOUT, seen
-    assert_equal [ @live.to_param ], cues.map(&:id)
+    assert_equal ReflexCheck::TIMEOUT, seen
+    assert_equal [ @first.to_param, @second.to_param ].sort, cues.map(&:id).sort
     assert_equal 2, Reflex::Judgment.where(message: message).count
   end
 
   test "after_post does nothing without reflexes" do
     @agent.reflexes.each(&:discard)
     message = say("Post")
-    assert_no_enqueued_jobs(only: ReflexCheckJob) do
-      UtilityInference.stub(:decide, ->(**) { flunk "nothing to judge" }) do
-        assert_equal [], ReflexCheck.after_post(message)
-      end
+    UtilityInference.stub(:decide, ->(**) { flunk "nothing to judge" }) do
+      assert_equal [], ReflexCheck.after_post(message)
     end
   end
 
@@ -147,11 +138,9 @@ class ReflexCheckTest < ActiveSupport::TestCase
     human = @chat.messages.create!(role: "user", user: users(:user_1), content: "Human post")
     progress = @chat.messages.create!(role: "assistant", agent: @agent, content: "Working…", progress_message: true)
     UtilityInference.stub(:decide, ->(**) { flunk "not checkable" }) do
-      assert_no_enqueued_jobs(only: ReflexCheckJob) do
-        assert_equal [], ReflexCheck.after_post(human)
-        assert_equal [], ReflexCheck.after_post(progress)
-        assert_equal [], ReflexCheck.after_post(nil)
-      end
+      assert_equal [], ReflexCheck.after_post(human)
+      assert_equal [], ReflexCheck.after_post(progress)
+      assert_equal [], ReflexCheck.after_post(nil)
     end
   end
 
@@ -171,7 +160,7 @@ class ReflexCheckTest < ActiveSupport::TestCase
       allowed.each do |scope, account|
         switches(scope: scope, account: account)
         assert ReflexCheck.enabled_for?(@agent), [ scope, account ].inspect
-        assert_equal [ @live.to_param ], ReflexCheck.after_post(message.reload).map(&:id), [ scope, account ].inspect
+        assert_equal [ @first.to_param, @second.to_param ].sort, ReflexCheck.after_post(message.reload).map(&:id).sort, [ scope, account ].inspect
       end
     end
   end
@@ -197,20 +186,12 @@ class ReflexCheckTest < ActiveSupport::TestCase
     assert_equal [], UtilityInference.stub(:decide, ->(**) { raise "boom" }) { ReflexCheck.after_post(message) }
     assert_equal [], UtilityInference.stub(:decide, ->(**) { raise ActiveRecord::StatementInvalid, "db" }) { ReflexCheck.after_post(message) }
     UtilityInference.stub(:decide, ->(questions:, **) { questions.keys.index_with(0.9) }) do
-      Reflex::Judgment.stub(:upsert_all, ->(*) { raise ActiveRecord::ConnectionNotEstablished }) do
+      Reflex::Judgment.stub(:insert_all, ->(*) { raise ActiveRecord::ConnectionNotEstablished }) do
         assert_equal [], ReflexCheck.after_post(message)
       end
     end
     # A malformed answer missing a key is also contained.
     assert_equal [], UtilityInference.stub(:decide, ->(**) { {} }) { ReflexCheck.after_post(message) }
-  end
-
-  test "a recorded score is not overwritten by a later failure" do
-    message = say("Post")
-    UtilityInference.stub(:decide, ->(questions:, **) { questions.keys.index_with(0.9) }) { ReflexCheck.new(message).call }
-    ReflexCheck.new(message).record_failure
-    assert_in_delta 0.9, Reflex::Judgment.find_by!(reflex: @live, message: message).score
-    assert Reflex::Judgment.find_by!(reflex: @live, message: message).offered
   end
 
   private
@@ -219,8 +200,8 @@ class ReflexCheckTest < ActiveSupport::TestCase
     @chat.messages.create!(role: "assistant", agent: @agent, content: content)
   end
 
-  def reflex(name, live: false)
-    @agent.reflexes.create!(name: name, shape: "Does the post match #{name}?", reminder: "Reminder for #{name}", live: live)
+  def reflex(name)
+    @agent.reflexes.create!(name: name, shape: "Does the post match #{name}?", reminder: "Reminder for #{name}")
   end
 
   def switches(scope:, account:)

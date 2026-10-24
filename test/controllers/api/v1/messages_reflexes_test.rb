@@ -16,10 +16,10 @@ module Api
         @human = { "Authorization" => "Bearer #{ApiKey.generate_for(@user, name: "Human").raw_token}" }
         Setting.instance.update!(reflexes_scope: "account_choice")
         @account.update!(reflexes_enabled: true)
-        @reflex = @agent.reflexes.create!(name: "Follow-up", shape: "Does the post promise a follow-up?", reminder: "Write the follow-up down.", live: true)
+        @reflex = @agent.reflexes.create!(name: "Follow-up", shape: "Does the post promise a follow-up?", reminder: "Write the follow-up down.")
       end
 
-      test "a live reflex at or above threshold rides back as a cue" do
+      test "a new reflex at or above threshold rides back as a cue at once" do
         seen = nil
         stub_decide(->(questions:, timeout:, **) { seen = timeout; reflex_scores(questions, 0.9) }) do
           post_as_resident("I'll send the link tomorrow.")
@@ -27,7 +27,7 @@ module Api
         assert_response :created
         assert_equal [ { "id" => @reflex.to_param, "name" => "Follow-up", "reminder" => "Write the follow-up down." } ],
           response.parsed_body["reflexes"]
-        assert_equal ReflexCheck::LIVE_TIMEOUT, seen
+        assert_equal ReflexCheck::TIMEOUT, seen
         message = @chat.messages.order(:id).last
         judgment = Reflex::Judgment.find_by!(reflex: @reflex, message: message)
         assert judgment.offered
@@ -37,7 +37,7 @@ module Api
       test "no reflexes, no cues and no check" do
         @reflex.discard
         stub_decide(->(questions:, **) { flunk "nothing to judge" if reflex_keys(questions).any?; questions.keys.index_with(0.0) }) do
-          assert_no_enqueued_jobs(only: ReflexCheckJob) { post_as_resident("Hello") }
+          post_as_resident("Hello")
         end
         assert_response :created
         assert_equal [], response.parsed_body["reflexes"]
@@ -50,18 +50,6 @@ module Api
         judgment = Reflex::Judgment.find_by!(reflex: @reflex)
         assert_in_delta 0.3, judgment.score
         assert_not judgment.offered
-      end
-
-      test "a shadow reflex is judged off the post path" do
-        @reflex.update!(live: false)
-        stub_decide(->(questions:, **) { flunk "shadow runs in the job" if reflex_keys(questions).any?; questions.keys.index_with(0.0) }) do
-          assert_enqueued_jobs 1, only: ReflexCheckJob do
-            post_as_resident("I'll send the link tomorrow.")
-          end
-        end
-        assert_response :created
-        assert_equal [], response.parsed_body["reflexes"]
-        assert_equal 0, Reflex::Judgment.count
       end
 
       test "a Jev failure never fails the post" do
