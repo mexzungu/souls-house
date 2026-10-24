@@ -23,10 +23,19 @@ module Agents
         !truncated && count.positive? && categories.all?("runtime_unavailable")
       end
 
+      # Every failure in the streak was the provider refusing the model, so
+      # the card can say why instead of only counting.
+      def model_unavailable?
+        !truncated && count.positive? && categories.all?("model_unavailable")
+      end
+
       def as_card_json
         return if count < 2
 
-        { count: count, since: (since&.iso8601 unless truncated), runtime_unavailable: runtime_unavailable?, capped: truncated }
+        {
+          count: count, since: (since&.iso8601 unless truncated), runtime_unavailable: runtime_unavailable?,
+          model_unavailable: model_unavailable?, capped: truncated
+        }
       end
     end
 

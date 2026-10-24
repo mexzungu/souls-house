@@ -2,8 +2,10 @@
 // connection, its session tables (whatsmeow_*) living in the connection's
 // SQLCipher store through sqlstore.NewWithDB on our own *sql.DB.
 //
-// Receive only. There is no send code here, and nothing calls whatsmeow's
-// send, presence or read-receipt functions.
+// Receiving, and one kind of sending: SendText, a plain text message
+// (waE2E.Message.Conversation) for Rails' send_text command, with the
+// message id Rails chose. Nothing calls whatsmeow's presence, read-receipt
+// or any other send function.
 //
 // Hygiene (proposal 2026-10-09 §3): whatsmeow gets waLog.Noop (its Debug
 // logger logs every node, phone numbers included), and libsignal's default
@@ -75,6 +77,8 @@ type Session struct {
 	// codeSink is the sink of the request whose code was issued last: when
 	// pairing ends unused, that request is told its code expired.
 	codeSink provider.Sink
+	// cli is Run's client while Run is running (SendText, Online).
+	cli *whatsmeow.Client
 }
 
 func newSession(c *sqlstore.Container) *Session {
@@ -107,6 +111,17 @@ func (s *Session) Run(ctx context.Context, sink provider.Sink, pair bool) error 
 	// A message is acknowledged to WhatsApp only once every handler has
 	// returned, i.e. once it is in the durable outbox.
 	cli.SynchronousAck = true
+	// UseRetryMessageStore stays false (whatsmeow's default): a sent
+	// message is kept for retry receipts in memory only, never written to
+	// the store.
+	s.mu.Lock()
+	s.cli = cli
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.cli = nil
+		s.mu.Unlock()
+	}()
 
 	h := &handler{cli: cli, sink: sink, ctx: ctx, loggedOut: make(chan struct{}), names: map[types.JID]bool{}}
 	cli.AddEventHandlerWithSuccessStatus(h.handle)

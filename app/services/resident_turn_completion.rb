@@ -48,6 +48,8 @@ class ResidentTurnCompletion
       text = "Provider connection expired. Reconnect it in agent hosting settings."
     when "subscription_limit"
       text = AgentSubscriptionUsage.new(body["subscription_usage"]).user_message
+    when "model_unavailable"
+      text = ModelUnavailableNotice.text(agent: @turn.agent, model: interaction.model, link: interaction.chat.present?)
     end
     return unless text
     if interaction.chat

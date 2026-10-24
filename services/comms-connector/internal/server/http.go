@@ -12,21 +12,30 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"services/comms-connector/internal/command"
 	"services/comms-connector/internal/ids"
+	"services/comms-connector/internal/provider"
 	"services/comms-connector/internal/worker"
 )
 
-// MaxCommandBytes bounds a command body; the largest (start_pairing) is
-// well under 1 KiB.
-const MaxCommandBytes = 16 << 10
+// MaxCommandBytes bounds a command body. The largest is send_text: 4096
+// characters of text, which JSON can spell in up to 12 bytes each (a
+// character outside the BMP as an escaped surrogate pair), 48 KiB, and a
+// little envelope.
+const MaxCommandBytes = 64 << 10
+
+// MaxSendText is the longest send_text, in characters (Unicode code
+// points, as Ruby's String#length counts them).
+const MaxSendText = 4096
 
 // Commands is what the handler drives (the Manager).
 type Commands interface {
 	StartPairing(ctx context.Context, ref, secret string, version int64) error
 	Unpair(ctx context.Context, ref string) error
 	PairPhone(ctx context.Context, ref, phone string, attempt int64, request string, seq int64) error
+	SendText(ctx context.Context, ref string, req worker.SendRequest) (worker.SendResult, error)
 }
 
 type Handler struct {
@@ -35,9 +44,9 @@ type Handler struct {
 	Log      *slog.Logger
 }
 
-// ServeHTTP: POST /connections/{ref}/{start_pairing|unpair|pair_phone},
-// GET /healthz. Bodies (which can carry a secret or a phone number) are
-// never logged; refusals log a fixed code.
+// ServeHTTP: POST /connections/{ref}/{start_pairing|unpair|pair_phone|send_text},
+// GET /healthz. Bodies (which can carry a secret, a phone number, a chat
+// or a text) are never logged; refusals log a fixed code.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -49,7 +58,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref, op := parts[1], parts[2]
-	if op != "start_pairing" && op != "unpair" && op != "pair_phone" {
+	if op != "start_pairing" && op != "unpair" && op != "pair_phone" && op != "send_text" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown_operation"})
 		return
 	}
@@ -130,6 +139,63 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeJSON(w, http.StatusAccepted, map[string]string{"status": "requested"})
 		}
+	case "send_text":
+		h.sendText(ctx, w, ref, cmd)
+	}
+}
+
+// sendText: the fields are checked first (422, nothing recorded), then the
+// worker runs the send (worker.SendText). The answers are the send_text
+// contract's; anything else, including a 502 send_unknown, Rails treats as
+// unknown and never retries.
+func (h *Handler) sendText(ctx context.Context, w http.ResponseWriter, ref string, cmd command.Command) {
+	const op = "send_text"
+	if cmd.Attempt < 1 {
+		h.refuse(w, op, "bad_attempt", http.StatusUnprocessableEntity)
+		return
+	}
+	if !ids.ValidSendID(cmd.SendID) {
+		h.refuse(w, op, "bad_send_id", http.StatusUnprocessableEntity)
+		return
+	}
+	if !ids.ValidMessageID(cmd.MessageID) {
+		h.refuse(w, op, "bad_message_id", http.StatusUnprocessableEntity)
+		return
+	}
+	if _, err := provider.ParseChat(cmd.Chat); err != nil {
+		code := "bad_chat"
+		if errors.Is(err, provider.ErrUnsupportedChat) {
+			code = "unsupported_chat"
+		}
+		h.refuse(w, op, code, http.StatusUnprocessableEntity)
+		return
+	}
+	if n := utf8.RuneCountInString(cmd.Text); n < 1 || n > MaxSendText || !utf8.ValidString(cmd.Text) {
+		h.refuse(w, op, "bad_text", http.StatusUnprocessableEntity)
+		return
+	}
+	res, err := h.Commands.SendText(ctx, ref, worker.SendRequest{Attempt: cmd.Attempt, SendID: cmd.SendID,
+		MessageID: cmd.MessageID, Chat: cmd.Chat, Text: cmd.Text})
+	var refused *worker.SendRefused
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, map[string]string{"status": "sent", "message_id": res.MessageID, "sent_at": res.SentAt})
+	case errors.Is(err, worker.ErrNotConnected):
+		h.refuse(w, op, "not_connected", http.StatusConflict)
+	case errors.Is(err, worker.ErrStaleAttempt):
+		h.refuse(w, op, "stale_attempt", http.StatusConflict)
+	case errors.Is(err, worker.ErrOutcomeUnknown):
+		h.refuse(w, op, "outcome_unknown", http.StatusConflict)
+	case errors.Is(err, worker.ErrSendMismatch):
+		h.refuse(w, op, "send_mismatch", http.StatusUnprocessableEntity)
+	case errors.As(err, &refused):
+		h.Log.Warn("command refused", slog.String("op", op), slog.String("reason", "refused"), slog.String("refused", refused.Reason))
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "refused", "reason": refused.Reason})
+	case errors.Is(err, worker.ErrSendUnknown):
+		h.refuse(w, op, "send_unknown", http.StatusBadGateway)
+	default:
+		// A store failure before anything was sent, or anything else.
+		h.refuse(w, op, "send_failed", http.StatusInternalServerError)
 	}
 }
 

@@ -117,3 +117,16 @@ test('shows a failure streak, and calls the runtime not starting only when the s
   });
   expect(screen.getByTestId('failed-runs')).toHaveTextContent("Test resident's runtime isn't starting");
 });
+
+test('says the model is unavailable when every failure in the streak was a refused model', () => {
+  render(AgentCard, {
+    agent: {
+      ...agent,
+      failed_runs: { count: 4, since: new Date().toISOString(), runtime_unavailable: false, model_unavailable: true },
+    },
+    accountId: 'test',
+  });
+  const box = screen.getByTestId('failed-runs');
+  expect(box).toHaveTextContent("Test resident's model isn't available on its subscription");
+  expect(box).not.toHaveTextContent("runtime isn't starting");
+});

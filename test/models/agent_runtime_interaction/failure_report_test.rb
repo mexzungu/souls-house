@@ -39,6 +39,26 @@ class AgentRuntimeInteraction::FailureReportTest < ActiveSupport::TestCase
     assert_nil live_run("busy").failure_category
   end
 
+  test "a model the subscription doesn't offer is its own category, from the runtime's structured kind" do
+    refused = live_run("failed", runtime_status: "error", runtime_returncode: 1,
+      response_body: { "status" => "error", "error_kind" => "model_unavailable" })
+    assert_equal "model_unavailable", refused.failure_category
+    # The CLI's words in stdout are not the evidence; the runtime's classification is.
+    assert_equal "runtime_error", live_run("failed", runtime_status: "error", runtime_returncode: 1,
+      stdout: "model gemini-4-argon-medium is not recognized as a known model").failure_category
+  end
+
+  test "the card says why when every failure in the streak was a refused model" do
+    2.times do
+      live_run("failed", runtime_status: "error", runtime_returncode: 1,
+        response_body: { "status" => "error", "error_kind" => "model_unavailable" })
+    end
+    card = Agents::RunFailureStreak.call(@agent).as_card_json
+    assert_equal 2, card[:count]
+    assert card[:model_unavailable]
+    assert_not card[:runtime_unavailable]
+  end
+
   private
 
   def live_run(state, **attrs)

@@ -454,6 +454,44 @@ class ExternalAgentResponseRequestTest < ActiveSupport::TestCase
     refute_includes interaction.response_body.keys, "full_invocation_text"
   end
 
+  test "a model the subscription no longer offers is named in the room, with no raw CLI text" do
+    agent = agents(:research_assistant)
+    chat = agent.account.chats.create!(model_id: "google/gemini-4-argon", title: "Withdrawn model")
+    agent.update!(
+      model_id: "google/gemini-4-argon",
+      runtime: "external",
+      uuid: SecureRandom.uuid_v7,
+      endpoint_url: "https://agent.example.com",
+      trigger_bearer_token: "tr_valid",
+      health_state: "healthy",
+      provider_auth_modes: { "gemini" => "oauth_account" },
+      provider_connections: { "gemini" => { "status" => "connected" } }
+    )
+    chat.messages.create!(role: "user", user: users(:user_1), content: "Hello")
+    stub_request(:post, "https://agent.example.com/trigger").to_return(
+      status: 500,
+      body: {
+        status: "error",
+        returncode: 1,
+        stdout: "invalid model selection: model gemini-4-argon-medium is not recognized",
+        error_kind: "model_unavailable"
+      }.to_json
+    )
+
+    assert_difference "chat.messages.count", 1 do
+      chat.agents << agent unless chat.agents.exists?(agent.id)
+      chat.update!(manual_responses: true)
+      ExternalAgentResponseRequest.new(agent:, chat:).call
+    end
+
+    message = chat.messages.order(:created_at).last
+    assert_equal agent, message.agent
+    assert_includes message.content, "Gemini 4 Argon isn't available on #{agent.name}'s subscription right now"
+    assert_includes message.content, Rails.application.routes.url_helpers.edit_account_agent_path(agent.account, agent, tab: "settings")
+    assert_not_includes message.content, "not recognized"
+    assert_equal "connected", agent.reload.provider_connection("gemini").fetch("status")
+  end
+
   test "subscription authentication failures surface a reconnect link instead of raw provider errors" do
     agent = agents(:research_assistant)
     chat = agent.account.chats.create!(model_id: "openai/gpt-5", title: "Expired subscription")

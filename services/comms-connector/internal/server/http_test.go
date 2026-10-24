@@ -80,6 +80,8 @@ type recorder struct {
 	mu       sync.Mutex
 	calls    []string
 	phoneErr error
+	sendRes  worker.SendResult
+	sendErr  error
 }
 
 func (r *recorder) StartPairing(_ context.Context, ref, secret string, version int64) error {
@@ -101,6 +103,13 @@ func (r *recorder) PairPhone(_ context.Context, ref, phone string, attempt int64
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, "pair_phone "+ref+" "+phone+" "+strconv.FormatInt(attempt, 10)+" "+request+" "+strconv.FormatInt(seq, 10))
 	return r.phoneErr
+}
+
+func (r *recorder) SendText(_ context.Context, ref string, req worker.SendRequest) (worker.SendResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "send_text "+ref+" "+strconv.FormatInt(req.Attempt, 10)+" "+req.SendID+" "+req.MessageID+" "+req.Chat+" "+req.Text)
+	return r.sendRes, r.sendErr
 }
 
 type tlsRig struct {
@@ -336,6 +345,113 @@ func TestPairPhoneRefusalsMapToCodes(t *testing.T) {
 		status, body, _ := do(t, r.client(r.rails), r.command(t, "svc_7", "pair_phone",
 			map[string]any{"phone_number": "+447700900123", "attempt": 1, "request_id": "0123456789abcdef", "request_seq": 3}, "test-command-key"))
 		if status != tc.status || !strings.Contains(body, tc.code) {
+			t.Errorf("%v: %d %s", tc.err, status, body)
+		}
+	}
+}
+
+const (
+	sendTextBody = "Dinner at 8? CANARY-COMMS-http-send-6e1f"
+	sendChatJID  = "447700900123@s.whatsapp.net"
+	sendMsgID    = "3EB00123456789ABCDEF"
+)
+
+func sendFields() map[string]any {
+	return map[string]any{"attempt": 2, "send_id": "snd_77", "message_id": sendMsgID, "chat": sendChatJID, "text": sendTextBody}
+}
+
+// send_text: signed like every command; each field checked before the
+// send runs (422, nothing recorded); the answer is the contract's 200
+// body. The chat, the text and the ids are in no log line.
+func TestSendTextCommand(t *testing.T) {
+	r := newTLSRig(t)
+	c := r.client(r.rails)
+	r.rec.sendRes = worker.SendResult{MessageID: sendMsgID, SentAt: "2026-10-24T10:00:07Z"}
+	status, body, err := do(t, c, r.command(t, "svc_7", "send_text", sendFields(), "test-command-key"))
+	if err != nil || status != 200 {
+		t.Fatalf("send_text: %d %s %v", status, body, err)
+	}
+	var got map[string]any
+	if json.Unmarshal([]byte(body), &got) != nil || len(got) != 3 || got["status"] != "sent" ||
+		got["message_id"] != sendMsgID || got["sent_at"] != "2026-10-24T10:00:07Z" {
+		t.Fatalf("body %s", body)
+	}
+	long := strings.Repeat("é", MaxSendText)
+	cases := []struct {
+		name  string
+		field string
+		value any // nil: the field is left out
+		code  string
+	}{
+		{"no attempt", "attempt", nil, "bad_attempt"},
+		{"attempt zero", "attempt", 0, "bad_attempt"},
+		{"attempt string", "attempt", "2", "bad_attempt"},
+		{"no send id", "send_id", nil, "bad_send_id"},
+		{"send id too long", "send_id", strings.Repeat("s", 65), "bad_send_id"},
+		{"send id with a slash", "send_id", "snd/77", "bad_send_id"},
+		{"no message id", "message_id", nil, "bad_message_id"},
+		{"lower-case message id", "message_id", strings.ToLower(sendMsgID), "bad_message_id"},
+		{"22-character message id", "message_id", "3EB0123456789ABCDEF012", "bad_message_id"},
+		{"no chat", "chat", nil, "bad_chat"},
+		{"a phone number", "chat", "+447700900123", "bad_chat"},
+		{"a device JID", "chat", "447700900123:2@s.whatsapp.net", "bad_chat"},
+		{"status", "chat", "status@broadcast", "unsupported_chat"},
+		{"a broadcast list", "chat", "1600000000@broadcast", "unsupported_chat"},
+		{"a newsletter", "chat", "120363000000000002@newsletter", "unsupported_chat"},
+		{"no text", "text", nil, "bad_text"},
+		{"empty text", "text", "", "bad_text"},
+		{"4097 characters", "text", long + "x", "bad_text"},
+		{"a number for a chat", "chat", 447700900123, "bad_json"},
+	}
+	for _, tc := range cases {
+		fields := sendFields()
+		delete(fields, tc.field)
+		if tc.value != nil {
+			fields[tc.field] = tc.value
+		}
+		status, body, _ := do(t, c, r.command(t, "svc_7", "send_text", fields, "test-command-key"))
+		if (status != 422 && status != 401) || !strings.Contains(body, `"`+tc.code+`"`) {
+			t.Errorf("%s: %d %s", tc.name, status, body)
+		}
+	}
+	// 4096 two-byte characters, the longest text, fits the body bound.
+	fields := sendFields()
+	fields["text"] = long
+	if status, body, _ := do(t, c, r.command(t, "svc_7", "send_text", fields, "test-command-key")); status != 200 {
+		t.Fatalf("4096 characters: %d %s", status, body)
+	}
+	if status, body, _ := do(t, c, r.command(t, "svc_7", "send_text", sendFields(), "wrong-key")); status != 401 || !strings.Contains(body, "bad_signature") {
+		t.Fatalf("wrong key: %d %s", status, body)
+	}
+	if len(r.rec.calls) != 2 || r.rec.calls[0] != "send_text svc_7 2 snd_77 "+sendMsgID+" "+sendChatJID+" "+sendTextBody {
+		t.Fatalf("calls %q", r.rec.calls)
+	}
+	logs := r.logs.String()
+	for _, needle := range []string{sendTextBody, "CANARY", "447700900123", "7700", sendMsgID, "snd_77", "éé"} {
+		if strings.Contains(logs, needle) {
+			t.Errorf("logs contain %q: %s", needle, logs)
+		}
+	}
+}
+
+func TestSendTextOutcomesMapToTheContract(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		status int
+		body   string
+	}{
+		{worker.ErrNotConnected, 409, `{"error":"not_connected"}`},
+		{worker.ErrStaleAttempt, 409, `{"error":"stale_attempt"}`},
+		{worker.ErrOutcomeUnknown, 409, `{"error":"outcome_unknown"}`},
+		{worker.ErrSendMismatch, 422, `{"error":"send_mismatch"}`},
+		{&worker.SendRefused{Reason: "not_on_whatsapp"}, 422, `{"error":"refused","reason":"not_on_whatsapp"}`},
+		{worker.ErrSendUnknown, 502, `{"error":"send_unknown"}`},
+		{errors.New("store"), 500, `{"error":"send_failed"}`},
+	} {
+		r := newTLSRig(t)
+		r.rec.sendErr = tc.err
+		status, body, _ := do(t, r.client(r.rails), r.command(t, "svc_7", "send_text", sendFields(), "test-command-key"))
+		if status != tc.status || strings.TrimSpace(body) != tc.body {
 			t.Errorf("%v: %d %s", tc.err, status, body)
 		}
 	}

@@ -5,18 +5,22 @@ The house's WhatsApp connector: a private-network Kamal accessory
 WhatsApp `ServiceConnection`. Build steps 2 and 3 of
 `docs/proposals/2026-10-09-whatsapp-connections.md` (§2, §3, §7).
 
-Receive only. There is no send endpoint, scope or code.
+Receives everything; sends one thing: a plain text message, when Rails asks
+with `send_text` (below). Sending is off until Rails enables it: Rails only
+sends `send_text` for a provider listed in its `COMMS_SEND_PROVIDERS`, so
+with that unset the connector receives only, as before. The connector has
+no switch of its own.
 
 ```
 cmd/comms-connector/   startup: hardening, env, manager, mTLS command server
 internal/command/      verifies Rails's signed commands (COMMS_COMMAND_KEY)
 internal/sig/          both signatures, byte for byte with the Ruby (vectors in tests)
-internal/server/       manager (start_pairing / unpair / pair_phone / boot) and the HTTP handler
+internal/server/       manager (start_pairing / unpair / pair_phone / send_text / boot) and the HTTP handler
 internal/worker/       one connection: lease, store, session, ordered delivery to Rails
 internal/rails/        signed POST /internal/comms/connections/:id/events
 internal/provider/     Session/Sink seam; deterministic Synthetic provider
 internal/whatsapp/     whatsmeow provider (sqlstore.NewWithDB on our *sql.DB)
-internal/store/        per-connection SQLCipher store: meta, outbox, carryover, whatsmeow_* tables
+internal/store/        per-connection SQLCipher store: meta, outbox, carryover, sends, whatsmeow_* tables
 internal/keys/         store key = HKDF(COMMS_STORE_KEY, connection); log ids
 internal/lease/        flock on <data>/.leases/<connection>, outside the deletable connection dir
 internal/harden/       PR_SET_DUMPABLE=0, RLIMIT_CORE=0, umask 077, GOTRACEBACK check
@@ -30,7 +34,7 @@ envelope. Residents read through Rails, not the connector.
 ## Protocol
 
 **Rails → connector** (`app/lib/comms_connector.rb`, the same path as Telegram):
-`POST /connections/<svc_id>/start_pairing`, `/unpair` and `/pair_phone`, over mutual TLS
+`POST /connections/<svc_id>/start_pairing`, `/unpair`, `/pair_phone` and `/send_text`, over mutual TLS
 (Rails's client certificate, the connector's server certificate, one house
 CA), signed with the connector-wide `COMMS_COMMAND_KEY`:
 
@@ -104,6 +108,72 @@ and WhatsApp's own error text, which can echo it, is reduced to a fixed
 word. Rails keeps the number nowhere either (`filter_parameters` covers
 `phone` and `phone_number`).
 
+**Sending a text** (`send_text`). The body carries, besides the envelope:
+
+| Field | |
+|---|---|
+| `attempt` | JSON integer: the connection's current pairing attempt (as for `pair_phone`). |
+| `send_id` | The house `CommsSend` id: 1–64 characters of `[A-Za-z0-9_-]`. |
+| `message_id` | The WhatsApp message id, chosen by Rails in the shape the pinned whatsmeow's `GenerateMessageID` makes: `3EB0` and 16 upper-case hex digits (`^3EB0[0-9A-F]{16}$`). Passed on unchanged (`SendRequestExtra.ID`). |
+| `chat` | The chat exactly as the connector reported it in its events: `<digits>@s.whatsapp.net`, `<digits>@lid` (a hidden user whose number the connector did not know) or `<id>@g.us`. No device part. |
+| `text` | 1–4096 characters (code points). Sent as a plain `Conversation` message. |
+
+Answers:
+
+| | |
+|---|---|
+| 200 `{"status":"sent","message_id":…,"sent_at":…}` | WhatsApp accepted it (not delivered, not read). `sent_at` is WhatsApp's server timestamp, RFC 3339 UTC. |
+| 200, the same body | This `send_id` was sent before: answered from the record, nothing sent. |
+| 409 `not_connected` | A `send_id` with no record, and no live paired session for the connection. Nothing recorded or sent. |
+| 409 `stale_attempt` | A `send_id` with no record, and `attempt` is not the connection's. Nothing recorded or sent. |
+| 409 `outcome_unknown` | This `send_id` was attempted and its outcome never recorded (a crash, a timeout, or a duplicate request while the first is still in flight). Never sent again. |
+| 422 `send_mismatch` | This `send_id` was seen with another `message_id`, chat or text, or this `message_id` with another `send_id`. |
+| 422 `refused` + `reason` | Certainly not sent: `not_on_whatsapp`, `recipient_lookup_failed`, `group_lookup_failed`, `not_connected`, `bad_chat`. Answered the same on a replay. |
+| 422 `bad_attempt`, `bad_send_id`, `bad_message_id`, `bad_chat`, `unsupported_chat`, `bad_text` | A field is wrong. Nothing recorded or sent. `unsupported_chat`: status updates, broadcast lists, newsletters, bots and other servers. (`attempt` that is not a positive JSON integer is refused by the verifier, 401 `bad_attempt`, as for `pair_phone`.) |
+| 502 `send_unknown` | The send may or may not have gone out (a timeout, a lost connection, a server error after sending). Recorded as attempted, so never sent again. |
+| 500 `send_failed` | The store failed. This can only happen before WhatsApp is asked: after the call, a failure to record the outcome is logged and the answer is still the outcome (and the row stays `attempted`, so a replay answers `outcome_unknown`). Rails treats it as unknown anyway. |
+
+Rails treats anything else (no answer, a timeout, another status) as
+unknown, and never retries a send.
+
+**A recorded `send_id` is answered from its record first**, before the
+attempt or the session is looked at: a replay of a sent, refused or
+attempted `send_id` answers the identical 200, the same 422 `refused` or
+409 `outcome_unknown` whether or not the connection is connected or the
+attempt is current (and 422 `send_mismatch` if anything differs). Only a
+`send_id` with no record goes on to `stale_attempt` / `not_connected` and
+then to the attempted write.
+
+**Durability: at most once per `send_id`.** Before WhatsApp is asked, the
+connector writes `sends(send_id, message_id, chat_digest, text_digest,
+state='attempted')` to the connection's SQLCipher store and commits it
+(`synchronous=FULL`). The check and the write are one immediate
+transaction, so of any number of simultaneous requests for one `send_id`
+exactly one reaches WhatsApp. After the call the row becomes `sent` (with
+`sent_at`) or `refused` (with the reason). An unknown outcome leaves it
+`attempted`, and a row still `attempted` answers `outcome_unknown` for
+ever, after a crash or a restart too: the connector never sends a
+`send_id` twice. The digests are SHA-256 of the chat and of the text; the
+text is not stored, and neither it, the chat, the message id nor the send
+id appears in a log line. The record survives a restarted pairing
+(`start_pairing` keeps the `sends` table) and goes with the store on
+`unpair`. whatsmeow keeps a sent message for retry receipts in memory only
+(`UseRetryMessageStore` stays off).
+
+Only these whatsmeow errors count as refusals, because the pinned version
+(`send.go`) returns them before any part of the message reaches the
+socket: `ErrClientIsNil` and `ErrNotLoggedIn` (`not_connected`),
+`ErrRecipientADJID` (`bad_chat`), "no LID found for … from server"
+(`not_on_whatsapp`), the number's LID or user-info lookup failing
+(`recipient_lookup_failed`), and the group's member lookup failing
+(`group_lookup_failed`). They are matched on the top-level error only.
+Everything else is unknown, including an error code in the server's ack.
+
+The sent message reaches Rails like any other: when WhatsApp reports it
+back as the account's own message (`IsFromMe`), it is an ordinary
+`message.upsert` whose `provider_message_id` is the `message_id` Rails
+chose.
+
 **Revocation.** If the owner's disconnect cannot reach the connector, Rails
 still revokes the connection (and erases the secret), keeps it marked
 `unpair` pending, shows that on the owner's card, and retries `unpair` every
@@ -174,6 +244,7 @@ COMMS_CONNECTOR_BIN=services/comms-connector/bin/comms-connector \
 | `COMMS_LISTEN` | Default `:8443`. |
 | `COMMS_DATA_DIR` | Default `/data` (the `comms` volume). |
 | `COMMS_PROVIDER` | `whatsapp` (default) or `synthetic` (refused unless `COMMS_ALLOW_SYNTHETIC=1`). |
+| `COMMS_SYNTHETIC_SEND` | Synthetic provider only: unset (a send succeeds and is echoed back as a received message), `refuse` (`not_on_whatsapp`), `unknown` or `hang`. |
 | `GOTRACEBACK` | Must be unset or `none`. |
 
 The binary refuses to start, logging a fixed reason and no value, if any of
@@ -237,6 +308,15 @@ WhatsApp integration stays hidden (its catalog entry requires
   the phone shows a notification for it are unverified.
 - Group names come from a `GetGroupInfo` call per chat per run; untested
   online.
+- Sending has not run against WhatsApp. Tested: the store, the worker and
+  the handler with the synthetic provider (including a real process exit
+  between the attempted record and the answer), and the refusal mapping
+  against the real `SendMessage` offline (no socket). Untested: a send
+  that WhatsApp accepts, the server timestamp, sending to a `@lid` chat and
+  to a group, the server's error codes, and whether WhatsApp reports our
+  own sent message back to this linked device at all (it is normally
+  shown on the account's other devices; the connector handles it if it
+  comes).
 - Media are never downloaded (milestone 1): a message records the kind and
   caption.
 - The Docker image has not been built here (no Docker in this environment).

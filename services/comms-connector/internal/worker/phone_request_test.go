@@ -70,6 +70,12 @@ func (g *gatedSession) Run(ctx context.Context, _ provider.Sink, _ bool) error {
 
 func (g *gatedSession) Logout(context.Context) error { return nil }
 
+func (g *gatedSession) Online() bool { return false }
+
+func (g *gatedSession) SendText(context.Context, string, string, string) (time.Time, error) {
+	return time.Time{}, provider.ErrSendUnknown
+}
+
 func (g *gatedSession) RequestPhoneCode(ctx context.Context, sink provider.Sink, phone string) error {
 	g.done.Add(1)
 	defer g.done.Done()

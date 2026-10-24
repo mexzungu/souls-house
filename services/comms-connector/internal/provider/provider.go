@@ -89,6 +89,16 @@ type Session interface {
 	// one. Called only while Run is not running. Best effort: the caller
 	// deletes the store either way.
 	Logout(ctx context.Context) error
+	// Online reports whether the session can send right now: Run is
+	// connected and logged in. Checked before a send is recorded.
+	Online() bool
+	// SendText sends text to chat (as ParseChat accepts it) with the given
+	// message id, and returns WhatsApp's server timestamp for it. Only
+	// while Run is running. An error is either a *RefusedError (the
+	// message certainly did not go out) or anything else, which means the
+	// outcome is unknown. Errors carry no chat, text or WhatsApp error
+	// text.
+	SendText(ctx context.Context, chat, messageID, text string) (time.Time, error)
 }
 
 // PhonePairer is a Session that can pair by phone number instead of a QR
