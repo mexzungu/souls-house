@@ -25,15 +25,17 @@
     resident_import_url: residentImportUrl = null,
     github_resident_import_url: githubResidentImportUrl = null,
     vm_birth_refusal: vmBirthRefusal = null,
+    ai_api_keys_configured: keysConfigured = {},
+    can_manage_ai_credentials: canManageKeys = false,
   } = $props();
 
   const draftKey = `helixkit:agent-birth-draft:${account.id}`;
   const steps = ['Welcome', 'Appearance', 'Soul seed', 'Runtime', 'Review'];
   const captions = [
-    'Someone with a home of their own here: files, memory, and time.',
+    'Five small steps, a few minutes.',
     'A name and a colour to start with. Both can change later.',
     'A few words for them to grow from.',
-    'The model they think with, and where they live.',
+    'The model they think with.',
     'Everything is ready when you are.',
   ];
 
@@ -42,6 +44,8 @@
   let houseOffered = $derived(
     (grouped_models['On the house'] || []).some((model) => model.model_id === default_model_id)
   );
+  let keyPath = $state(null);
+  let providerKey = $state('');
   let openBeginning = $state(false);
   let acknowledged = $state(false);
   let draftReady = $state(false);
@@ -69,7 +73,7 @@
     step === 0 ||
       (step === 1 && $form.agent.name.trim().length > 0) ||
       (step === 2 && ($form.agent.system_prompt.trim().length > 0 || openBeginning)) ||
-      step === 3
+      (step === 3 && Boolean(selectedModel) && (!houseOffered || keyPath !== null))
   );
   let canCreate = $derived(step === steps.length - 1 && formComplete && acknowledged && !$form.processing);
 
@@ -82,8 +86,8 @@
         $form.agent.system_prompt = draft.system_prompt || '';
         $form.agent.colour = draft.colour || null;
         $form.agent.icon = draft.icon || null;
-        $form.agent.scheduled_wakes_enabled = draft.scheduled_wakes_enabled ?? true;
         selectedModel = draft.model_id || default_model_id;
+        keyPath = draft.key_path === 'house' || draft.key_path === 'own' ? draft.key_path : null;
         openBeginning = draft.open_beginning === true;
         $form.agent.open_beginning = openBeginning;
         step = Math.min(Math.max(draft.step || 0, 0), steps.length - 1);
@@ -105,7 +109,7 @@
         colour: $form.agent.colour,
         icon: $form.agent.icon,
         model_id: selectedModel,
-        scheduled_wakes_enabled: $form.agent.scheduled_wakes_enabled,
+        key_path: keyPath,
         open_beginning: openBeginning,
         step,
       })
@@ -126,6 +130,15 @@
     $form.agent.model_id = selectedModel;
     $form.agent.open_beginning = openBeginning;
     if (openBeginning) $form.agent.system_prompt = '';
+    // The heartbeat is on for every new resident; it can be tuned with them later.
+    $form.agent.scheduled_wakes_enabled = true;
+    const key = keyPath !== 'house' ? providerKey.trim() : '';
+    const keyProvider = Object.values(grouped_models)
+      .flat()
+      .find((model) => model.model_id === selectedModel)?.key_provider;
+    $form.transform((data) =>
+      key && keyProvider ? { ...data, provider_key: { provider: keyProvider, value: key } } : data
+    );
     $form.post(accountAgentsPath(account.id), {
       onSuccess: () => localStorage.removeItem(draftKey),
     });
@@ -226,7 +239,14 @@
         {:else if step === 2}
           <SoulSeedStep {form} bind:openBeginning />
         {:else if step === 3}
-          <RuntimeStep {form} {grouped_models} {houseOffered} bind:selectedModel />
+          <RuntimeStep
+            {grouped_models}
+            {houseOffered}
+            {keysConfigured}
+            {canManageKeys}
+            bind:selectedModel
+            bind:keyPath
+            bind:providerKey />
         {:else}
           <ReviewStep
             {form}

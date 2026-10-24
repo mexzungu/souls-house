@@ -212,6 +212,44 @@ class AgentsControllerTest < ActionDispatch::IntegrationTest
     assert_includes top_models.pluck("model_id"), "google/gemini-3.8-flash"
   end
 
+  test "new wizard says which key each model needs and whether this user may add one" do
+    get new_account_agent_path(@account)
+
+    assert_response :success
+    assert_equal true, inertia_shared_props.fetch("can_manage_ai_credentials")
+    assert_equal @account.ai_api_keys_configured.stringify_keys, inertia_shared_props.fetch("ai_api_keys_configured")
+    models = inertia_shared_props.fetch("grouped_models").values.flatten.index_by { |m| m.fetch("model_id") }
+    assert_nil models.fetch("house/claude-haiku-5.5").fetch("key_provider")
+    assert models.values.any? { |m| m.fetch("key_provider") == "openrouter" }
+    models.each_value do |model|
+      expected = Agents::ModelCatalogue.key_provider(model.fetch("model_id"))
+      expected.nil? ? assert_nil(model.fetch("key_provider")) : assert_equal(expected, model.fetch("key_provider"))
+    end
+  end
+
+  test "a key sent with a birth is saved to the account before the resident is created" do
+    @account.update_columns(anthropic_api_key: nil)
+    assert_difference "Agent.count", 1 do
+      post account_agents_path(@account), params: {
+        agent: { name: "Keyed resident", system_prompt: "You are helpful", model_id: "openrouter/auto" },
+        provider_key: { provider: "anthropic", value: "  sk-ant-synthetic-test  " }
+      }
+    end
+
+    assert_equal "sk-ant-synthetic-test", @account.reload.anthropic_api_key
+    assert_redirected_to onboarding_account_agent_path(@account, Agent.last)
+  end
+
+  test "a birth key for an unknown provider is refused and nothing is created" do
+    assert_no_difference "Agent.count" do
+      post account_agents_path(@account), params: {
+        agent: { name: "Keyed resident", system_prompt: "You are helpful", model_id: "openrouter/auto" },
+        provider_key: { provider: "nonesuch", value: "synthetic" }
+      }
+    end
+    assert_redirected_to new_account_agent_path(@account)
+  end
+
   test "birth without a model defaults to house inference" do
     HouseInference::Offering.stub(:configured?, true) do
       assert_difference [ "Agent.count", "ApiKey.count", "HouseInferenceGrant.count" ], 1 do

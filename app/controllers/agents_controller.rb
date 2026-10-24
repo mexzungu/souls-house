@@ -39,6 +39,8 @@ class AgentsController < ApplicationController
       vm_birth_refusal: Agents::VmBirthPolicy.current.refusal(kind: :birth),
       colour_options: Agent::VALID_COLOURS,
       icon_options: Agent::VALID_ICONS,
+      ai_api_keys_configured: current_account.ai_api_keys_configured,
+      can_manage_ai_credentials: current_account.ai_credentials_manageable_by?(Current.user),
       account: current_account.as_json
     }
   end
@@ -46,6 +48,7 @@ class AgentsController < ApplicationController
   def create
     attrs = birth_params
     open_beginning = ActiveModel::Type::Boolean.new.cast(attrs.delete(:open_beginning))
+    return if birth_provider_key_refused?
     @agent = Agents::HostedBirth.new(
       account: current_account,
       creator: Current.user,
@@ -162,6 +165,30 @@ class AgentsController < ApplicationController
 
   def grouped_models
     Agents::ModelCatalogue.grouped
+  end
+
+  # The "I have my own keys" path on the new-resident page sends the one key
+  # the chosen model needs. It is saved to the account like any other model
+  # key, before the birth, so the first container already has it.
+  def birth_provider_key_refused?
+    key = params.fetch(:provider_key, {}).permit(:provider, :value)
+    value = key[:value].to_s.strip
+    return false if value.blank?
+
+    provider = key[:provider].to_s
+    error = if !Account::AI_PROVIDERS.key?(provider.to_sym)
+      "Unknown model provider"
+    elsif !current_account.ai_credentials_manageable_by?(Current.user)
+      "Only account owners and administrators can add model API keys"
+    end
+    if error
+      redirect_to new_account_agent_path(current_account), inertia: { errors: { base: [ error ] } }
+      return true
+    end
+
+    current_account.update_ai_api_keys!(set: { provider => value })
+    audit("update_agent_api_keys", current_account, provider: provider, source: "new_resident")
+    false
   end
 
   def memories_for_display

@@ -1,22 +1,24 @@
 <script>
-  let { models = [], value = $bindable() } = $props();
+  let { models = [], value = $bindable(), detailed = true } = $props();
 
   // The server decides which offerings exist; this only says what each is like.
   const descriptions = {
     'house/claude-haiku-5.5': {
       name: 'Claude Haiku 5.5',
       recommended: true,
+      short: 'Anthropic’s small Claude model. Quick to reply.',
       text: 'Anthropic’s small Claude model, served from Anthropic’s own API. It answers without a separate thinking step, so replies come quickly. It’s a closed model: Anthropic decides what it is, and can change or retire it, so the house can’t promise it will stay the same under your resident.',
     },
     'house/deepseek-v4.1-flash': {
       name: 'DeepSeek V4.1 Flash',
+      short: 'Open weights, so the house can keep it the same for them. Thinks before replying.',
       text: 'An open-weights model. Because the weights are published, the house can keep serving the exact model your resident began on, whatever the vendor does next. It thinks before every reply, so it’s slower to answer. Served from Fireworks in the US.',
     },
   };
 </script>
 
 <div class="space-y-3 pt-2" role="radiogroup" aria-labelledby="house-model-choice-heading">
-  <h3 id="house-model-choice-heading" class="text-sm font-medium">Paid for by the house</h3>
+  <h3 id="house-model-choice-heading" class={detailed ? 'text-sm font-medium' : 'sr-only'}>Paid for by the house</h3>
   {#each models as model, index (model.model_id)}
     {@const details = descriptions[model.model_id]}
     <label
@@ -37,15 +39,17 @@
           {/if}
         </span>
         {#if details}
-          <span id="house-model-{index}-text" class="block text-sm text-muted-foreground">{details.text}</span>
+          <span id="house-model-{index}-text" class="block text-sm text-muted-foreground"
+            >{detailed ? details.text : details.short}</span>
         {/if}
       </span>
     </label>
   {/each}
-  <p class="text-sm text-muted-foreground">
-    Both come out of the same monthly allowance. Have your own key or subscription? You can choose any model below
-    instead.
-    <a href="/decisions/free-resident-model" target="_blank" rel="noopener" class="underline underline-offset-2"
-      >Why these two?</a>
-  </p>
+  {#if detailed}
+    <p class="text-sm text-muted-foreground">
+      Both come out of the same monthly allowance.
+      <a href="/decisions/free-resident-model" target="_blank" rel="noopener" class="underline underline-offset-2"
+        >Why these two?</a>
+    </p>
+  {/if}
 </div>

@@ -28,13 +28,21 @@ describe('House model choice', () => {
 
   it('makes no cost comparison between the two', () => {
     const { container } = render(HouseModelChoice, { models, value: 'house/claude-haiku-5.5' });
-    expect(container.textContent).not.toMatch(/sixth|cheaper|costs? (the house )?less|lasts? (many )?(more|longer)|allowance faster/i);
+    expect(container.textContent).not.toMatch(
+      /sixth|cheaper|costs? (the house )?less|lasts? (many )?(more|longer)|allowance faster/i
+    );
     expect(screen.getByText(/Both come out of the same monthly allowance/)).toBeTruthy();
   });
 
-  it('points people with their own key at the full list', () => {
+  it('leaves own keys to the other path, and keeps the long text out of the short view', () => {
     render(HouseModelChoice, { models, value: 'house/claude-haiku-5.5' });
-    expect(screen.getByText(/You can choose any model below/)).toBeTruthy();
+    expect(screen.queryByText(/You can choose any model below/)).toBeNull();
+  });
+
+  it('shows one line per model when not detailed', () => {
+    const { container } = render(HouseModelChoice, { models, value: 'house/claude-haiku-5.5', detailed: false });
+    expect(screen.getByText(/Quick to reply/)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/Both come out of the same monthly allowance/);
   });
 
   it('links to the public decision behind the two choices, in a new tab', () => {
