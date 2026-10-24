@@ -7,7 +7,8 @@ signed heartbeats with facts about the host.
 
 When its config says "commands_enabled": true it also polls Rails for
 commands; Rails answers at once with at most one. The vocabulary is fixed here (start_resident, stop_resident,
-submit_turn, turn_status, cancel_turn, seed_home) and anything else is refused locally,
+submit_turn, turn_status, cancel_turn, seed_home, backup_resident, provider_auth, check_runtime_trust) and anything
+else is refused locally,
 whatever Rails asks. Rails supplies values, never Docker flags: the runner
 builds every docker argv itself from a fixed template and validates each value
 against a strict pattern. A turn is relayed to the resident's trigger server on
@@ -32,6 +33,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -60,7 +62,8 @@ ENROLL_BACKOFF_SECONDS = (5, 15, 30, 60, 120, 300)
 
 # The runner's whole vocabulary. Anything else is refused here, not only in
 # Rails.
-COMMAND_KINDS = frozenset({"start_resident", "stop_resident", "submit_turn", "turn_status", "cancel_turn", "seed_home"})
+COMMAND_KINDS = frozenset({"start_resident", "stop_resident", "submit_turn", "turn_status", "cancel_turn", "seed_home",
+                           "backup_resident", "provider_auth", "check_runtime_trust"})
 ALLOWED_ACTIONS = frozenset({"report_facts", "heartbeat"}) | COMMAND_KINDS
 
 
@@ -194,6 +197,13 @@ def collect_facts(runtime_image=None, server_id_reader=provider_server_id, comma
         "memory_total_kib": memory_total_kib(),
         "uptime_seconds": uptime_seconds(),
         "runner_version": SIGNATURE_VERSION,
+        # The house sends an archive import's per-role seeds only to a runner
+        # that says it can seed each role into its own volume. A runner from
+        # before roles would put every role into identity.
+        "seed_roles": list(SEED_ROLES),
+        # The house sends a GitHub import's runtime trust check only to a
+        # runner that carries it; an older one would refuse the kind anyway.
+        "runtime_trust_check": RUNTIME_TRUST_CHECK_VERSION,
     }
 
 
@@ -286,16 +296,37 @@ DISPATCH_ID_RE = re.compile(r"\A[0-9a-f-]{36}\Z")
 LEDGER_ID_RE = re.compile(r"\A[0-9A-Za-z_\-]{1,64}\Z")
 ENV_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 # The environment a resident may be given. Rails cannot add PATH, LD_PRELOAD,
-# DOCKER_HOST or anything else that changes what the container is. This slice
-# runs house-inference residents only, so provider API keys and GitHub-import
-# settings are deliberately absent.
+# DOCKER_HOST or anything else that changes what the container is. Provider
+# API keys are the account's own, as a local resident gets them (#246 parity).
+# A GitHub import gets exactly the names Agents::ImportedHomeEnv gives it
+# locally (docs/2026-10-10-vm-imports.md, point 6).
+IMPORTED_HOME_ENV_KEYS = frozenset({
+    "SOULSHOUSE_HOME_ROOT", "SOULSHOUSE_IMPORTED_CLAMP_OMIT_FORCED_LOGIN",
+    "SOULSHOUSE_GITHUB_IMPORT_ID", "SOULSHOUSE_GITHUB_IMPORT_FINGERPRINT", "SOULSHOUSE_GITHUB_IMPORT_REPOSITORY",
+    "SOULSHOUSE_GITHUB_IMPORT_BRANCH", "SOULSHOUSE_HOME_SYNC_STRATEGY", "SOULSHOUSE_HOME_SYNC_CONFIGURATION",
+    "SOULSHOUSE_GITHUB_IMPORT_CONNECTION", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST",
+})
 RESIDENT_ENV_KEYS = frozenset({
     "AGENT_ID", "AGENT_SLUG", "AGENT_PROVIDER", "AGENT_DEFAULT_MODEL",
     "TRIGGER_BEARER_TOKEN", "SOULSHOUSE_BEARER_TOKEN", "SOULSHOUSE_APP_URL",
     "SOULSHOUSE_ACTIVITY_ORIGIN", "HELIXKIT_BEARER_TOKEN", "HELIXKIT_APP_URL",
     "SOULSHOUSE_HOME_PROFILE", "SOULSHOUSE_PORTABLE_HOME_ID", "AGENT_REPO_PATH",
     "SOULSHOUSE_REQUIRE_HOUSE_TRUST", "TZ",
+    "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+    "XAI_API_KEY", "ZAI_API_KEY", "MOONSHOT_API_KEY", "MINIMAX_API_KEY",
+}) | IMPORTED_HOME_ENV_KEYS
+# External-service credentials (Gmail and the like), copied into the
+# container before it starts, exactly as Agents::Sandbox does locally. The
+# entrypoint moves it into tmpfs; it never reaches a volume.
+SERVICE_MANIFEST_PATH = "/run/helixkit-source.yml"
+SERVICE_MANIFEST_MAX_BYTES = 256 * 1024
+# The provider-login calls a person makes from the house (AgentProviderAuthClient),
+# relayed to the resident's trigger server. Nothing else is reachable this way.
+PROVIDER_AUTH_CALLS = frozenset({
+    ("GET", "/auth/capabilities"), ("GET", "/auth/status"), ("GET", "/auth/usage"),
+    ("POST", "/auth/start"), ("POST", "/auth/cancel"), ("POST", "/auth/code"), ("POST", "/auth/disconnect"),
 })
+PROVIDER_AUTH_PARAMS = frozenset({"provider", "model", "refresh", "code"})
 VOLUME_MOUNTS = (
     ("identity", "/home/agent/identity"),
     ("chaos", "/home/agent/.chaos"),
@@ -303,8 +334,44 @@ VOLUME_MOUNTS = (
     ("work", "/home/agent/work"),
     ("state", "/home/agent/state"),
 )
+# check_runtime_trust (docs/2026-10-10-vm-imports.md, point 5): the check
+# Agents::Sandbox#imported_runtime_trusted? runs locally, run here inside the
+# resident's image against its own identity and Chaos volumes, read-only.
+# The script is fixed in the runner; Rails sends values, never code. It is a
+# byte-for-byte copy of Agents::ImportedHomeEnv::RUNTIME_TRUST_CHECK, and a
+# house test keeps the two equal.
+RUNTIME_TRUST_CHECK_VERSION = 1
+RUNTIME_TRUST_CHECK = """from pathlib import Path
+import sys
+try:
+    import github_import_approval
+    import imported_home
+    import os
+    if os.environ.get('SOULSHOUSE_HOME_SYNC_STRATEGY') == 'standard':
+        import standard_home_sync
+        assert callable(imported_home.standard_sync_configuration)
+    entrypoint = Path('/usr/local/bin/entrypoint.sh').read_text()
+    assert entrypoint.index('github_import_approval.py') < entrypoint.index('runtime_hooks.py')
+    assert entrypoint.index('--runtime-trust-check') < entrypoint.index('home_sync_loop.py')
+except (ImportError, OSError, ValueError, AssertionError):
+    print('unsupported-managed-import-runtime')
+    sys.exit(79)
+try:
+    imported_home.main(['imported_home.py', '--runtime-trust-check'])
+except (ValueError, KeyError, OSError):
+    sys.exit(78)
+"""
+# What the check runs with besides the fixed profile and root, in this order.
+TRUST_CHECK_ENV_KEYS = ("SOULSHOUSE_PORTABLE_HOME_ID", "SOULSHOUSE_HOME_SYNC_STRATEGY",
+                        "SOULSHOUSE_HOME_SYNC_CONFIGURATION", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST")
+TRUST_CHECK_SECONDS = 120
+TRUST_CHECK_UNSUPPORTED_EXIT = 79
 MEMORY_MB_RANGE = (256, 16384)
 CPU_SHARES_RANGE = (2, 4096)
+# Processes plus threads (the pids controller counts both). A house that
+# predates the field sends none and gets the default.
+PIDS_LIMIT_RANGE = (256, 65536)
+DEFAULT_PIDS_LIMIT = 4096
 
 
 class BadCommand(Exception):
@@ -347,6 +414,9 @@ def validate_resident_spec(payload):
     shares = payload.get("cpu_shares")
     _require(isinstance(shares, int) and not isinstance(shares, bool)
              and CPU_SHARES_RANGE[0] <= shares <= CPU_SHARES_RANGE[1], "bad cpu_shares")
+    pids = payload.get("pids_limit", DEFAULT_PIDS_LIMIT)
+    _require(isinstance(pids, int) and not isinstance(pids, bool)
+             and PIDS_LIMIT_RANGE[0] <= pids <= PIDS_LIMIT_RANGE[1], "bad pids_limit")
     env = payload.get("env")
     _require(isinstance(env, dict), "env must be an object")
     for key, value in env.items():
@@ -355,7 +425,12 @@ def validate_resident_spec(payload):
                  f"bad env value for {key}")
     _require(env.get("TRIGGER_BEARER_TOKEN"), "TRIGGER_BEARER_TOKEN required")
     _require("registry_auth" not in payload, "registry credentials are not accepted")
-    return {"container_name": name, "image": image, "memory_mb": memory, "cpu_shares": shares, "env": dict(env)}
+    manifest = payload.get("service_manifest")
+    _require(manifest is None or (isinstance(manifest, str) and "\0" not in manifest
+                                  and len(manifest.encode("utf-8")) <= SERVICE_MANIFEST_MAX_BYTES),
+             "bad service_manifest")
+    return {"container_name": name, "image": image, "memory_mb": memory, "cpu_shares": shares,
+            "pids_limit": pids, "env": dict(env), "service_manifest": manifest}
 
 
 def volume_name(container_name, role):
@@ -376,6 +451,7 @@ def create_argv(spec, env_file):
         "--network", RESIDENT_NETWORK,
         "--restart", "unless-stopped",
         "--memory", f"{spec['memory_mb']}m",
+        "--pids-limit", str(spec["pids_limit"]),
         "--cpu-shares", str(spec["cpu_shares"]),
         "--tmpfs", "/run/helixkit:rw,noexec,nosuid,nodev,mode=0700",
         "--env-file", env_file,
@@ -442,6 +518,16 @@ def _docker(argv, timeout=120):
     return completed.returncode == 0, (completed.stdout if completed.returncode == 0 else completed.stderr).strip()
 
 
+def _docker_exit(argv, timeout=TRUST_CHECK_SECONDS):
+    """Like _docker, but says how the command exited: (returncode, stdout).
+    returncode is None when it could not be run or did not finish."""
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    return completed.returncode, completed.stdout
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     """The relay talks to one resident on the private bridge. A redirect is
     answered as the 3xx it is, never followed with the trigger token."""
@@ -479,17 +565,73 @@ class ResidentHost:
     """Carries out the six commands. Docker and HTTP are injected so tests
     can see exactly what would run."""
 
-    def __init__(self, state_dir, docker=_docker, http=_http, sleep=time.sleep, load_image=None, fetch_seed=None):
+    def __init__(self, state_dir, docker=_docker, http=_http, sleep=time.sleep, load_image=None, fetch_seed=None,
+                 backup_request=None, docker_exit=_docker_exit):
         self.state_dir = state_dir
         self.docker = docker
+        self.docker_exit = docker_exit
         self.http = http
         self.sleep = sleep
         # load_image(image_id) streams the image from the house into
         # `docker load`; returns (ok, error).
         self.load_image = load_image
-        # fetch_seed(sha256, write) streams one seed archive from the house
-        # into write(); returns (ok, error).
+        # fetch_seed(sha256, write) streams a seed archive from the house.
         self.fetch_seed = fetch_seed
+        self.backup_request = backup_request
+        self.current_command_id = None
+
+    def _backup_marker(self):
+        return os.path.join(self.state_dir, "pending-backup.json")
+
+    def begin_backup_recovery(self, name):
+        _require(isinstance(self.current_command_id, str) and
+                 COMMAND_ID_RE.fullmatch(self.current_command_id), "backup command id is missing")
+        self._write_private(self._backup_marker(), json.dumps({
+            "command_id": self.current_command_id, "container_name": name}))
+
+    def backup_recovery_facts(self):
+        try:
+            with open(os.path.join(self.state_dir, "recovered-backup.json")) as handle:
+                return {"recovered_backup": json.load(handle)}
+        except (OSError, ValueError):
+            return {}
+
+    def recover_backup(self):
+        """Contain tools before unpausing a resident owned by a durable marker."""
+        path = self._backup_marker()
+        if not os.path.exists(path):
+            return
+        with open(path) as handle:
+            marker = json.load(handle)
+        name = marker.get("container_name")
+        self._known_resident(name)
+        _require(isinstance(marker.get("command_id"), str) and
+                 COMMAND_ID_RE.fullmatch(marker["command_id"]), "invalid backup recovery marker")
+        ok, output = self.docker(["docker", "ps", "-a", "--format", "{{.Names}}"])
+        if not ok:
+            raise CommandFailed("cannot inspect interrupted backup tools")
+        tools = [tool for tool in output.splitlines()
+                 if re.fullmatch(r"souls-house-backup-[0-9a-f]{24}", tool)]
+        if tools:
+            ok, _ = self.docker(["docker", "rm", "-f", *tools])
+            if not ok:
+                raise CommandFailed("cannot stop interrupted backup tools")
+        ok, output = self.docker(["docker", "ps", "-a", "--format", "{{.Names}}"])
+        if not ok or any(re.fullmatch(r"souls-house-backup-[0-9a-f]{24}", tool)
+                         for tool in output.splitlines()):
+            raise CommandFailed("interrupted backup tools not contained")
+        from backup_proxy import _state
+        state = _state(lambda argv, timeout: self.docker(argv), name, 10)
+        if state["Paused"]:
+            ok, _ = self.docker(["docker", "unpause", name])
+            if not ok:
+                raise CommandFailed("cannot recover interrupted backup pause")
+        state = _state(lambda argv, timeout: self.docker(argv), name, 10)
+        if state["Paused"] or state.get("Restarting") or state.get("Dead") or state.get("Status") not in ("running", "exited", "created"):
+            raise CommandFailed("interrupted backup runtime remains uncertain")
+        self._write_private(os.path.join(self.state_dir, "recovered-backup.json"),
+                            json.dumps({**marker, "unpaused": True, "tools_stopped": True}))
+        os.unlink(path)
 
     # Secrets for a resident live only in its root-owned env file.
     def _env_path(self, name):
@@ -498,13 +640,23 @@ class ResidentHost:
     def _spec_path(self, name):
         return os.path.join(self.state_dir, "residents", f"{name}.json")
 
+    def _manifest_path(self, name):
+        return os.path.join(self.state_dir, "residents", f"{name}.services.yml")
+
     def _write_private(self, path, text):
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         tmp = path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as handle:
             handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.rename(tmp, path)
+        directory = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     def _known_resident(self, name):
         _require(isinstance(name, str) and NAME_RE.match(name), "bad container_name")
@@ -536,24 +688,47 @@ class ResidentHost:
         self._pull(spec)
         env_text = "".join(f"{key}={value}\n" for key, value in sorted(spec["env"].items()))
         self._write_private(self._env_path(name), env_text)
-        public_spec = {key: spec[key] for key in ("container_name", "image", "memory_mb", "cpu_shares")}
+        public_spec = {key: spec[key] for key in ("container_name", "image", "memory_mb", "cpu_shares", "pids_limit")}
         # A digest of the whole env, values included, so a rotated token
         # recreates the container; the values themselves stay in the env file.
         public_spec["env_digest"] = hashlib.sha256(env_text.encode("utf-8")).hexdigest()
+        manifest = spec["service_manifest"]
+        if manifest is not None:
+            self._write_private(self._manifest_path(name), manifest)
+            # The manifest is copied in only at creation, so a changed one
+            # recreates the container, as locally.
+            public_spec["manifest_digest"] = hashlib.sha256(manifest.encode("utf-8")).hexdigest()
         previous = None
+        recorded_spec = public_spec
         if os.path.exists(self._spec_path(name)):
             with open(self._spec_path(name)) as handle:
                 previous = json.load(handle)
+            # A container recorded before pids_limit existed is not recreated
+            # just because the field appeared; the limit applies at its next
+            # deliberate recreate, and until then the record keeps saying it
+            # has none. That includes a non-default limit requested for such a
+            # container: it too waits for the next recreate caused by another
+            # change (or a deliberate one). Once a record carries pids_limit,
+            # changing the limit recreates as usual.
+            if previous is not None and "pids_limit" not in previous:
+                previous["pids_limit"] = public_spec["pids_limit"]
+                recorded_spec = {key: value for key, value in public_spec.items() if key != "pids_limit"}
         exists, _ = self.docker(["docker", "container", "inspect", name])
         # Recreate when anything about the container changed; volumes stay.
         if exists and previous != public_spec:
             self.docker(["docker", "rm", "-f", name])
             exists = False
         if not exists:
+            recorded_spec = public_spec
             ok, error = self.docker(create_argv(spec, self._env_path(name)))
             if not ok:
                 raise CommandFailed(f"could not create container: {error}")
-        self._write_private(self._spec_path(name), json.dumps(public_spec))
+            if manifest is not None:
+                ok, error = self.docker(["docker", "cp", self._manifest_path(name), f"{name}:{SERVICE_MANIFEST_PATH}"])
+                if not ok:
+                    self.docker(["docker", "rm", "-f", name])
+                    raise CommandFailed(f"could not copy the service manifest: {error}")
+        self._write_private(self._spec_path(name), json.dumps(recorded_spec))
         ok, error = self.docker(["docker", "start", name])
         if not ok:
             raise CommandFailed(f"could not start container: {error}")
@@ -616,6 +791,50 @@ class ResidentHost:
     def cancel_turn(self, payload):
         return self._turn("DELETE", payload)
 
+    def provider_auth(self, payload):
+        """One provider-login call, relayed to the resident's trigger server.
+        Only the fixed calls in PROVIDER_AUTH_CALLS, with fixed parameter
+        names; the answer is returned whatever its status."""
+        name = payload.get("container_name")
+        self._known_resident(name)
+        method = payload.get("method")
+        path = payload.get("path")
+        _require((method, path) in PROVIDER_AUTH_CALLS, f"provider auth call not allowed: {method} {path}")
+        params = payload.get("params") or {}
+        _require(isinstance(params, dict), "params must be an object")
+        for key, value in params.items():
+            _require(key in PROVIDER_AUTH_PARAMS, f"provider auth parameter not allowed: {key!r}")
+            _require(value is None or isinstance(value, (str, int)) and not isinstance(value, bool),
+                     f"bad provider auth parameter {key}")
+            _require(not isinstance(value, str) or len(value) <= 4096, f"provider auth parameter too long: {key}")
+        params = {key: value for key, value in params.items() if value is not None}
+        with open(self._env_path(name)) as handle:
+            token = next(line.split("=", 1)[1].strip() for line in handle if line.startswith("TRIGGER_BEARER_TOKEN="))
+        url = self._trigger_url(name) + path
+        if method == "GET":
+            if params:
+                url += "?" + urllib.parse.urlencode(params)
+            return self.http("GET", url, token, timeout=20)
+        return self.http("POST", url, token, body=params or None, timeout=20)
+
+    def backup_resident(self, payload):
+        from backup_proxy import run_backup
+        if self.backup_request is None:
+            raise BadCommand("backup transport unavailable")
+        _require(isinstance(self.current_command_id, str) and
+                 COMMAND_ID_RE.fullmatch(self.current_command_id), "backup command id is missing")
+        self._known_resident(payload.get("container_name"))
+        result = None
+        try:
+            result = run_backup(payload, self, signed_request=self.backup_request)
+            return result
+        except (BadCommand, CommandFailed) as error:
+            result = getattr(error, "result", None)
+            raise
+        finally:
+            if isinstance(result, dict) and result.get("unpaused") is True and result.get("tools_stopped") is True and os.path.exists(self._backup_marker()):
+                os.unlink(self._backup_marker())
+
     # seed_home (#246 slice 3): the first contents of a new resident's
     # identity volume, before its first start. The archive comes from the
     # house by digest, is checked against that digest, and is unpacked into a
@@ -623,6 +842,28 @@ class ResidentHost:
     # holding the digest is written last, so a retry after a lost answer is
     # recognised as done. Anything else already in the volume is refused and
     # never wiped.
+    def check_runtime_trust(self, payload):
+        """Whether Chaos in this resident's own runtime home trusts its
+        imported home. trusted / untrusted / unsupported (the image has no
+        managed-import runtime). A Chaos home that does not exist yet is made,
+        empty, and is untrusted: trust is granted by a person on Chaos's own
+        interactive screen, never here."""
+        name, image, env = validate_trust_check(payload)
+        self._pull({"image": image})
+        chaos = volume_name(name, "chaos")
+        exists, _ = self.docker(["docker", "volume", "inspect", chaos])
+        if not exists:
+            ok, error = self.docker(["docker", "volume", "create", chaos])
+            if not ok:
+                raise CommandFailed(f"could not create the Chaos home: {error}")
+            return {"trust": "untrusted", "reason": "no_chaos_home"}
+        code, stdout = self.docker_exit(trust_check_argv(name, image, env))
+        if code is None:
+            raise CommandFailed("the runtime trust check did not finish")
+        if "unsupported-managed-import-runtime" in (stdout or "") or code == TRUST_CHECK_UNSUPPORTED_EXIT:
+            return {"trust": "unsupported"}
+        return {"trust": "trusted" if code == 0 else "untrusted", "exit": code}
+
     def _volume_mountpoint(self, volume):
         ok, error = self.docker(["docker", "volume", "create", volume])
         if not ok:
@@ -639,14 +880,18 @@ class ResidentHost:
         _require(isinstance(digest, str) and SEED_DIGEST_RE.match(digest), "bad sha256")
         size = payload.get("bytes")
         _require(isinstance(size, int) and not isinstance(size, bool) and 0 < size <= SEED_MAX_BYTES, "bad bytes")
-        root = self._volume_mountpoint(volume_name(name, "identity"))
+        # A birth seeds identity only and names no role; an archive import
+        # seeds identity, repo and work, one command each.
+        role = payload.get("role", "identity")
+        _require(role in SEED_ROLES, "bad role")
+        root = self._volume_mountpoint(volume_name(name, role))
         marker = os.path.join(root, SEED_MARKER)
         if os.path.lexists(marker):
             if read_seed_marker(marker) == digest:
                 return {"state": "seeded", "sha256": digest, "already": True}
-            raise SeedRefused("identity volume was seeded from a different archive")
+            raise SeedRefused(f"{role} volume was seeded from a different archive")
         if os.listdir(root):
-            raise SeedRefused("identity volume is not empty and has no seed marker")
+            raise SeedRefused(f"{role} volume is not empty and has no seed marker")
         if self.fetch_seed is None:
             raise CommandFailed("no way to fetch seed archives on this runner")
         spool_dir = os.path.join(self.state_dir, "seeds")
@@ -682,6 +927,39 @@ class ResidentHost:
         return {"state": "seeded", "sha256": digest, "already": False, "entries": entries}
 
 
+def validate_trust_check(payload):
+    name = payload.get("container_name")
+    _require(isinstance(name, str) and NAME_RE.match(name), "bad container_name")
+    image = payload.get("image")
+    _require(isinstance(image, str) and IMAGE_RE.match(image), "image must be a sha256 image ID")
+    env = payload.get("env")
+    _require(isinstance(env, dict) and set(env) == set(TRUST_CHECK_ENV_KEYS), "trust check env must name exactly its keys")
+    for key in TRUST_CHECK_ENV_KEYS:
+        value = env[key]
+        _require(isinstance(value, str) and value and "\n" not in value and "\r" not in value and "\0" not in value,
+                 f"bad env value for {key}")
+    _require(env["SOULSHOUSE_HOME_SYNC_STRATEGY"] in ("existing", "standard"), "bad sync strategy")
+    _require(env["SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST"] in ("0", "1"), "bad oauth trust flag")
+    return name, image, env
+
+
+def trust_check_argv(name, image, env):
+    """The only docker run the trust check issues. It mirrors the house's
+    local check: the identity and Chaos volumes read-only, the fixed profile
+    and root, the values, python3 and the fixed script. Nothing else."""
+    argv = [
+        "docker", "run", "--rm",
+        "-v", f"{volume_name(name, 'identity')}:/home/agent/identity:ro",
+        "-v", f"{volume_name(name, 'chaos')}:/home/agent/.chaos:ro",
+        "-e", "SOULSHOUSE_HOME_PROFILE=portable_v1",
+        "-e", "SOULSHOUSE_HOME_ROOT=/home/agent/identity",
+    ]
+    for key in TRUST_CHECK_ENV_KEYS:
+        argv += ["-e", f"{key}={env[key]}"]
+    argv += ["--entrypoint", "python3", image, "-c", RUNTIME_TRUST_CHECK]
+    return argv
+
+
 def execute_command(command, state, host):
     """Validate, dedupe, refuse stale generations, run, remember. Returns the
     result to report; never raises for a bad or failed command."""
@@ -700,11 +978,16 @@ def execute_command(command, state, host):
     else:
         state.begin(command["id"], command["generation"])
         try:
+            host.current_command_id = command["id"]
             result = {"outcome": "done", "result": getattr(host, command["kind"])(command["payload"])}
         except BadCommand as error:
             result = {"outcome": "refused", "error": str(error)}
+            if isinstance(getattr(error, "result", None), dict):
+                result["result"] = error.result
         except CommandFailed as error:
             result = {"outcome": "failed", "error": str(error)}
+            if isinstance(getattr(error, "result", None), dict):
+                result["result"] = error.result
         except Exception as error:  # the effect may or may not have happened
             result = {"outcome": "unknown", "error": f"{type(error).__name__}: {error}"}
     state.record(command["id"], command["generation"], result)
@@ -717,6 +1000,7 @@ IMAGE_CHUNK = 1024 * 1024
 SEED_PATH = "/api/v1/host_runner/seeds/{id}"
 SEED_DIGEST_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 SEED_MARKER = ".souls-house-seed"
+SEED_ROLES = ("identity", "repo", "work")
 SEED_STAGING = ".souls-house-seed-staging"
 SEED_MAX_BYTES = 64 * 1024 * 1024
 SEED_MAX_UNPACKED = 256 * 1024 * 1024
@@ -957,6 +1241,30 @@ def poll_command_once(config, key, state, host, opener=urllib.request.urlopen):
     return True
 
 
+def poll_with_heartbeats(poll, config, key, state, host, heartbeat, facts, interval=HEARTBEAT_SECONDS):
+    stop = threading.Event()
+
+    def beats():
+        while not stop.wait(interval):
+            try:
+                heartbeat(config, key, {**facts(config.get("runtime_image")), **host.backup_recovery_facts()})
+            except Exception as error:
+                print(f"heartbeat failed: {type(error).__name__}", file=sys.stderr)
+
+    thread = threading.Thread(target=beats, daemon=True)
+    thread.start()
+    try:
+        recover = getattr(host, "recover_backup", None)
+        if callable(recover):
+            # A failed cleanup need not wait for a process restart. Contain
+            # the marked backup before allowing any later command to run.
+            recover()
+        return poll(config, key, state, host)
+    finally:
+        stop.set()
+        thread.join(timeout=35)
+
+
 def main(config_path=CONFIG_PATH, state_dir=STATE_DIR, sleep=time.sleep, enroll=enroll_once, heartbeat=heartbeat_once,
          facts=collect_facts, max_heartbeats=None, poll=poll_command_once, clock=time.monotonic):
     with open(config_path) as handle:
@@ -1000,16 +1308,19 @@ def main(config_path=CONFIG_PATH, state_dir=STATE_DIR, sleep=time.sleep, enroll=
         # Heartbeats keep their cadence; between them the runner polls for
         # commands, pausing COMMAND_IDLE_SECONDS when there is nothing to do.
         state = CommandState(state_dir)
+        from backup_proxy import make_signed_request
         host = ResidentHost(state_dir, sleep=sleep, load_image=docker_load_from_house(config, key),
-                            fetch_seed=lambda digest, write: fetch_seed(config, key, digest, write))
+                            fetch_seed=lambda digest, write: fetch_seed(config, key, digest, write),
+                            backup_request=make_signed_request(config, key, signed_headers))
+        host.recover_backup()
         last_beat = None
         while max_heartbeats is None or sent < max_heartbeats:
             if last_beat is None or clock() - last_beat >= HEARTBEAT_SECONDS:
-                heartbeat(config, key, facts(config.get("runtime_image")))
+                heartbeat(config, key, {**facts(config.get("runtime_image")), **host.backup_recovery_facts()})
                 sent += 1
                 last_beat = clock()
             try:
-                handled = poll(config, key, state, host)
+                handled = poll_with_heartbeats(poll, config, key, state, host, heartbeat, facts)
             except Exception as error:  # a broken poll must not stop heartbeats
                 print(f"command poll failed: {error}", file=sys.stderr)
                 handled = False
@@ -1024,4 +1335,7 @@ def main(config_path=CONFIG_PATH, state_dir=STATE_DIR, sleep=time.sleep, enroll=
 
 
 if __name__ == "__main__":
+    # Keep one set of command exception types for the backup module.
+    sys.modules.setdefault("souls_house_runner", sys.modules[__name__])
+    signal.signal(signal.SIGTERM, lambda _signal, _frame: sys.exit(143))
     sys.exit(main())

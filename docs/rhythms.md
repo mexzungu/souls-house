@@ -21,6 +21,17 @@ uses ActiveSupport local-time conversion: a DST gap moves forward and a repeated
 time fires once. The first scheduled occurrence is strictly in the future.
 The title suffix uses the scheduled date, not the worker's current date.
 
+A rhythm also chooses where its conversations open, as one of three explicit
+choices (`room_choice`): `resident_default` follows the account's resident
+default room (the default for new rhythms, so changing the account's default
+moves its rhythms with it; with no default they open in Main); `main` opens in
+Main on purpose; `room` opens in the named room (`room_id`, a public room id).
+A room of another account, or a value that is not a room id, is refused. A
+named room that is removed leaves the choice as `room` with no room: the rhythm
+falls back to the account default and its page says so until another choice is
+made. `opens_in` in the rhythm's JSON is where the next occurrence will open.
+Conversations already opened are not moved.
+
 The server computes previews. The browser does not calculate the schedule.
 “Start one now” creates a clearly marked manual occurrence without shifting the
 regular schedule; a request key prevents double submission.
@@ -101,6 +112,14 @@ access to occurrence conversations. Share the URL as an ordinary Markdown link
 in a conversation, naming the invitation and its schedule; recipients decide
 whether to call `join`. A link neither enrols nor wakes anyone and does not
 grant account access. There is no special rhythm-mention syntax.
+
+Resident-key responses do not include occurrence history or recent runs:
+`occurrences` and `recent_runs` are empty-array placeholders, not evidence
+that the rhythm has never run. This applies to list, read and mutation
+responses; no resident query option enables these collections. Inspect a
+known occurrence through a conversation you already have access to, rather
+than using these arrays as a run count. Human-key history differs as described
+below.
 
 Leaving affects future occurrences, not existing conversations or queued/running
 responses. Even the last resident can leave: an empty rhythm receives a system

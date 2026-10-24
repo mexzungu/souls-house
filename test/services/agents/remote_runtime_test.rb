@@ -7,7 +7,7 @@ module Agents
 
     setup do
       @agent = agents(:research_assistant)
-      @agent.update!(model_id: HouseInference::Offering::MODEL_ID, trigger_bearer_token: "trig-secret")
+      @agent.update!(model_id: HouseInference::Offering::DEEPSEEK_MODEL_ID, trigger_bearer_token: "trig-secret")
       @placement = AgentPlacement.create!(agent: @agent, backend: "hetzner_cloud", state: "ready", provider_server_id: 4242)
       @enrollment, token = RunnerEnrollment.mint!(placement: @placement)
       @enrollment.confirm_provider_server!(4242)
@@ -56,12 +56,57 @@ module Agents
         assert_equal "https://house.example", env["SOULSHOUSE_ACTIVITY_ORIGIN"]
         assert_equal "trig-secret", env["TRIGGER_BEARER_TOKEN"]
         assert env.keys.none? { |key| key.end_with?("_API_KEY") }
+
+        # Parity with a local resident: any model runs, with the account's own
+        # keys unless it is house-funded.
+        @agent.account.update!(anthropic_api_key: "sk-ant-account")
         @agent.update!(model_id: "anthropic/claude-opus-5-5")
-        assert_raises(RemoteRuntime::Unavailable) { RemoteRuntime.environment(@agent) }
+        env = RemoteRuntime.environment(@agent)
+        assert_equal Agents::Sandbox.chaos_provider_for(@agent), env["AGENT_PROVIDER"]
+        assert_equal Agents::Sandbox.chaos_model_for(@agent), env["AGENT_DEFAULT_MODEL"]
+        assert_equal "sk-ant-account", env["ANTHROPIC_API_KEY"]
+
+        @agent.stub(:imported_home?, true) do
+          assert_raises(RemoteRuntime::Unavailable) { RemoteRuntime.environment(@agent) }
+        end
+      end
+    end
+
+    test "start! carries the service manifest the local sandbox would copy in" do
+      @agent.update!(uuid: SecureRandom.uuid_v7)
+      with_env("SOULSHOUSE_DOMAIN" => "house.example") do
+        payload = RemoteRuntime.start!(@agent, image: DIGEST_IMAGE).envelope["payload"]
+        manifest = YAML.safe_load(payload.fetch("service_manifest"))
+        assert_equal @agent.uuid, manifest["resident_id"]
+        assert_equal 1, manifest["version"]
+      end
+    end
+
+    test "provider logins are relayed through the runner and answered from its result" do
+      waiter = Thread.new do
+        command = nil
+        20.times do
+          command = RunnerCommand.where(kind: "provider_auth").last
+          break if command
+          sleep 0.05
+        end
+        command.deliver!(now: Time.current)
+        command.record_result!({ "outcome" => "done", "result" => { "status" => 200, "body" => { "connected" => true } } },
+          now: Time.current)
+      end
+      answer = RemoteRuntime.provider_auth!(@agent, method: "GET", path: "/auth/status", params: { provider: "anthropic", model: nil },
+        wait: 5.seconds, poll: 0.05)
+      waiter.join
+      assert_equal({ "status" => 200, "body" => { "connected" => true } }, answer)
+      payload = JSON.parse(RunnerCommand.where(kind: "provider_auth").last.payload_json.to_s.presence || "{}")
+      assert_empty payload, "the payload is dropped once answered"
+      assert_raises(RemoteRuntime::Unavailable) do
+        RemoteRuntime.provider_auth!(@agent, method: "GET", path: "/auth/status", wait: 0.1.seconds, poll: 0.05)
       end
     end
 
     test "start! needs an image ID and queues one start_resident for this placement" do
+      @agent.update!(container_name: "agent-research-assistant")
       with_env("SOULSHOUSE_DOMAIN" => "house.example") do
         [ "registry.example/agent:latest", "helixkit-agent-runtime:latest", "sha256:abc" ].each do |image|
           assert_raises(ArgumentError, image) { RemoteRuntime.start!(@agent, image:) }

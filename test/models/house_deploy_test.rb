@@ -11,11 +11,13 @@ class HouseDeployTest < ActiveSupport::TestCase
     HouseDeploy.transport = ->(method, path, body) { calls << [ method, path, body ]; test.instance_variable_get(:@reply) }
     @original_token_source = HouseDeploy.token_source
     HouseDeploy.token_source = -> { "github_pat_test" }
+    @original_deployed = HouseDeploy.deployed_version_source
   end
 
   teardown do
     HouseDeploy.transport = @original_transport
     HouseDeploy.token_source = @original_token_source
+    HouseDeploy.deployed_version_source = @original_deployed
   end
 
   test "dispatch posts to the workflow pinned to master" do
@@ -135,6 +137,35 @@ class HouseDeployTest < ActiveSupport::TestCase
     assert_equal({ 11 => "deployed", 12 => "superseded", 13 => "not_deployed" }, outcomes)
   end
 
+  test "a superseded automatic run is red in Actions (#313) and still named superseded" do
+    run = ->(id) {
+      { "id" => id, "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "completed",
+        "conclusion" => "failure", "display_title" => "Deploy Rails #{"b" * 40}", "created_at" => "2026-10-08T07:0#{id}:00Z" }
+    }
+    steps = {
+      14 => [ { "name" => "Request deployment and wait for verified outcome", "conclusion" => "failure" },
+              { "name" => "Deployment verified", "conclusion" => "skipped" },
+              { "name" => "Master moved on, nothing deployed", "conclusion" => "success" } ],
+      15 => [ { "name" => "Request deployment and wait for verified outcome", "conclusion" => "failure" },
+              { "name" => "Deployment verified", "conclusion" => "skipped" },
+              { "name" => "Master moved on, nothing deployed", "conclusion" => "skipped" } ]
+    }
+    HouseDeploy.transport = ->(_method, path, _body) {
+      if (id = path[%r{/runs/(\d+)/attempts/1/jobs}, 1])
+        [ 200, {}, { "jobs" => [ { "name" => "deploy / deploy", "steps" => steps.fetch(id.to_i) } ] } ]
+      elsif path.include?("deploy-rails-on-green.yml/runs")
+        [ 200, {}, { "workflow_runs" => [ run.(14), run.(15) ] } ]
+      else
+        [ 200, {}, { "workflow_runs" => [] } ]
+      end
+    }
+
+    outcomes = HouseDeploy.status[:runs].to_h { |r| [ r[:id], r[:outcome] ] }
+
+    # 15 is a real failure: no outcome, its conclusion speaks.
+    assert_equal({ 14 => "superseded", 15 => nil }, outcomes)
+  end
+
   test "a rerun's outcome comes from its own attempt, not the cached first attempt" do
     original_cache = Rails.cache
     Rails.cache = ActiveSupport::Cache::MemoryStore.new
@@ -186,6 +217,137 @@ class HouseDeployTest < ActiveSupport::TestCase
     assert_nil status[:error]
     assert_match(/Couldn't list automatic deploys/, status[:partial_error])
     assert_equal [ 2 ], status[:runs].map { |run| run[:id] }
+  end
+
+  test "deploying is true while a deploy workflow runs on master" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [
+      { "path" => ".github/workflows/ci-image.yml", "status" => "in_progress" },
+      { "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "queued" },
+      { "path" => ".github/workflows/deploy-rails.yml", "status" => "completed" }
+    ] } ]
+
+    assert_equal true, HouseDeploy.deploying?
+    assert_equal [ [ :get, "/repos/swombat/souls-house/actions/runs?branch=master&status=in_progress&per_page=100", nil ] ], @calls
+  end
+
+  test "deploying asks GitHub for active runs only, so a long deploy behind newer finished runs still counts" do
+    Rails.cache.clear
+    # The unfiltered listing would be 30+ finished runs with this deploy past
+    # the end; filtered by status, GitHub returns just the waiting deploy.
+    replies = {
+      "in_progress" => [ 200, {}, { "workflow_runs" => [] } ],
+      "queued" => [ 200, {}, { "workflow_runs" => [] } ],
+      "waiting" => [ 200, {}, { "workflow_runs" => [ { "path" => ".github/workflows/deploy-both.yml", "status" => "waiting" } ] } ]
+    }
+    calls = @calls
+    HouseDeploy.transport = ->(method, path, body) { calls << [ method, path, body ]; replies.fetch(path[/status=(\w+)/, 1]) }
+
+    assert_equal true, HouseDeploy.deploying?
+    assert_equal %w[in_progress queued waiting], @calls.map { |call| call[1][/status=(\w+)/, 1] }
+    assert(@calls.all? { |call| call[1].include?("branch=master") && call[1].include?("per_page=100") })
+  end
+
+  test "deploying is unknown when one active listing fails and none found a run" do
+    Rails.cache.clear
+    calls = @calls
+    HouseDeploy.transport = ->(method, path, body) {
+      calls << [ method, path, body ]
+      path.include?("status=queued") ? [ 502, {}, nil ] : [ 200, {}, { "workflow_runs" => [] } ]
+    }
+
+    assert_nil HouseDeploy.deploying?
+    assert_equal 3, @calls.size
+  end
+
+  test "deploying is true while CI runs on master, before any deploy starts" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [ { "path" => ".github/workflows/ci.yml", "status" => "in_progress" } ] } ]
+
+    assert_equal true, HouseDeploy.deploying?
+  end
+
+  test "deploying is false when only finished or unrelated runs are listed" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [
+      { "path" => ".github/workflows/ci-image.yml", "status" => "in_progress" },
+      { "path" => ".github/workflows/ci.yml", "status" => "completed" },
+      { "path" => ".github/workflows/deploy-both.yml@refs/heads/master", "status" => "completed" }
+    ] } ]
+
+    assert_equal false, HouseDeploy.deploying?
+  end
+
+  test "deploying is unknown without a token or when GitHub fails" do
+    Rails.cache.clear
+    @reply = [ nil, {}, nil ]
+    assert_nil HouseDeploy.deploying?
+
+    HouseDeploy.token_source = -> { nil }
+    @calls.clear
+    assert_nil HouseDeploy.deploying?
+    assert_empty @calls
+  end
+
+  # Master is 7591bb2..., live is 8d7edfc..., CI on master is in the given state.
+  def next_deploy_with(ci_runs:, automatic: [], ci_status: 200, master_status: 200, live: "8d7edfc" + "0" * 33, whole: false)
+    master = "7591bb2" + "1" * 33
+    HouseDeploy.deployed_version_source = -> { live }
+    HouseDeploy.transport = ->(_method, path, _body) {
+      if path.end_with?("/commits/master")
+        next [ master_status, {}, { "message" => "Server Error" } ] unless master_status == 200
+
+        [ 200, {}, { "sha" => master, "html_url" => "https://github.com/c/#{master}",
+                     "commit" => { "message" => "Added stripe credentials\n\nmore" } } ]
+      elsif path.include?("ci.yml/runs")
+        assert_includes path, "head_sha=#{master}"
+        [ ci_status, {}, { "workflow_runs" => ci_runs } ]
+      elsif path.include?("deploy-rails-on-green.yml/runs")
+        [ 200, {}, { "workflow_runs" => automatic } ]
+      else
+        [ 200, {}, { "workflow_runs" => [] } ]
+      end
+    }
+    whole ? HouseDeploy.status : HouseDeploy.status[:next]
+  end
+
+  test "next deploy: master ahead of live and CI still running says it deploys when green" do
+    upcoming = next_deploy_with(ci_runs: [ { "status" => "in_progress", "html_url" => "https://ci/1" } ])
+
+    assert_equal "7591bb2", upcoming[:head_sha]
+    assert_equal "Added stripe credentials", upcoming[:message]
+    assert_equal "waiting_ci", upcoming[:state]
+    assert_equal "https://ci/1", upcoming[:url]
+  end
+
+  test "next deploy: CI not listed yet is still waiting; green is starting; red and cancelled won't deploy" do
+    assert_equal "waiting_ci", next_deploy_with(ci_runs: [])[:state]
+    assert_equal "starting", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "success" } ])[:state]
+    assert_equal "ci_failed", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "failure" } ])[:state]
+    assert_equal "ci_cancelled", next_deploy_with(ci_runs: [ { "status" => "completed", "conclusion" => "cancelled" } ])[:state]
+    assert_equal "ci_unknown", next_deploy_with(ci_runs: [], ci_status: 500)[:state]
+  end
+
+  test "next deploy: nothing when live is master, when its automatic run is listed, or when live is unknown" do
+    assert_nil next_deploy_with(ci_runs: [], live: "7591bb2" + "1" * 33)
+    assert_nil next_deploy_with(ci_runs: [], live: nil)
+    listed = { "id" => 30, "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "in_progress",
+               "display_title" => "Deploy Rails #{"7591bb2" + "1" * 33}", "created_at" => "2026-10-23T19:30:00Z" }
+    assert_nil next_deploy_with(ci_runs: [], automatic: [ listed ])
+  end
+
+  test "next deploy: a failed master lookup says it is unknown rather than that nothing is coming" do
+    status = next_deploy_with(ci_runs: [], master_status: 502, whole: true)
+    assert_nil status[:next]
+    assert_equal true, status[:next_unknown]
+
+    status = next_deploy_with(ci_runs: [], whole: true)
+    assert_equal "waiting_ci", status[:next][:state]
+    assert_equal false, status[:next_unknown]
+
+    status = next_deploy_with(ci_runs: [], live: "7591bb2" + "1" * 33, whole: true)
+    assert_nil status[:next]
+    assert_equal false, status[:next_unknown]
   end
 
 end

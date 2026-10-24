@@ -1,4 +1,4 @@
-# Search across one account's Field: recordings, files and notes.
+# Search across one account's Field: recordings, files, notes, tweets and songs.
 #
 # Matching is Postgres full text with the `simple` configuration over each
 # item's search_vector (title, note, body; see the migration): every word
@@ -18,7 +18,7 @@ class FieldSearch
   PAGE_SIZE = 20
   MAX_QUERY_LENGTH = 200
   MAX_TAGS = 10
-  KINDS = %w[recording file note].freeze
+  KINDS = %w[recording file note tweet song].freeze
   SORTS = %w[newest relevance].freeze
   BODY_LIMIT = 128_000 # the migration's body cap (bytes there; excerpts read this many characters)
 
@@ -44,17 +44,32 @@ class FieldSearch
       # it came into the Field.
       date: "COALESCE(field_recordings.recorded_at, field_recordings.created_at)",
       kept: "field_recordings.discarded_at IS NULL",
-      body: "concat_ws(E'\\n\\n', field_recordings.note, CASE WHEN field_recordings.status = 'ready' THEN field_recordings.transcript_text END)"
+      body: "concat_ws(E'\\n\\n', field_recordings.note, field_recordings.notes, " \
+        "CASE WHEN field_recordings.status = 'ready' THEN field_recordings.transcript_text END)"
     },
     "file" => {
       model: "FieldFile", table: "field_files",
-      date: "field_files.created_at",
+      date: "COALESCE(field_files.dated_at, field_files.created_at)",
       kept: "field_files.discarded_at IS NULL",
       body: "concat_ws(E'\\n\\n', field_files.note, field_files.extracted_text)"
     },
+    "tweet" => {
+      model: "FieldTweet", table: "field_tweets",
+      date: "field_tweets.posted_at",
+      kept: "field_tweets.discarded_at IS NULL",
+      body: "field_tweets.text"
+    },
+    "song" => {
+      model: "FieldSong", table: "field_songs",
+      date: "COALESCE(field_songs.dated_at, field_songs.created_at)",
+      kept: "field_songs.discarded_at IS NULL",
+      # The note first: an excerpt from why it was shared reads before one
+      # from the words.
+      body: "concat_ws(E'\\n\\n', field_songs.note, field_songs.lyrics)"
+    },
     "note" => {
       model: "Whiteboard", table: "whiteboards",
-      date: "COALESCE(whiteboards.last_edited_at, whiteboards.updated_at)",
+      date: "COALESCE(whiteboards.dated_at, whiteboards.last_edited_at, whiteboards.updated_at)",
       kept: "whiteboards.deleted_at IS NULL",
       body: "concat_ws(E'\\n\\n', whiteboards.summary, whiteboards.content)"
     }
@@ -155,7 +170,13 @@ class FieldSearch
 
   # Items carrying every one of the tags.
   def tag_condition(source)
-    sanitize(<<~SQL.squish, source[:model], account.id, @tags, @tags.size)
+    self.class.tag_condition(source, account_id: account.id, tags: @tags)
+  end
+
+  # SQL: rows of source's table that carry every one of the tags. Shared with
+  # FieldSwarm.
+  def self.tag_condition(source, account_id:, tags:)
+    ActiveRecord::Base.sanitize_sql_array([ <<~SQL.squish, source[:model], account_id, tags, tags.size ])
       #{source[:table]}.id IN (
         SELECT field_taggings.taggable_id FROM field_taggings
         JOIN field_tags ON field_tags.id = field_taggings.field_tag_id

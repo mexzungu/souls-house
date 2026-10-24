@@ -24,15 +24,20 @@ class PendingWake < ApplicationRecord
   belongs_to :agent
   belongs_to :released_interaction, class_name: "AgentRuntimeInteraction", optional: true
   has_many :sources, class_name: "PendingWakeSource", dependent: :delete_all
+  has_many :message_handoffs
+
+  # A resident's handoff held on this wake learns what became of it.
+  after_update_commit :sync_message_handoffs, if: -> { saved_change_to_released_at? || saved_change_to_dropped_at? }
 
   scope :open, -> { where(released_at: nil, dropped_at: nil) }
 
   # Record (or coalesce into) the open wake, with what asked for it, and
   # attempt a release once it commits. The caller holds the chat lock across
   # its busy check and this write. A source is one of: message: (a human message that named or
-  # addressed the resident), requester_agent: (a sibling's knock) or user:
-  # (a person's button or API call).
-  def self.queue!(chat:, agent:, requested_by:, message: nil, user: nil, requester_agent: nil)
+  # addressed the resident, or a resident's handoff), requester_agent: (a
+  # sibling's knock) or user: (a person's button or API call).
+  def self.queue!(chat:, agent:, requested_by:, message: nil, user: nil, requester_agent: nil, wake_source_kinds: nil)
+    wake_source_kinds ||= WakeProvenance.for(message: message, user: user, requester_agent: requester_agent)
     now = Time.current
     wake = open.find_by(chat: chat, agent: agent)
     if wake
@@ -41,9 +46,13 @@ class PendingWake < ApplicationRecord
       wake = create!(chat: chat, agent: agent, requested_by: requested_by, first_requested_at: now, last_requested_at: now)
     end
     if message
-      wake.sources.create!(kind: "message", message: message, user: message.user)
+      # A resident's message stands on its author's seat in the room, which
+      # lock_revocation_rows! locks through requester_agent.
+      wake.sources.create!(kind: "message", message: message, user: message.user,
+                           requester_agent: message.user ? nil : message.agent, wake_source_kinds: wake_source_kinds)
     else
-      wake.sources.create!(kind: "trigger", user: requester_agent ? nil : user, requester_agent: requester_agent)
+      wake.sources.create!(kind: "trigger", user: requester_agent ? nil : user, requester_agent: requester_agent,
+        wake_source_kinds: wake_source_kinds)
     end
     # A run that ended while this transaction was open could not see the
     # wake; this job, after the commit, can. See PendingWakeJob for the rule.
@@ -75,7 +84,7 @@ class PendingWake < ApplicationRecord
       next wake.drop!(reason) if reason
 
       begin
-        result = chat.trigger_agent_response!(agent)
+        result = chat.trigger_agent_response!(agent, wake_source_kinds: wake.standing_source_kinds)
       rescue Agent::RuntimeAvailability::Unavailable => error
         next wake.drop!("unavailable:#{error.code}")
       rescue Chat::AlreadyResponding
@@ -130,10 +139,7 @@ class PendingWake < ApplicationRecord
   # counts only runs that reached the runtime, as the transcript delta does;
   # with none, assume there is something to see.
   def unseen_messages?
-    cursor = chat.agent_runtime_interactions
-      .where(agent: agent, trigger_kind: "conversation")
-      .where(transport_status: 200...300, runtime_status: "ok")
-      .maximum(:last_included_message_id)
+    cursor = chat.agent_transcript_cursor(agent)
     scope = chat.messages.kept.where("agent_id IS NULL OR agent_id <> ?", agent.id)
     scope = scope.where("id > ?", cursor) if cursor
     scope.exists?
@@ -141,6 +147,11 @@ class PendingWake < ApplicationRecord
 
   def standing_source?
     sources.includes(:message, :user, :requester_agent).any? { |source| source.standing?(chat) }
+  end
+
+  def standing_source_kinds
+    sources.includes(:message, :user, :requester_agent).select { |source| source.standing?(chat) }
+      .flat_map { |source| source.wake_source_kinds.presence || [ "unknown" ] }.uniq
   end
 
   # Checked when the released run claims, under this row's lock: the run
@@ -169,6 +180,12 @@ class PendingWake < ApplicationRecord
     "#{count} for you to respond arrived here while you were already responding " \
       "(most recently from #{requested_by}, at #{last_requested_at.utc.iso8601}). " \
       "They were held until that run finished. Everything posted since your previous run is in the transcript below."
+  end
+
+  private
+
+  def sync_message_handoffs
+    MessageHandoff.enqueue_sync(chat_id: chat_id, agent_id: agent_id)
   end
 
 end

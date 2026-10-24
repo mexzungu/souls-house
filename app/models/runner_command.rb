@@ -10,7 +10,8 @@
 # state is reconciled by its dispatch id, never resubmitted.
 class RunnerCommand < ApplicationRecord
 
-  KINDS = %w[start_resident stop_resident submit_turn turn_status cancel_turn seed_home].freeze
+  KINDS = %w[start_resident stop_resident submit_turn turn_status cancel_turn seed_home backup_resident provider_auth
+             check_runtime_trust].freeze
   STATES = %w[queued delivered done failed refused unknown].freeze
   TERMINAL = %w[done failed refused unknown].freeze
   OUTCOMES = %w[done failed refused unknown].freeze
@@ -31,7 +32,9 @@ class RunnerCommand < ApplicationRecord
   validates :generation, numericality: { only_integer: true, greater_than_or_equal_to: 1 }
   validate :placement_matches_enrollment
 
-  def self.enqueue!(enrollment:, kind:, payload:, resident_turn: nil)
+  # seed_role names the volume an archive import's seed_home writes; the
+  # payload that also says so is dropped once the command is answered.
+  def self.enqueue!(enrollment:, kind:, payload:, resident_turn: nil, seed_role: nil)
     # Read the placement fresh: a cached association could stamp a new
     # command with a generation that is already stale.
     placement = AgentPlacement.uncached { AgentPlacement.find(enrollment.agent_placement_id) }
@@ -45,7 +48,8 @@ class RunnerCommand < ApplicationRecord
       generation: placement.generation,
       kind:,
       payload_json: payload.to_json,
-      resident_turn:
+      resident_turn:,
+      seed_role:
     )
   end
 

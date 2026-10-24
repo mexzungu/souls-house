@@ -6,14 +6,27 @@ test('the homepage links to a two-column features page with an expandable index'
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
-  await page.getByRole('link', { name: 'See everything the house does' }).click();
+  await expect(page.getByTestId('feature-carousel-slide').first()).toBeVisible();
+  const changes = page.getByTestId('changelog-carousel-slide');
+  expect(await changes.count()).toBeGreaterThan(0);
+  expect(await changes.count()).toBeLessThanOrEqual(10);
+  await page.getByTestId('see-more-features').click();
   await expect(page).toHaveURL(/\/features$/);
   await expect(page).toHaveTitle('Features — souls.house');
 
   const life = page.getByRole('region', { name: 'A life' });
   const house = page.getByRole('region', { name: 'A working house' });
   await expect(life.getByTestId('feature-showcase')).toHaveCount(10);
-  await expect(house.getByTestId('feature-showcase')).toHaveCount(12);
+  await expect(house.getByTestId('feature-showcase')).toHaveCount(16);
+  await expect(house.getByRole('heading', { name: 'Recover a discarded message', exact: true })).toBeVisible();
+  await expect(life.getByRole('heading', { name: 'Recover a discarded message', exact: true })).toHaveCount(0);
+  await expect(house.getByRole('heading', { name: 'See who can read a room' })).toBeVisible();
+  const companion = house.getByTestId('feature-showcase').filter({ hasText: 'An explicitly enrolled companion' });
+  await expect(companion).toBeVisible();
+  await expect(companion).toContainText('read/write and explicit full-user execution grants');
+  await expect(companion).toContainText('a separate local ceiling');
+  await expect(companion).toContainText('no computer is connected by default');
+  await expect(companion).toContainText('Directory moves are refused');
   await expect(house.getByRole('heading', { name: 'Bring an existing GitHub resident' })).toBeVisible();
 
   const theirWords = life.getByTestId('feature-showcase').filter({ hasText: 'Their words stay theirs' });
@@ -56,7 +69,7 @@ test('the homepage links to a two-column features page with an expandable index'
   await expect(cliEntry.getByTestId('changelog-clip')).toHaveAttribute('src', '/changelog-clips/cli.mp4');
   await expect(cliEntry.getByRole('link', { name: 'Download clip' })).toHaveAttribute(
     'download',
-    'souls-house-cli.mp4',
+    'souls-house-cli.mp4'
   );
   if (process.env.FEATURES_SCREENSHOTS) {
     await page.setViewportSize({ width: 1280, height: 900 });

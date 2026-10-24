@@ -12,6 +12,7 @@ class FieldFile < ApplicationRecord
   include ObfuscatesId
   include SyncAuthorizable
   include FieldTaggable
+  include FieldActivityBroadcasting
 
   MAX_FILE_SIZE = 100.megabytes
   MAX_FILE_SIZE_LABEL = "100 MB"
@@ -24,6 +25,9 @@ class FieldFile < ApplicationRecord
   # After the attachment: after_commit callbacks run in the order defined, and
   # extraction needs the bytes already uploaded.
   include FieldFile::TextExtraction
+  include FieldFile::PdfExtraction
+  include FieldFile::PdfOcr
+  include FieldSummarizable
 
   validates :title, presence: true, length: { maximum: 200 }
   validates :note, length: { maximum: MAX_NOTE_LENGTH }
@@ -34,7 +38,17 @@ class FieldFile < ApplicationRecord
 
   broadcasts_to :account
 
-  scope :newest_first, -> { order(created_at: :desc, id: :desc) }
+  # An imported file sorts by when it is from, not when it arrived.
+  scope :newest_first, -> { order(Arel.sql("COALESCE(field_files.dated_at, field_files.created_at) DESC"), id: :desc) }
+  # Files whose words have been read (FieldSummarizable): plain text, and
+  # PDFs with a text layer. Scanned PDFs, images and office documents have
+  # none, so they get no summary yet.
+  # A PDF whose scanned pages are still being transcribed waits: a summary is
+  # written once, so writing it from the typed pages alone would stick.
+  scope :summary_readable, -> {
+    where.not(text_extracted_at: nil).where("extracted_text ~ '[^[:space:]]'")
+      .where("pdf_coverage IS NULL OR pdf_coverage->>'ocr' IS DISTINCT FROM 'pending'")
+  }
 
   def uploader_name
     case uploaded_by
@@ -52,6 +66,24 @@ class FieldFile < ApplicationRecord
 
   def uploaded_by_agent?(agent)
     agent.present? && uploaded_by_type == "Agent" && uploaded_by_id == agent.id
+  end
+
+  def summary_source = extracted_text
+
+  # FieldSummarizable: not while transcription is pending (see summary_readable).
+  def summarizable? = super && !pdf_transcription_pending?
+
+  # Nor is a pending file blank yet: a scan's text may still arrive, and a
+  # blank item is retired for good (claim_summary!).
+  def summary_source_blank? = !pdf_transcription_pending? && super
+
+  def pdf_transcription_pending? = (pdf_coverage || {})["ocr"] == "pending"
+
+  # The summaries were written from part of the file only: a PDF with pages
+  # whose text wasn't read (scanned, failed, skipped or cut). nil when there
+  # is no summary or nothing to qualify.
+  def summary_partial?
+    summary_long.present? && pdf_status.present? && !pdf_complete?
   end
 
   def filename = file.attached? ? file.filename.to_s : nil

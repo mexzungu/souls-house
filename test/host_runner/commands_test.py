@@ -101,10 +101,10 @@ class ValidationTest(unittest.TestCase):
             spec(image=IMAGE + " --privileged"),
             spec(memory_mb=10), spec(memory_mb="1024"), spec(memory_mb=True),
             spec(cpu_shares=1), spec(cpu_shares=99999),
+            spec(pids_limit=10), spec(pids_limit=10**6), spec(pids_limit="4096"), spec(pids_limit=True),
             spec(env={"TRIGGER_BEARER_TOKEN": "t", "PATH": "/evil"}),
             spec(env={"TRIGGER_BEARER_TOKEN": "t", "LD_PRELOAD": "/x.so"}),
             spec(env={"TRIGGER_BEARER_TOKEN": "t", "DOCKER_HOST": "tcp://x"}),
-            spec(env={"TRIGGER_BEARER_TOKEN": "t", "ANTHROPIC_API_KEY": "sk"}),
             spec(env={"TRIGGER_BEARER_TOKEN": "t\nPATH=/evil"}),
             spec(env={"TRIGGER_BEARER_TOKEN": "t\0"}),
             spec(env={"SOULSHOUSE_APP_URL": "https://house.example"}),
@@ -121,6 +121,7 @@ class ValidationTest(unittest.TestCase):
         for absent in ("--privileged", "-p", "--publish", "--network=host", "/var/run/docker.sock", "--pid", "--cap-add"):
             self.assertNotIn(absent, argv)
         self.assertEqual(argv[argv.index("--network") + 1], runner.RESIDENT_NETWORK)
+        self.assertEqual(argv[argv.index("--pids-limit") + 1], str(runner.DEFAULT_PIDS_LIMIT))
         self.assertEqual(argv[argv.index("--env-file") + 1], "/state/residents/agent-pilot-1.env")
         mounts = [argv[i + 1] for i, value in enumerate(argv) if value == "-v"]
         self.assertEqual(mounts, [
@@ -132,6 +133,10 @@ class ValidationTest(unittest.TestCase):
         ])
         # Secrets never appear in argv, where ps would show them.
         self.assertFalse(any("trig" in value or "out" == value for value in argv))
+
+    def test_the_pids_limit_comes_from_the_spec(self):
+        argv = runner.create_argv(runner.validate_resident_spec(spec(pids_limit=2048)), "/state/residents/x.env")
+        self.assertEqual(argv[argv.index("--pids-limit") + 1], "2048")
 
 
 class ExecuteTest(unittest.TestCase):
@@ -288,6 +293,31 @@ class ResidentHostTest(unittest.TestCase):
         self.assertIn("create", self.docker.verbs())
         with open(os.path.join(self.dir, "residents", "agent-pilot-1.json")) as handle:
             self.assertNotIn("trig", handle.read())
+
+    def test_a_changed_pids_limit_recreates_the_container(self):
+        self.host.start_resident(spec(pids_limit=4096))
+        self.docker.calls.clear()
+        self.host.start_resident(spec(pids_limit=8192))
+        self.assertIn(["docker", "rm", "-f", "agent-pilot-1"], self.docker.calls)
+        self.assertIn("create", self.docker.verbs())
+
+    def test_a_container_recorded_before_pids_limit_is_not_recreated_for_it(self):
+        self.host.start_resident(spec())
+        record = os.path.join(self.dir, "residents", "agent-pilot-1.json")
+        with open(record) as handle:
+            legacy = json.load(handle)
+        del legacy["pids_limit"]
+        with open(record, "w") as handle:
+            json.dump(legacy, handle)
+        self.docker.calls.clear()
+        self.host.start_resident(spec())
+        self.assertNotIn("create", self.docker.verbs())
+        self.assertNotIn("rm", self.docker.verbs())
+        with open(record) as handle:
+            self.assertNotIn("pids_limit", json.load(handle))  # still created without one
+        self.host.start_resident(spec(image="sha256:" + "b" * 64))
+        with open(record) as handle:
+            self.assertEqual(json.load(handle)["pids_limit"], runner.DEFAULT_PIDS_LIMIT)
 
     def test_never_healthy_is_a_failure(self):
         self.http.status = 503

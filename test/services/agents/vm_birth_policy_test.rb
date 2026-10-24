@@ -15,8 +15,11 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
     @user = users(:user_1)
   end
 
-  def policy(config: CONFIGURED, token: "token")
-    Agents::VmBirthPolicy.new(setting: @setting.reload, procurement_config: config, api_token: token)
+  # backups: whether slice 4's VM backups exist on this house.
+  def policy(config: CONFIGURED, token: "token", backups: true)
+    Agents::VmBirthPolicy.new(setting: @setting.reload, procurement_config: config, api_token: token).tap do |policy|
+      policy.define_singleton_method(:vm_backups_available?) { backups }
+    end
   end
 
   def vm_placement!(state: "pending")
@@ -31,9 +34,21 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
     assert_nil policy.refusal(kind: :import)
   end
 
-  test "with the switch on, imports are refused before anything else is looked at" do
+  test "with the switch on, GitHub imports are refused before anything else is looked at" do
     @setting.update!(new_residents_on_vm: true, vm_resident_limit: 5)
     assert_equal Agents::VmBirthPolicy::IMPORT_REFUSAL, policy(token: nil).refusal(kind: :import)
+  end
+
+  test "with the switch on, an archive import is not refused: it is staged and admitted at Activate" do
+    @setting.update!(new_residents_on_vm: true, vm_resident_limit: 0)
+    assert_nil policy(token: nil, backups: false).refusal(kind: :archive_import)
+  end
+
+  test "a staged archive import holds no cap slot" do
+    @setting.update!(new_residents_on_vm: true, vm_resident_limit: 1)
+    AgentPlacement.create!(agent: agents(:research_assistant), backend: "hetzner_cloud", kind: "archive_import", state: "staged")
+    assert_equal 0, policy.vm_count
+    assert_nil policy.refusal
   end
 
   test "with the switch on, an unconfigured house refuses births with the configuration reason" do
@@ -47,7 +62,7 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
   test "the cap counts every server that might exist and refuses at the limit" do
     @setting.update!(new_residents_on_vm: true, vm_resident_limit: 1)
     assert_equal 0, policy.vm_count
-    assert_equal Agents::VmBirthPolicy::NOT_AVAILABLE_REFUSAL, policy.refusal
+    assert_nil policy.refusal
 
     placement = vm_placement!
     assert_equal 1, policy.vm_count
@@ -70,9 +85,34 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
     assert_equal 1, policy.vm_count
   end
 
-  test "until VM births exist, a configured house with room still refuses rather than creating locally" do
+  test "without VM backups, a configured house with room still refuses rather than creating locally" do
     @setting.update!(new_residents_on_vm: true, vm_resident_limit: 3)
-    assert_equal Agents::VmBirthPolicy::NOT_AVAILABLE_REFUSAL, policy.refusal
+    assert_equal Agents::VmBirthPolicy::NOT_AVAILABLE_REFUSAL, policy(backups: false).refusal
+  end
+
+  test "with backups, configuration and room, any model a local resident can use is allowed" do
+    @setting.update!(new_residents_on_vm: true, vm_resident_limit: 3)
+    assert_nil policy.refusal(model_id: HouseInference::Offering::OFFERINGS.keys.first)
+    assert_nil policy.refusal(model_id: "openrouter/auto")
+    assert_nil policy.refusal(model_id: "anthropic/claude-opus-5-5")
+  end
+
+  test "admit! commits the placement with its durable admission, and refuses at the cap under the lock" do
+    @setting.update!(new_residents_on_vm: true, vm_resident_limit: 1)
+    agent = @account.agents.new(name: "Admitted", system_prompt: "Hello", model_id: HouseInference::Offering::OFFERINGS.keys.first)
+    placement = policy.admit!(agent:, requested_by: @user)
+    assert agent.persisted?
+    assert placement.vm_birth?
+    assert_equal [ "hetzner_cloud", "pending", @user ], [ placement.backend, placement.state, placement.birth_requested_by ]
+
+    second = @account.agents.new(name: "Over the cap", system_prompt: "Hello", model_id: HouseInference::Offering::OFFERINGS.keys.first)
+    assert_no_difference [ "Agent.count", "AgentPlacement.count" ] do
+      error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit!(agent: second, requested_by: @user) }
+      assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, error.message
+    end
+
+    @setting.update!(vm_resident_limit: 5, new_residents_on_vm: false)
+    assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit!(agent: second, requested_by: @user) }
   end
 
   test "hosted birth is refused before anything is committed" do
@@ -93,18 +133,6 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
       attributes: { name: "Local birth", system_prompt: "Hello", model_id: "openrouter/auto" })
     assert_difference "Agent.count", 1 do
       assert_enqueued_with(job: ProvisionAgentJob) { birth.create! }
-    end
-  end
-
-  test "an archive import is refused before the archive is even read" do
-    @setting.update!(new_residents_on_vm: true)
-    archive = Object.new
-    archive.define_singleton_method(:validate!) { flunk "a refused import must not read the archive" }
-    assert_no_difference [ "Agent.count", "ApiKey.count" ] do
-      error = assert_raises(Agents::Portability::Error) do
-        Agents::Portability::Import.call(archive, account: @account, user: @user, name: "Copy")
-      end
-      assert_equal Agents::VmBirthPolicy::IMPORT_REFUSAL, error.message
     end
   end
 

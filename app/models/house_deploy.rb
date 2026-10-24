@@ -52,6 +52,10 @@ class HouseDeploy
 
   class_attribute :token_source, default: -> { Rails.application.credentials.dig(:github, :deploy_token) }
 
+  # The sha the running build was made from (Kamal sets it), so the page can
+  # tell whether master is ahead of what is live.
+  class_attribute :deployed_version_source, default: -> { ENV["KAMAL_VERSION"] }
+
   def self.token
     token_source.call.presence
   end
@@ -93,8 +97,90 @@ class HouseDeploy
 
     automatic, partial_error = automatic_runs
     runs = (deploy_runs(body) + automatic).sort_by { |run| run[:created_at].to_s }.reverse.first(limit)
+    upcoming = partial_error ? nil : next_deploy(automatic)
+    # Couldn't read master: say so, so the page keeps the row it already has
+    # instead of clearing it on a GitHub blip.
+    next_unknown = partial_error.present? || upcoming == :unknown
+    upcoming = nil if upcoming == :unknown
 
-    { configured: true, runs: runs, token_expires_at: expires_at, error: nil, partial_error: partial_error }
+    { configured: true, runs: runs, next: upcoming, next_unknown: next_unknown,
+      token_expires_at: expires_at, error: nil, partial_error: partial_error }
+  end
+
+  # What happens next when master is ahead of the running build and no
+  # automatic run for master's head is listed yet. A superseded run reads like
+  # the end of the story; the next deploy is the newer commit's own green CI,
+  # and this says where that stands. nil when live is master, when an
+  # automatic run for master's head is already on the list, or when there is
+  # no deployed sha. :unknown when GitHub didn't say what master is.
+  #
+  # state: waiting_ci / starting (CI green, deploy run not listed yet) /
+  # ci_failed / ci_cancelled / ci_unknown (CI lookup failed; worth retrying).
+  def self.next_deploy(automatic)
+    deployed = deployed_version_source.call.to_s[DeployInfo::SHA, 1]
+    return nil if deployed.blank?
+
+    status, _headers, commit = transport.call(:get, "/repos/#{repo}/commits/#{REF}", nil)
+    return :unknown unless status == 200 && commit.is_a?(Hash) && commit["sha"].is_a?(String)
+
+    sha = commit["sha"]
+    return nil if sha.start_with?(deployed)
+
+    short = sha.first(7)
+    return nil if automatic.any? { |run| run[:head_sha] == short }
+
+    status, _headers, body = transport.call(:get, "/repos/#{repo}/actions/workflows/#{CI_FILE}/runs?head_sha=#{sha}&event=push&per_page=1", nil)
+    ci = status == 200 && body.is_a?(Hash) ? Array(body["workflow_runs"]).first : nil
+
+    {
+      head_sha: short,
+      message: commit.dig("commit", "message").to_s.lines.first.to_s.strip.truncate(80),
+      state: next_state(status, ci),
+      url: ci&.dig("html_url") || commit["html_url"]
+    }
+  end
+
+  def self.next_state(status, ci)
+    return "ci_unknown" unless status == 200
+    # A push's CI run can take a few seconds to be listed.
+    return "waiting_ci" if ci.nil? || ci["status"] != "completed"
+
+    case ci["conclusion"]
+    when "success" then "starting"
+    when "cancelled" then "ci_cancelled"
+    else "ci_failed"
+    end
+  end
+
+  DEPLOYING_TTL = 15.seconds
+  # CI on master counts: a merge waits on it before the automatic deploy runs.
+  CI_FILE = "ci.yml"
+
+  # Statuses GitHub gives a run that hasn't finished. Asked for by status, so a
+  # long deploy can't drop off a page of newer, finished runs.
+  ACTIVE_STATUSES = %w[in_progress queued waiting].freeze
+
+  # Whether master's pipeline is moving right now: CI on master or any deploy
+  # workflow, manual or automatic, queued or running. true, false, or nil when
+  # it can't be told (no token, GitHub unreachable). One listing per active
+  # status, stopping at the first hit, cached briefly because the site-admin
+  # badge asks on every page.
+  def self.deploying?
+    return nil unless configured?
+
+    files = (WORKFLOWS.values.map { |config| config[:file] } + [ AUTOMATIC[:file], CI_FILE ]).map { |file| ".github/workflows/#{file}" }
+    Rails.cache.fetch("house_deploy/deploying:#{repo}", expires_in: DEPLOYING_TTL, skip_nil: true) do
+      ACTIVE_STATUSES.each_with_object([]) { |run_status, answers|
+        status, _headers, body = transport.call(:get, "/repos/#{repo}/actions/runs?branch=#{REF}&status=#{run_status}&per_page=100", nil)
+        answers << (status == 200 && body.is_a?(Hash) ? Array(body["workflow_runs"]).any? { |run|
+          files.include?(run["path"].to_s.split("@").first) && run["status"] != "completed"
+        } : nil)
+        break answers if answers.last
+      }.then { |answers| answers.include?(true) ? true : (answers.include?(nil) ? nil : false) }
+    end
+  rescue StandardError => e
+    Rails.logger.warn("[HouseDeploy] deploying?: #{e.class}: #{e.message}")
+    nil
   end
 
   def self.deploy_runs(body)
@@ -149,22 +235,26 @@ class HouseDeploy
     [ runs, nil ]
   end
 
-  # deployed / superseded / not_deployed for a finished successful run; nil
-  # while running or when the run itself failed (its conclusion says so).
+  # deployed / superseded / not_deployed for a finished successful run. A
+  # superseded host outcome fails the GitHub job (#313: green with nothing
+  # shipped looked like a deploy), so a failed run is read too, but only to
+  # name superseded; any other failure is nil and its conclusion says so.
+  # nil while running.
   # A finished attempt never changes, so its outcome is cached per attempt.
   # (A rerun keeps the run id, so caching by id alone would show the first
   # attempt's outcome for every later one.)
   def self.automatic_outcome(run)
-    return nil unless run[:status] == "completed" && run[:conclusion] == "success"
+    return nil unless run[:status] == "completed" && %w[success failure].include?(run[:conclusion])
 
     attempt = (run[:attempt] || 1).to_i
-    Rails.cache.fetch([ "house_deploy/automatic_outcome", run[:id], attempt ], expires_in: 1.day, skip_nil: true) do
+    Rails.cache.fetch([ "house_deploy/automatic_outcome", run[:id], attempt, run[:conclusion] ], expires_in: 1.day, skip_nil: true) do
       status, _headers, body = transport.call(:get, "/repos/#{repo}/actions/runs/#{run[:id]}/attempts/#{attempt}/jobs", nil)
       next nil unless status == 200 && body.is_a?(Hash)
 
       ran = Array(body["jobs"]).flat_map { |job| Array(job["steps"]) }
         .select { |step| step["conclusion"] == "success" }.map { |step| step["name"] }
-      if ran.include?(DEPLOYED_STEP) then "deployed"
+      if run[:conclusion] == "failure" then ("superseded" if ran.include?(SUPERSEDED_STEP))
+      elsif ran.include?(DEPLOYED_STEP) then "deployed"
       elsif ran.include?(SUPERSEDED_STEP) then "superseded"
       else "not_deployed"
       end
