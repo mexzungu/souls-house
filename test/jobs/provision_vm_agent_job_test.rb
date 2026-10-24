@@ -519,8 +519,11 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
         serve_creates_as(4343)
         policy.admit_import!(placement:, requested_by: @user)
 
-        # The old attempt's seeds, answered late, are not this attempt's seeds.
-        old_seeds.each { |command| command.update_columns(state: "done", finished_at: Time.current) }
+        # The old attempt's seeds: one answered late as done, one left
+        # delivered, one unknown. None is this attempt's, and none blocks it.
+        old_seeds[0].update_columns(state: "done", finished_at: Time.current)
+        old_seeds[1].update_columns(state: "delivered", delivered_at: Time.current)
+        old_seeds[2].update_columns(state: "unknown", finished_at: Time.current)
         assert Agents::VmSeed.new(agent.reload).status.none?
         run_job(agent)
         boot_and_enroll!(agent)
@@ -528,6 +531,13 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
         run_job(agent)
         assert_equal 3, RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: 2).count
         assert_not Agents::VmSeed.new(agent.reload).status.done?
+        assert Backup::VmResident.busy?(agent), "this attempt's own queued seeds block a backup"
+
+        seed_all!(placement)
+        run_job(agent)
+        answer_latest(placement, "start_resident")
+        assert_not Backup::VmResident.busy?(agent),
+          "the failed attempt's delivered and unknown seeds never block the retry's first backup"
       end
     end
   end
