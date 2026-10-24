@@ -159,9 +159,51 @@ class SoulshouseCommsTest < ActiveSupport::TestCase
         end
       end
       assert_not status.success?, code
+      # The house answered something unexpected: whether it claimed the send
+      # is unknown, so the guidance for an unknown outcome follows.
+      assert_equal 3, status.exitstatus, code
       assert_equal 1, requests.size, "only the first request was made (#{code})"
       assert_match "refused to follow a redirect (#{code})", stdout + stderr
       assert_not_includes stdout + stderr, "hx_secret_key"
+    end
+  end
+
+  test "a 5xx from the house is an unknown outcome: exit 3, with the request id to retry and no resend" do
+    [ 500, 502, 504 ].each do |code|
+      stderr = status = nil
+      requests = serve(->(_port) { "HTTP/1.1 #{code} Oops\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\noops" }) do |base|
+        with_manifest(base, send: true) do |manifest|
+          _stdout, stderr, status = Open3.capture3(
+            { "SOULSHOUSE_BEARER_TOKEN" => "hx_test", "SOULSHOUSE_SERVICES_FILE" => manifest },
+            "python3", SCRIPT.to_s, "send", "--chat", "chat_7", "--text", "-", "--request-id", "r-5xx", stdin_data: "hello"
+          )
+        end
+      end
+      assert_equal 3, status.exitstatus, "#{code}: #{stderr}"
+      assert_equal 1, requests.size
+      assert_includes stderr, "HTTP #{code}"
+      assert_includes stderr, "outcome is unknown"
+      assert_includes stderr, "--request-id r-5xx"
+      assert_includes stderr, "never sends twice"
+    end
+  end
+
+  test "a 4xx from the house is a refusal of this request: exit 2 with the house's answer" do
+    { 403 => "send_not_granted", 409 => "client_request_id_reused", 429 => "rate_limited" }.each do |code, error|
+      body = %({"error":"#{error}"})
+      stderr = status = nil
+      serve(->(_port) { "HTTP/1.1 #{code} No\r\nContent-Type: application/json\r\nContent-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}" }) do |base|
+        with_manifest(base, send: true) do |manifest|
+          _stdout, stderr, status = Open3.capture3(
+            { "SOULSHOUSE_BEARER_TOKEN" => "hx_test", "SOULSHOUSE_SERVICES_FILE" => manifest },
+            "python3", SCRIPT.to_s, "send", "--chat", "chat_7", "--text", "-", "--request-id", "r-4xx", stdin_data: "hello"
+          )
+        end
+      end
+      assert_equal 2, status.exitstatus, "#{code}: #{stderr}"
+      assert_includes stderr, "HTTP #{code}"
+      assert_includes stderr, error
+      assert_not_includes stderr, "outcome is unknown"
     end
   end
 

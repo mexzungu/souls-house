@@ -25,7 +25,10 @@ returns the original send and never sends again. Without it one is generated
 and printed on stderr; reuse it to retry. The JSON printed is the send record;
 its status is sent (exit 0: the provider accepted it, not delivered or read),
 failed (exit 2, with error_code) or unknown (exit 3: it may or may not have
-gone; read the chat, never just resend). Existing chats only, one chat at a
+gone; read the chat, never just resend). The same holds when the house
+answers 5xx or there is no answer at all: exit 3, retry only with the same
+--request-id. A 4xx means the house refused this request and nothing was sent
+(exit 2). Existing chats only, one chat at a
 time, no bulk and no unsolicited messages.
 
 search (Telegram only) asks Telegram itself, bounded (at most 50 results), over
@@ -180,15 +183,27 @@ SEND_EXIT = {"sent": 0, "failed": 2, "unknown": 3}
 
 def send_message(url: str, bearer_token: str, chat: str, text: str, request_id: str) -> int:
     body = {"chat": chat, "text": text, "client_request_id": request_id}
+    unknown = (f"The outcome is unknown: the message may or may not have gone. Do not send it again as a new "
+               f"message. Retry with --request-id {request_id} to see its record; that never sends twice.")
     try:
         payload = post_json(url, bearer_token, body)
-    except urllib.error.HTTPError:
-        raise
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        print(f"souls.house returned HTTP {error.code}", file=sys.stderr)
+        if detail:
+            print(detail, file=sys.stderr)
+        if 400 <= error.code < 500:
+            # The house refused this request (not granted, not connected,
+            # paced, reused id, invalid): this request sent nothing.
+            return 2
+        # A 5xx, or a refused redirect: the house may have claimed and
+        # dispatched the send before the answer was lost.
+        print(unknown, file=sys.stderr)
+        return 3
     except Exception as error:
         # No answer from the house: the send may or may not exist. A retry
         # with the same id returns its record and never sends twice.
-        print(f"No answer from souls.house ({error}); the outcome is unknown. "
-              f"Retry with --request-id {request_id} to see it; that never sends twice.", file=sys.stderr)
+        print(f"No answer from souls.house ({error}). {unknown}", file=sys.stderr)
         return 3
     json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")

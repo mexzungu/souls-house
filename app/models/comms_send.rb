@@ -28,7 +28,7 @@ class CommsSend < ApplicationRecord
   belongs_to :comms_chat
   has_one :comms_message, dependent: :restrict_with_error
 
-  encrypts :text
+  encrypts :text, :sender_id, :sender_name
 
   validates :text, presence: true, length: { maximum: MAX_TEXT_LENGTH }
   validate :text_fits

@@ -255,7 +255,10 @@ leaves `unknown`. Nothing ever retries an `unknown` send. A claim left
 **The message, and the echo.** WhatsApp most likely does not echo a message
 back to the linked device that sent it (it reaches the owner's other devices),
 so nothing waits for an echo: on `sent`, Rails stores the message itself in its
-chat (the chosen id, the text, the owner as sender, the provider's time)
+chat (the chosen id, the text, the provider's time, and as sender the
+connection's own account as it stood at dispatch, fixed on the send under the
+lock, so a late acknowledgement after a re-pair onto another number still
+names the account that sent it)
 through the same upsert the connector's events use. A message is linked to its
 send by `comms_messages.comms_send_id`, set by whichever of the stored message
 or echo and the acknowledgement comes second (same chat, same provider message

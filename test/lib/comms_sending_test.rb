@@ -317,6 +317,32 @@ class CommsSendingTest < ActiveSupport::TestCase
     assert_equal message.sent_at, @chat.reload.last_activity_at
   end
 
+  test "a late ack after the connection's account changed keeps the sender fixed at dispatch" do
+    @connection.update!(external_subject_id: "447700900001", external_identity: "Daniel")
+    grant_send!(@access.reload)
+    send, = claim
+    # The connection names another account while the send is with the
+    # connector (a re-pair onto another number); the acknowledgement for the
+    # message that went out from the first account arrives afterwards.
+    answer = lambda do |dispatched|
+      @connection.update!(external_subject_id: "447700900002", external_identity: "Someone else")
+      sent_outcome(dispatched)
+    end
+    with_fake_connector(answer) { CommsSending.deliver!(send) }
+
+    send.reload
+    assert_equal "sent", send.status
+    message = @chat.comms_messages.sole
+    assert_equal [ send.id, "447700900001@s.whatsapp.net", "Daniel" ],
+                 [ message.comms_send_id, message.sender_id, message.sender_name ]
+
+    # A later echo of the same message neither duplicates it nor moves it
+    # to the new account.
+    receive_message(send.provider_message_id, body: "hello")
+    message = @chat.comms_messages.sole
+    assert_equal [ send.id, "447700900001@s.whatsapp.net" ], [ message.comms_send_id, message.sender_id ]
+  end
+
   test "echo before ack, and ack before echo, each leave exactly one linked message" do
     send, = claim("first")
     answer = lambda do |dispatched|

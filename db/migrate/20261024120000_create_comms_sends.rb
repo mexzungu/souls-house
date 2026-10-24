@@ -34,6 +34,12 @@ class CreateCommsSends < ActiveRecord::Migration[8.1]
       # When the send left pending for the connector. Pacing counts this.
       t.datetime :dispatched_at
       t.datetime :sent_at
+      # Who the message is from, as the connection identified its own account
+      # when the send was handed to the connector. A late acknowledgement
+      # records the message under this, not under whatever account the
+      # connection names by then. Encrypted, like comms_messages' senders.
+      t.text :sender_id
+      t.text :sender_name
       t.timestamps
       t.index %i[service_connection_id agent_id client_request_id], unique: true, name: "index_comms_sends_on_claim"
       t.index %i[service_connection_id provider_message_id], unique: true, name: "index_comms_sends_on_provider_message_id"

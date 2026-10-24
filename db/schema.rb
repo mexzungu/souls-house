@@ -753,6 +753,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
     t.datetime "requested_at", null: false
     t.datetime "dispatched_at"
     t.datetime "sent_at"
+    t.text "sender_id"
+    t.text "sender_name"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index ["agent_id"], name: "index_comms_sends_on_agent_id"

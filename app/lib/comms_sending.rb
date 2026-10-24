@@ -145,7 +145,12 @@ module CommsSending
         send.update!(status: "failed", error_code: "refused_at_dispatch_#{refusal.code}")
         next false
       end
-      send.update!(status: "unknown", dispatched_at: now)
+      # Who the message will be from, fixed while the lock holds and the
+      # session is the one checked above: a late acknowledgement records it
+      # under this, even if the connection names another account by then.
+      sender = connection.definition.adapter.own_sender(connection)
+      send.update!(status: "unknown", dispatched_at: now,
+                   sender_id: sender["sender_id"], sender_name: sender["sender_name"])
       true
     end
   end
@@ -180,7 +185,8 @@ module CommsSending
   # after_create, or by link_echo! when the echo came first.
   def record_own_message!(send)
     connection = send.service_connection
-    sender = connection.definition.adapter.own_sender(connection)
+    # The sender fixed at dispatch, never the connection's identity now.
+    sender = { "sender_id" => send.sender_id, "sender_name" => send.sender_name }
     CommsEvents.upsert_message!(connection, sender.merge(
       "provider_message_id" => send.provider_message_id,
       "chat" => send.comms_chat.provider_chat_id,
