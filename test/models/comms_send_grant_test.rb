@@ -186,8 +186,14 @@ class CommsSendGrantTest < ActiveSupport::TestCase
     assert_not @access.reload.can_send?
 
     grant_send!(@access.reload)
-    @connection.update!(external_identity: "+44 7700 900999")
+    @connection.update!(external_subject_id: "447700900999")
     assert_not @access.reload.can_send?
+  end
+
+  test "a change of display name alone keeps can_send" do
+    grant_send!
+    @connection.update!(external_identity: "Daniel (new push name)")
+    assert @access.reload.can_send?
   end
 
   test "an owner change clears can_send" do

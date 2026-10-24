@@ -721,12 +721,13 @@ class ServiceConnection < ApplicationRecord
   # No revival (WhatsApp spec §5): a grant to speak as the owner does not
   # survive the connection leaving "connected" (disconnect, logout, re-pair,
   # error, suspension), a new session (login generation or pairing attempt),
-  # a change of number, or a change of owner.
+  # a change of number, or a change of owner. A change of display name
+  # (WhatsApp's push name, Telegram's name) is not a change of account and
+  # leaves grants alone.
   def send_authority_changed?
     (saved_change_to_status? && status != "connected") ||
       saved_change_to_connected_by_user_id? ||
       saved_change_to_external_subject_id? ||
-      saved_change_to_external_identity? ||
       saved_change_to_login_generation? ||
       pairing_attempt_changed?
   end
