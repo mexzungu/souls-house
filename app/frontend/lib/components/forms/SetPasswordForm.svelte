@@ -6,7 +6,7 @@
   import { Input } from '$lib/components/shadcn/input/index.js';
   import { Label } from '$lib/components/shadcn/label/index.js';
 
-  let { user, processing = $bindable(false), onSuccess } = $props();
+  let { user, minLength = 8, maxLength = 72, processing = $bindable(false), onSuccess } = $props();
 
   let user_form = $state({
     ...user,
@@ -19,7 +19,9 @@
     processing = true;
 
     router.patch(setPasswordPath(), user_form, {
-      preserveState: false,
+      // A rejected password comes back as a redirect to this same page. Keep
+      // what the user typed (names especially) rather than resetting the form.
+      preserveState: true,
       onFinish: () => {
         processing = false;
       },
@@ -95,6 +97,8 @@
         type="password"
         autocomplete="new-password"
         required
+        minlength={minLength}
+        maxlength={maxLength}
         bind:value={user_form.password}
         disabled={processing}
         placeholder="Enter a secure password" />
@@ -119,11 +123,11 @@
     <div class="rounded-lg bg-muted p-3">
       <p class="text-xs text-muted-foreground font-medium mb-2">Password requirements:</p>
       <ul class="space-y-1 text-xs text-muted-foreground">
-        <li class={user_form.password && user_form.password.length >= 6 ? 'text-green-600' : ''}>
-          {#if user_form.password && user_form.password.length >= 6}✓{:else}•{/if} At least 6 characters
+        <li class={user_form.password && user_form.password.length >= minLength ? 'text-green-600' : ''}>
+          {#if user_form.password && user_form.password.length >= minLength}✓{:else}•{/if} At least {minLength} characters
         </li>
-        <li class={user_form.password && user_form.password.length <= 72 ? 'text-green-600' : ''}>
-          {#if user_form.password && user_form.password.length <= 72}✓{:else}•{/if} Maximum 72 characters
+        <li class={user_form.password && user_form.password.length <= maxLength ? 'text-green-600' : ''}>
+          {#if user_form.password && user_form.password.length <= maxLength}✓{:else}•{/if} Maximum {maxLength} characters
         </li>
       </ul>
     </div>
