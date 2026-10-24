@@ -18,6 +18,7 @@ Rails.application.routes.draw do
         post :song_card_fixture, to: "/test_support/e2e#song_card_fixture"
         post :field_recording_fixture, to: "/test_support/e2e#field_recording_fixture"
         post :field_voice_lifecycle_fixture, to: "/test_support/e2e#field_voice_lifecycle_fixture"
+        post :field_voice_sample_fixture, to: "/test_support/e2e#field_voice_sample_fixture"
         post :field_activity_fixture, to: "/test_support/e2e#field_activity_fixture"
         post :tweet_stream_fixture, to: "/test_support/e2e#tweet_stream_fixture"
         post :guest_directory_fixture, to: "/test_support/e2e#guest_directory_fixture"
@@ -138,6 +139,8 @@ Rails.application.routes.draw do
     resources :visual_tags, only: [ :create, :update, :destroy ], module: :accounts
     resources :rooms, only: [ :index, :create, :update, :destroy ], module: :accounts
     resource :resident_room, only: :update, module: :accounts
+    resource :main_room, only: :update, module: :accounts
+    resource :room_model_default, only: :update, module: :accounts
     resources :service_authorizations, only: :create
     resources :service_connections, only: [ :create, :update, :destroy ], module: :accounts do
       resource :pairing, only: :show, controller: "service_connection_pairings" do
@@ -154,7 +157,8 @@ Rails.application.routes.draw do
       end
     end
     # Repository watches on the Integrations page's GitHub card.
-    resources :watched_repositories, path: "repositories", only: [ :create, :destroy ], module: :accounts
+    resources :watched_repositories, path: "repositories", only: [ :create, :update, :destroy ], module: :accounts
+    resources :commit_statuses, only: :index, module: :accounts
     resources :repository_watches, path: "watches", only: :destroy, module: :accounts
     resources :github_resident_imports, only: [ :new, :create, :show ] do
       post :approve, on: :member
@@ -167,6 +171,7 @@ Rails.application.routes.draw do
       collection do
         get :search
         post :transcription, to: "chats/transcriptions#create"
+        delete :transcription, to: "chats/transcriptions#destroy"
       end
       scope module: :chats do
         resource :visual_tag, only: :update
@@ -181,7 +186,7 @@ Rails.application.routes.draw do
         resource :participant, only: :create
         resource :agent_trigger, only: :create
         resource :model_selection, only: :update
-        resource :transcription, only: :create
+        resource :transcription, only: [ :create, :destroy ]
       end
       resources :messages, only: [ :index, :create ]
     end
@@ -251,20 +256,26 @@ Rails.application.routes.draw do
     resources :field_recordings, path: "field/recordings", only: [ :show, :create, :update, :destroy ] do
       post :retry, on: :member
       post :resummarize, on: :member
+      post :identify_again, on: :member
       patch :line, on: :member, action: :correct_line
       patch :line_speaker, on: :member, action: :reassign_line
       post :dismiss_you_hint, on: :collection
-      resources :speakers, only: [ :update ], controller: "field_recording_speakers" do
-        resources :enrolments, only: [ :create ], controller: "field_voice_enrolments"
-      end
-    end
-    resources :field_voice_enrolments, path: "field/enrolments", only: [ :destroy ] do
-      post :confirm, on: :member
+      resources :speakers, only: [ :update ], controller: "field_recording_speakers"
+      resources :shares, only: [ :create, :destroy ], controller: "field_recording_shares"
     end
     resources :field_voices, path: "field/voices", only: [ :index, :update, :destroy ] do
+      resources :samples, only: [ :index, :update ], controller: "field_voice_samples" do
+        get :audio, on: :member
+        post :relearn, on: :member
+        post :prepare, on: :collection
+      end
       delete :forget, on: :member, path: "print"
+      post :remember, on: :member
+      post :merge, on: :member
       delete :forget_all, on: :collection, path: "prints"
+      post :prepare_samples, on: :collection
       patch :recognition, on: :collection
+      post :retry_conversion, on: :collection
     end
     resources :whiteboards, only: [ :index, :create, :update, :destroy ] do
       resources :versions, only: [ :index, :show ], controller: "whiteboard_versions"
@@ -384,6 +395,13 @@ Rails.application.routes.draw do
       end
       resources :accounts, only: :index
       resources :visual_tags, only: :index
+      resources :rooms, only: %i[index create update destroy] do
+        collection do
+          patch :main
+          patch :resident_room
+          patch :model_default
+        end
+      end
       resource :transcription_glossary, only: %i[show create update destroy]
       # Account administration with a person's key (the web's account pages).
       resource :account, only: %i[show update], controller: "account_administration" do
@@ -423,6 +441,9 @@ Rails.application.routes.draw do
       get "streams/:stream_key/sessions/:session_id", to: "streams#show_session"
       post "runtime_runs/:run_id/events", to: "runtime_events#create"
       get "agent/bookmarks", to: "agent_bookmarks#index", as: :agent_bookmarks
+      resources :reflexes, only: %i[index create update destroy] do
+        resources :judgments, only: :index, module: :reflexes
+      end
       patch "agent/activity_preferences", to: "agents#activity_preferences"
       get "agent/github_import_approval", to: "github_import_approvals#show"
       namespace :memory do
@@ -452,6 +473,7 @@ Rails.application.routes.draw do
           resource :restore, only: :create, controller: "message_restores"
         end
         resource :agent_trigger, only: :create
+        resource :quiet_reason, only: :create
         resource :model, only: [ :show, :create ], controller: "conversation_models"
         resources :participants, only: :create
         resource :archive, only: [ :create, :destroy ], controller: "conversation_archives"
@@ -461,8 +483,10 @@ Rails.application.routes.draw do
         resource :reply_dismissal, only: :create
         get :changes, to: "conversation_changes#index"
         get :activity, to: "conversation_changes#activity"
+        get :who, to: "who#show"
       end
       resource :session, only: [ :show, :destroy ]
+      get "who", to: "who#index"
       resource :cable_ticket, only: :create
       resources :invitations, only: :index do
         post :accept, on: :member
@@ -497,6 +521,13 @@ Rails.application.routes.draw do
       resources :youtube_reads, only: :create
       resources :x_reads, only: :create
       resources :x_posts, only: %i[create update]
+      # A resident connecting a service itself (issue #500).
+      scope :resident, as: :resident do
+        resources :service_connections, only: %i[index create update destroy], controller: "resident_service_connections" do
+          get :providers, on: :collection
+          patch "residents/:resident_id", action: :resident_access, on: :member, as: :resident_access
+        end
+      end
       resources :service_connections, only: [] do
         resource :access_token, only: :show, controller: "service_connection_tokens"
         namespace :comms do
@@ -542,9 +573,16 @@ Rails.application.routes.draw do
           resources :speakers, only: :update
           resource :tags, only: :update, controller: "item_tags"
         end
-        resources :enrolments, only: :destroy
-        resources :voices, only: [ :index, :update, :destroy ] do
+        resources :samples, controller: "voice_samples", only: [ :show, :update, :destroy ] do
+          get :audio, on: :member
+        end
+        resources :voices, only: [ :index, :create, :update, :destroy ] do
+          get :resolve, on: :collection
+          resources :samples, controller: "voice_samples", only: [ :index, :show, :create, :update, :destroy ] do
+            get :audio, on: :member
+          end
           delete :forget, on: :member, path: "print"
+          post :remember, on: :member
           delete :forget_all, on: :collection, path: "prints"
           patch :recognition, on: :collection
         end
@@ -592,6 +630,13 @@ Rails.application.routes.draw do
   get "self-host/technical" => "pages#self_host_technical", as: :self_host_technical
   get "terms" => "pages#terms", as: :terms
   get "safeguard-responses" => "pages#safeguard_responses", as: :safeguard_responses
+  # A transcript shared by link (FieldRecordingShare): no account needed. The
+  # token travels in the URL's fragment, which no server or proxy ever sees,
+  # and the page posts it back as a (log-filtered) parameter.
+  get "shared/transcripts" => "shared_transcripts#show", as: :shared_transcripts
+  post "shared/transcripts" => "shared_transcripts#reveal"
+  get "decisions" => "decisions#index", as: :decisions
+  get "decisions/:slug" => "decisions#show", as: :decision
   get "create_flash" => "pages#create_flash"
   root "pages#home"
 end

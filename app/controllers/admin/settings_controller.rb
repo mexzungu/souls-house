@@ -52,6 +52,7 @@ class Admin::SettingsController < ApplicationController
       :show_usage_in_chat,
       :safeguard_conversations_enabled,
       :follow_through_scope,
+      :reflexes_scope,
       :stalled_sweep_minutes,
       :stalled_sweep_wake,
       :new_residents_on_vm,

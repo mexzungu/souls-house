@@ -3,6 +3,7 @@ class Setting < ApplicationRecord
   include Broadcastable
 
   FOLLOW_THROUGH_SCOPES = %w[off selected all].freeze
+  REFLEXES_SCOPES = %w[disabled account_choice enabled].freeze
   TWEET_STREAM_COLUMNS = %w[
     field_tweets_enabled field_tweets_daily_import_cap
     field_tweets_account_monthly_usd_ceiling field_tweets_poll_minutes
@@ -17,6 +18,7 @@ class Setting < ApplicationRecord
   after_save :refresh_glossaries, if: :saved_change_to_site_name?
 
   validates :max_accounts, numericality: { only_integer: true, greater_than_or_equal_to: 0 }
+  validates :voice_embedding_profile, inclusion: { in: FieldVoiceprints::Profiles::RECIPES.keys }
   validates :resident_turn_limit, numericality: { only_integer: true, greater_than_or_equal_to: 0, less_than_or_equal_to: 1_000 }
   validates :field_ocr_daily_usd_ceiling, numericality: { greater_than_or_equal_to: 0, less_than_or_equal_to: 100 }
   validates :field_tweets_site_monthly_usd_ceiling, numericality: { greater_than_or_equal_to: 0, less_than_or_equal_to: 1_000 }
@@ -25,6 +27,7 @@ class Setting < ApplicationRecord
   validates :field_tweets_poll_minutes, numericality: { only_integer: true, greater_than_or_equal_to: 5, less_than_or_equal_to: 1_440 }
   validates :vm_resident_limit, numericality: { only_integer: true, greater_than_or_equal_to: 0, less_than_or_equal_to: 1_000 }
   validates :follow_through_scope, inclusion: { in: FOLLOW_THROUGH_SCOPES }
+  validates :reflexes_scope, inclusion: { in: REFLEXES_SCOPES }
   validates :stalled_sweep_minutes, inclusion: { in: StalledThreadSweeper::INTERVALS }
   validates :site_name, presence: true, length: { maximum: 100 }
   validates :safeguard_owner_notice_threshold,
@@ -46,6 +49,19 @@ class Setting < ApplicationRecord
     case follow_through_scope
     when "all" then true
     when "selected" then agent.follow_through?
+    else false
+    end
+  end
+
+  # Reflex checks (ReflexCheck) run where the site scope says (#520):
+  # disabled is off everywhere and enabled is on everywhere, whatever an
+  # account says; under account_choice the resident's account switch
+  # (accounts.reflexes_enabled) decides.
+  def reflexes_enabled_for?(agent)
+    return false if agent.nil?
+    case reflexes_scope
+    when "enabled" then true
+    when "account_choice" then agent.account&.reflexes_enabled? || false
     else false
     end
   end

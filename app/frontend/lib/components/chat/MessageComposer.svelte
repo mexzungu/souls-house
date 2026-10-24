@@ -5,6 +5,7 @@
   import FileUploadInput from '$lib/components/chat/FileUploadInput.svelte';
   import MicButton from '$lib/components/chat/MicButton.svelte';
   import { holdForRecording } from '$lib/recording-guard';
+  import { withTranscript } from '$lib/voice-note-recovery';
   import { accountChatMessagesPath } from '@/routes';
   import * as logging from '$lib/logging';
 
@@ -160,8 +161,15 @@
     }
   }
 
-  function handleTranscription(text, audioSignedId) {
+  function handleTranscription(text, audioSignedId, { retry = false } = {}) {
     setPendingAudio(audioSignedId || null);
+    // A retried voice note fills the composer and waits for the person to send it: they may
+    // have typed meanwhile, or come back after a reload. Their text is kept ahead of it.
+    if (retry) {
+      draft.edit(withTranscript(draftState.content, text));
+      tick().then(autoResize);
+      return;
+    }
     draft.edit(text);
     sendMessage();
   }
@@ -214,6 +222,7 @@
         disabled={submitting || disabled}
         {accountId}
         {chatId}
+        {userId}
         onsuccess={handleTranscription}
         onerror={handleTranscriptionError} />
     </div>

@@ -151,7 +151,7 @@ class FieldRecordingsControllerTest < ActionDispatch::IntegrationTest
     get account_field_recording_path(@account, recording)
     props = inertia_props["props"]
     assert_equal [ "supplied", [], %w[Anna Daniel Anna] ],
-      [ props.dig("recording", "transcript_source"), props.dig("recording", "words"),
+      [ props.dig("recording", "transcript_source"), props.dig("transcript", "words"),
         props.dig("recording", "turns").map { |turn| turn["spk"] } ]
     assert_equal "media/a.md", props.dig("recording", "source_path")
     assert_equal [ nil, nil ], props["speakers"].map { |speaker| speaker["talk_ms"] }
@@ -342,6 +342,40 @@ class FieldRecordingsControllerTest < ActionDispatch::IntegrationTest
   ensure
     ENV["HOUSE_INFERENCE_OPENROUTER_API_KEY"] = previous
     FieldSummaries.live = false
+  end
+
+
+  test "looking for known voices again queues the pass and returns to the transcript" do
+    recording = long_ready_recording(account: @account, user: @user)
+    with_recognition(@account) do
+      assert_enqueued_with(job: FieldRecordings::IdentifyJob, args: [ recording.id ]) do
+        post identify_again_account_field_recording_path(@account, recording)
+      end
+    end
+    assert_redirected_to account_field_recording_path(@account, recording)
+    assert_match "Looking again", flash[:notice]
+    assert_match "No voice is checked enough to guess with confidence yet", flash[:notice], "no print has passed its check in this fixture"
+
+    post identify_again_account_field_recording_path(@account, recording)
+    assert_equal "Nothing to look for again here.", flash[:notice], "recognition off: nothing queued, and it says so"
+  end
+
+  test "looking again names the voices checked enough to guess with confidence, and says others can hint" do
+    recording = long_ready_recording(account: @account, user: @user)
+    prints = %w[Peter Daniel].map { |name| Struct.new(:field_voice).new(Struct.new(:name).new(name)) }
+    with_recognition(@account) do
+      FieldVoiceprints::Identification.stub :active_prints, prints do
+        post identify_again_account_field_recording_path(@account, recording)
+      end
+    end
+    assert_match "Only Daniel and Peter are checked enough to guess with confidence; other voices this Field knows can show as \"maybe\" hints.", flash[:notice]
+    assert_match "Speakers someone has named keep their names; a guess nobody has confirmed yet can change.", flash[:notice]
+  end
+
+  test "another account's recording can't be looked at again" do
+    other = long_ready_recording(account: accounts(:another_team), user: @user)
+    post identify_again_account_field_recording_path(@account, other)
+    assert_response :not_found
   end
 
 end

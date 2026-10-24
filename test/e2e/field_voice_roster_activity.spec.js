@@ -1,5 +1,18 @@
 import { expect, test } from '@playwright/test';
 
+// The forget/delete guard: an in-page dialog, with the word typed when
+// confirmed samples would be lost.
+async function confirmForget(page) {
+  const dialog = page.getByTestId('forget-voice-dialog');
+  await expect(dialog).toBeVisible();
+  const word = dialog.getByTestId('forget-voice-word');
+  if (await word.count()) {
+    await expect(dialog.getByTestId('forget-voice-confirm')).toBeDisabled();
+    await word.fill('FORGET');
+  }
+  await dialog.getByTestId('forget-voice-confirm').click();
+}
+
 // Observe/drop actual server frames, never manufacture refreshes or page props.
 async function observeLifecycle(page) {
   const state = { socket: null, drop: false, frames: [], dropped: [], confirmations: [], reloads: [] };
@@ -64,7 +77,8 @@ test('remembered lifecycle and missed socket events preserve roster and recordin
     await loginLifecycle(page, setup);
     await page.goto(`${base}/voices`);
     await expect.poll(() => rosterSocket.confirmations).toContain('FieldVoiceActivity');
-    const row = page.getByTestId('voice-row');
+    // The selected speaker's detail carries what was learned and the rename control.
+    const row = page.getByTestId('voice-detail');
     await expect(row).toContainText('Name only');
     await row.getByRole('button', { name: 'Rename', exact: true }).click();
     const rename = page.getByRole('textbox', { name: 'Name', exact: true });
@@ -103,43 +117,38 @@ test('remembered lifecycle and missed socket events preserve roster and recordin
 
     const detailRefresh = () =>
       detail.waitForResponse((response) =>
-        (response.request().headers()['x-inertia-partial-data'] || '').split(',').includes('speakers')
+        (response.request().headers()['x-inertia-partial-data'] || '').split(',').includes('voices')
       );
     let refreshed = detailRefresh();
     await produce('remember');
     expect((await refreshed).ok()).toBe(true);
-    await expect(row).toContainText('Voice remembered (12 s sample');
+    await expect(row).toContainText('Voice learned from 1 recording, 12 s');
     await expect(editor.getByTestId('voice-forget')).toBeVisible();
     await draftsSurvive();
     await page.waitForLoadState('networkidle');
     await detail.waitForLoadState('networkidle');
     expect(rosterSocket.reloads).toHaveLength(1);
-    expect(rosterSocket.reloads[0].sort()).toEqual(['voices', 'recognise_voices', 'can_change_setting'].sort());
+    expect(rosterSocket.reloads[0].sort()).toEqual(
+      ['voices', 'recognise_voices', 'auto_name_voices', 'can_change_setting', 'voice_conversion'].sort()
+    );
+    // A print is roster state now: speaker cards don't show it, so the
+    // transcript page reloads only its roster props.
     expect(detailSocket.reloads).toHaveLength(1);
     expect(detailSocket.reloads[0].sort()).toEqual(
-      ['recording', 'speakers', 'voices', 'members_without_voice', 'my_voice_id', 'recognition_enabled'].sort()
+      ['voices', 'members_without_voice', 'my_voice_id', 'recognition_enabled'].sort()
     );
 
     refreshed = detailRefresh();
     await produce('metadata');
     expect((await refreshed).ok()).toBe(true);
-    await expect(row).toContainText('Voice remembered (21 s sample');
-    await draftsSurvive();
-
-    // Pending state uses normal fixture storage/callbacks, but the unconfigured
-    // house gate must still redact it. This is NOT browser proof of preview UI.
-    refreshed = detailRefresh();
-    await produce('preview');
-    const props = (await (await refreshed).json()).props;
-    expect(props.speakers.every((speaker) => speaker.pending_enrolment === null)).toBe(true);
-    await expect(detail.getByTestId('voice-preview')).toHaveCount(0);
+    await expect(row).toContainText('Voice learned from 2 recordings, 21 s');
     await draftsSurvive();
 
     refreshed = detailRefresh();
-    editor.once('dialog', (dialog) => dialog.accept());
     await editor.getByTestId('voice-forget').click();
+    await confirmForget(editor);
     expect((await refreshed).ok()).toBe(true);
-    await expect(row).toContainText('Name only');
+    await expect(row).toContainText('Voice forgotten, not learning');
     await expect(editor.getByTestId('voice-forget')).toHaveCount(0);
     await expect(detail.getByTestId('speaker-card').first()).toContainText('Synthetic lifecycle voice');
     await draftsSurvive();
@@ -148,22 +157,33 @@ test('remembered lifecycle and missed socket events preserve roster and recordin
     // Prop refreshes have not churned the dynamic subscriptions.
     expect([rosterSocket.confirmations.length, detailSocket.confirmations.length]).toEqual(confirmations);
 
+    // Turn learning back on while connected, so the print the lost event
+    // brings is the only thing a reconnect can show.
+    refreshed = detailRefresh();
+    await editor.getByTestId('voice-remember').click();
+    expect((await refreshed).ok()).toBe(true);
+    await expect(row).toContainText('Name only so far');
+    await page.waitForLoadState('networkidle');
+    await detail.waitForLoadState('networkidle');
+
     // Lose the only print-created event on BOTH readers, then reconnect with
     // no further write. Assert loss before closing so this cannot pass by luck.
     rosterSocket.drop = detailSocket.drop = true;
     const beforeReconnect = [rosterSocket.reloads.length, detailSocket.reloads.length];
     await produce('remember');
     await expect.poll(() => rosterSocket.dropped).toContain('FieldVoiceActivity');
-    await expect.poll(() => detailSocket.dropped).toContain('FieldRecording');
+    // The transcript page hears about a print through its roster stream only.
+    await expect.poll(() => detailSocket.dropped).toContain('FieldVoiceActivity');
+    expect(detailSocket.dropped).not.toContain('FieldRecording');
     await expect(editor.getByTestId('voice-forget')).toBeVisible();
-    await expect(row).toContainText('Name only');
+    await expect(row).toContainText('Name only so far');
     expect([rosterSocket.reloads.length, detailSocket.reloads.length]).toEqual(beforeReconnect);
     rosterSocket.drop = detailSocket.drop = false;
     refreshed = detailRefresh();
     rosterSocket.socket.close({ code: 1012, reason: 'Synthetic lifecycle reconnect' });
     detailSocket.socket.close({ code: 1012, reason: 'Synthetic lifecycle reconnect' });
     expect((await refreshed).ok()).toBe(true);
-    await expect(row).toContainText('Voice remembered (12 s sample', { timeout: 20_000 });
+    await expect(row).toContainText('Voice learned from 1 recording, 12 s', { timeout: 20_000 });
     await expect.poll(() => rosterSocket.confirmations.length).toBeGreaterThan(confirmations[0]);
     await expect.poll(() => detailSocket.confirmations.length).toBeGreaterThan(confirmations[1]);
     await draftsSurvive();
@@ -265,7 +285,9 @@ test('voice roster and open speaker picker catch changes without replacing draft
       [
         'voices',
         'recognise_voices',
+        'auto_name_voices',
         'can_change_setting',
+        'voice_conversion',
         'account',
         'accounts',
         'expired_subscriptions',
@@ -284,15 +306,17 @@ test('voice roster and open speaker picker catch changes without replacing draft
     await expect(page.getByTestId('voice-row')).toContainText('After reconnect', { timeout: 20_000 });
     await page.waitForLoadState('networkidle');
     // Reconnect also catches up the layout's room/account/attention lanes.
-    expect(reloads.at(-1)).toEqual(expect.arrayContaining(['voices', 'recognise_voices', 'can_change_setting']));
+    expect(reloads.at(-1)).toEqual(
+      expect.arrayContaining(['voices', 'recognise_voices', 'auto_name_voices', 'can_change_setting', 'voice_conversion'])
+    );
     page.on('dialog', (dialog) => dialog.accept());
     await editor.getByRole('button', { name: 'Rename', exact: true }).click();
     await page.getByRole('button', { name: 'Rename', exact: true }).click();
     await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Deleted draft');
-    editor.once('dialog', (dialog) => dialog.accept());
     // Leave the editor's own rename mode so its delete control is visible.
     await editor.getByRole('button', { name: 'Cancel', exact: true }).click();
     await editor.getByRole('button', { name: 'Delete name', exact: true }).click();
+    await confirmForget(editor);
     await expect(page.getByText(/No voices yet/)).toBeVisible();
     await expect(page.getByRole('textbox', { name: 'Name', exact: true })).toHaveCount(0);
     await expect(notes).toHaveValue('Unfinished meeting notes');

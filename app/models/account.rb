@@ -50,6 +50,7 @@ class Account < ApplicationRecord
   has_many :chats, dependent: :destroy
   has_many :visual_tags, dependent: :destroy
   has_many :rooms, -> { ordered }, dependent: :destroy
+  has_many :room_model_defaults, dependent: :delete_all
   # Where conversations residents start land unless they choose; nil is Main.
   belongs_to :resident_room, class_name: "Room", optional: true
   has_one :pin_tag, -> { pinned }, class_name: "VisualTag"
@@ -72,7 +73,7 @@ class Account < ApplicationRecord
   has_many :field_recordings, dependent: :destroy
   has_many :field_recording_reservations, dependent: :destroy
   has_many :field_voices, dependent: :destroy
-  has_many :field_voice_enrolments, dependent: :destroy
+  has_many :field_voice_samples, dependent: :delete_all
   has_many :field_taggings, dependent: :delete_all
   has_many :field_tags, dependent: :destroy
   has_many :device_streams, dependent: :destroy
@@ -90,20 +91,34 @@ class Account < ApplicationRecord
   validates :logo_colour, inclusion: { in: ->(_) { LOGO_COLOURS } }, allow_nil: true
   validate :resident_handoff_cap_in_range
   validate :resident_room_belongs_to_account
+  validates :main_room_name, length: { maximum: 40 }, format: { without: /\0/, message: "must not contain NUL" }
+  validates :main_room_description, length: { maximum: 280 }, format: { without: /\0/, message: "must not contain NUL" }
+  validate :main_room_name_is_free
   validate :enforce_site_account_limit, on: :create
   validate :enforce_personal_account_limit, if: :personal?
   validate :can_invite_members, if: -> { memberships.any?(&:invitation?) }
 
   # Callbacks
+  # Blank or the default spelling stores nil, so "Main" stays the default.
+  before_validation lambda {
+    if main_room_name.is_a?(String)
+      stripped = main_room_name.strip
+      self.main_room_name = stripped == Room::MAIN ? nil : stripped.presence
+    end
+    self.main_room_description = main_room_description.strip.presence if main_room_description.is_a?(String)
+  }
   before_validation :set_default_name, on: :create
   before_validation :generate_slug, on: :create
+  # A new account has no references to convert. Existing accounts retain their
+  # explicit profile until the locked conversion activation changes it.
+  before_create { self.voice_embedding_profile = FieldVoiceprints::Profiles.configured }
   after_create :create_default_visual_tags
   after_save -> { FieldTweetStream.refresh!(id) }, if: :saved_change_to_field_tweets_house_key?
   before_destroy :mark_memberships_for_skip_check, prepend: true
   after_update_commit :disconnect_members_app_cable, if: -> { saved_change_to_disabled_at? && disabled? }
   after_update_commit -> { users.ids.each { |id| ReplyExpectation.refresh_for(id) } }, if: :saved_change_to_disabled_at?
   after_save :refresh_directory_presentation, if: -> {
-    (saved_changes.keys & %w[name account_type disabled_at recognise_voices]).any?
+    (saved_changes.keys & %w[name account_type disabled_at recognise_voices auto_name_voices]).any?
   }
   # Both hosted agents and receiving joins disappear in dependent callbacks.
   before_destroy :snapshot_guest_directory, prepend: true
@@ -127,7 +142,7 @@ class Account < ApplicationRecord
     if (saved_changes.keys & %w[name account_type disabled_at]).any?
       GuestDirectory.refresh!(GuestDirectory.account_ids_for([ id ]))
     end
-    FieldVoiceActivity.refresh!([ id ]) if saved_change_to_recognise_voices?
+    FieldVoiceActivity.refresh!([ id ]) if saved_change_to_recognise_voices? || saved_change_to_auto_name_voices?
   end
   private :snapshot_guest_directory, :refresh_directory_presentation
 
@@ -215,6 +230,36 @@ class Account < ApplicationRecord
 
   def disabled?
     disabled_at.present?
+  end
+
+  # What this account calls Main, the place conversations without a room live.
+  def main_room_label
+    main_room_name.presence || Room::MAIN
+  end
+
+  # Main as a destination, shaped like Room#directory_json (id nil).
+  def main_room_json
+    { "id" => nil, "name" => main_room_label, "description" => main_room_description }
+  end
+
+  # Residents of this account that can run on more than one model in a
+  # conversation: the ones a room can start on something else. A resident with
+  # a stored room default stays listed after losing its alternatives, so the
+  # stale default is shown and can be cleared rather than silently returning
+  # if the model is listed again. Shared by the Rooms page and GET /api/v1/rooms.
+  def model_residents_json
+    with_defaults = room_model_defaults.distinct.pluck(:agent_id)
+    agents.by_name.select do |agent|
+      (agent.active? && agent.model_switching_available?) || with_defaults.include?(agent.id)
+    end.map do |agent|
+      { id: agent.to_param, name: agent.name, colour: agent.colour, default_label: agent.model_label,
+        choices: agent.model_choices }
+    end
+  end
+
+  # Main or this account's name for it, any case.
+  def main_room_named?(name)
+    name.to_s.strip.casecmp?(Room::MAIN) || name.to_s.strip.casecmp?(main_room_label)
   end
 
   def resident_handoff_cap
@@ -481,6 +526,12 @@ class Account < ApplicationRecord
     return if value.nil? || (value.is_a?(Integer) && RESIDENT_HANDOFF_CAP_RANGE.cover?(value))
 
     errors.add(:resident_handoff_cap, "must be a whole number from #{RESIDENT_HANDOFF_CAP_RANGE.min} to #{RESIDENT_HANDOFF_CAP_RANGE.max}")
+  end
+
+  def main_room_name_is_free
+    return if main_room_name.blank?
+
+    errors.add(:main_room_name, "is already a room") if rooms.where("lower(name) = ?", main_room_name.downcase).exists?
   end
 
   def resident_room_belongs_to_account

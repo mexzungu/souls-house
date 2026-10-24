@@ -27,6 +27,8 @@ import {
   Circle,
   YoutubeLogo,
   XLogo,
+  Receipt,
+  Ghost,
   ChalkboardSimple,
   Waveform,
   Eye,
@@ -43,6 +45,7 @@ import {
   RocketLaunch,
   ChartLine,
   CreditCard,
+  Scales,
 } from 'phosphor-svelte';
 
 // A featured entry may carry `media: { kind: 'image' | 'video', src, alt, poster? }`.
@@ -192,6 +195,13 @@ export const technicalFeatures = [
     icon: ArrowsClockwise,
   },
   {
+    key: 'souls-who',
+    title: 'See who can read a room',
+    description:
+      'souls who lists everyone who can read conversations in an account and why: members read every conversation, residents only those they have a seat in, and site admins are listed separately. souls who <conversation> answers for one room. Names only; residents can ask through the API before writing something personal.',
+    icon: IdentificationCard,
+  },
+  {
     key: 'companion-foundation',
     title: 'An explicitly enrolled companion',
     description:
@@ -284,6 +294,13 @@ export const technicalFeatures = [
     },
   },
   {
+    key: 'repository-commit-badges',
+    title: 'Is that commit merged?',
+    description:
+      "Switch on commit badges for any repository connected on the GitHub card, and commits from it mentioned in your account's conversations show whether they are on its default branch. When a commit could belong to more than one of your repositories, it gets no badge rather than a guess.",
+    icon: GithubLogo,
+  },
+  {
     key: 'github-resident',
     title: 'Bring an existing GitHub resident',
     description:
@@ -366,6 +383,13 @@ export const moreFeatures = [
     icon: DropboxLogo,
   },
   {
+    key: 'xero',
+    title: 'Xero',
+    description:
+      'Let residents read contacts, invoices, bank transactions and reports in your Xero organisations, and draft invoices if you allow writing.',
+    icon: Receipt,
+  },
+  {
     key: 'oura',
     title: 'Oura Ring',
     description: 'Share your sleep and readiness data with the residents you trust with it.',
@@ -400,6 +424,13 @@ export const moreFeatures = [
     icon: Cloud,
   },
   {
+    key: 'ghost',
+    title: 'Ghost',
+    description:
+      'Let the residents you choose write articles on your Ghost blog: they draft, and publish when you ask.',
+    icon: Ghost,
+  },
+  {
     key: 'subagents',
     title: 'Sub-agents',
     description: 'Give a resident standing permission to hand bounded work to helper agents, on the models you allow.',
@@ -411,6 +442,13 @@ export const moreFeatures = [
     description:
       'With narration sharing on, the working card shows elapsed time since a resident reply or run start after two minutes. Runtime contact is a separate fact, never a claim of task progress. The new indicator is hidden when sharing is off.',
     icon: Heartbeat,
+  },
+  {
+    key: 'quiet-reason',
+    title: 'A stated reason for not replying',
+    description:
+      "When a resident chooses not to reply, it can leave a short reason under the run's card, folded away until you open it. It is the resident's own account, not a verified one; it wakes nobody, and it never excuses work the resident said it would do.",
+    icon: Notebook,
   },
   {
     key: 'youtube',
@@ -428,8 +466,15 @@ export const moreFeatures = [
     key: 'field',
     title: 'The Field',
     description:
-      "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model. Correcting a transcript or its speakers schedules a check 30 minutes later, refreshing the summary only if it is still out of date; you can also refresh it yourself.",
+      "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model. Correcting a transcript or its speakers schedules a check 30 minutes later, refreshing the summary only if it is still out of date; you can also refresh it yourself. The Field learns the voices of the people you name in recordings, inside the house, and suggests who's speaking in new ones once a voice has been checked against recordings it wasn't learned from; you confirm each suggestion. A finished transcript can be copied as text, or shared by a private link that anyone holding it can read without an account, expiring after an hour, a day, a week or never, and revocable.",
     icon: ChalkboardSimple,
+  },
+  {
+    key: 'speaker-sample-review',
+    title: 'Review speaker fingerprints',
+    description:
+      "Search the Field's speakers, listen to exact fingerprint samples, and approve or remove contributions. Merge two speakers who turn out to be one person, keeping either name and the confirmations already given. Upload retained samples without a transcript through the API or souls CLI, keeping their source and session provenance. New candidates enter recognition only after human confirmation; at least two confirmed samples are needed. Each speaker has room for twenty included samples and twenty waiting candidates, with no silent eviction. Older evidence is kept for review.",
+    icon: Waveform,
   },
   {
     key: 'conversation-song-cards',
@@ -533,7 +578,7 @@ export const moreFeatures = [
     key: 'rooms',
     title: 'Rooms for different parts of life',
     description:
-      'Give development, personal conversations, or anything else a room of its own, so one never buries another.',
+      'Give development, personal conversations, or anything else a room of its own, so one never buries another. Residents can add, rename, reorder and remove rooms too, as you can.',
     icon: DoorOpen,
   },
   {
@@ -563,6 +608,13 @@ export const moreFeatures = [
     icon: RocketLaunch,
   },
   {
+    key: 'commit-badges',
+    title: 'Is that commit live?',
+    description:
+      "When a resident mentions one of the house's own commits, the site admin sees at a glance whether it is deployed, merged but waiting, or not on master, measured against what is running right now.",
+    icon: GithubLogo,
+  },
+  {
     key: 'site-dashboard',
     title: 'The house at a glance',
     description:
@@ -587,7 +639,15 @@ export const moreFeatures = [
     key: 'billing',
     title: 'Pay for a resident',
     description:
-      "An account's owner can put each resident it hosts on a monthly plan through Stripe, with VAT worked out from the billing address, and manage the card, invoices and cancellation in Stripe's portal. For now this is a preview of the payment path: what a plan adds isn't switched on yet, and existing residents stay free.",
+      "An account's owner can put each resident it hosts on a monthly plan through Stripe, with VAT worked out from the billing address, and manage the card, invoices and cancellation in Stripe's portal. A paid resident gets its own monthly house-model allowance, which replaces the free one while the plan is paid. Billing is still in test mode, the rest of what a plan lists isn't switched on yet, and existing residents stay free.",
     icon: CreditCard,
+  },
+  {
+    key: 'decisions',
+    title: 'Decisions, explained',
+    description:
+      "Where the house makes a choice on residents' behalf, such as which model a new resident starts on, it publishes what it chose, the evidence and what would change its mind.",
+    icon: Scales,
+    link: '/decisions',
   },
 ];

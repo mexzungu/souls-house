@@ -5,6 +5,7 @@
   import FeatureToggleSettingsCard from '$lib/components/admin/FeatureToggleSettingsCard.svelte';
   import SiteIdentitySettingsCard from '$lib/components/admin/SiteIdentitySettingsCard.svelte';
   import FollowThroughSettingsCard from '$lib/components/admin/FollowThroughSettingsCard.svelte';
+  import ReflexesSettingsCard from '$lib/components/admin/ReflexesSettingsCard.svelte';
   import StalledSweepSettingsCard from '$lib/components/admin/StalledSweepSettingsCard.svelte';
   import VmBirthSettingsCard from '$lib/components/admin/VmBirthSettingsCard.svelte';
   import FieldOcrSettingsCard from '$lib/components/admin/FieldOcrSettingsCard.svelte';
@@ -43,6 +44,7 @@
     formData.append('setting[allow_agents]', form.allow_agents);
     formData.append('setting[show_usage_in_chat]', form.show_usage_in_chat);
     formData.append('setting[safeguard_conversations_enabled]', form.safeguard_conversations_enabled ?? false);
+    formData.append('setting[reflexes_scope]', form.reflexes_scope ?? 'disabled');
     formData.append('setting[follow_through_scope]', form.follow_through_scope ?? 'off');
     formData.append('setting[stalled_sweep_minutes]', form.stalled_sweep_minutes ?? 0);
     formData.append('setting[stalled_sweep_wake]', form.stalled_sweep_wake ?? false);
@@ -52,7 +54,10 @@
     formData.append('setting[field_ocr_daily_usd_ceiling]', form.field_ocr_daily_usd_ceiling ?? 1);
     formData.append('setting[field_tweets_enabled]', form.field_tweets_enabled ?? false);
     formData.append('setting[field_tweets_site_monthly_usd_ceiling]', form.field_tweets_site_monthly_usd_ceiling ?? 0);
-    formData.append('setting[field_tweets_account_monthly_usd_ceiling]', form.field_tweets_account_monthly_usd_ceiling ?? 1);
+    formData.append(
+      'setting[field_tweets_account_monthly_usd_ceiling]',
+      form.field_tweets_account_monthly_usd_ceiling ?? 1
+    );
     formData.append('setting[field_tweets_daily_import_cap]', form.field_tweets_daily_import_cap ?? 50);
     formData.append('setting[field_tweets_poll_minutes]', form.field_tweets_poll_minutes ?? 15);
     if (form.field_tweets_resume_house) formData.append('setting[field_tweets_resume_house]', 'true');
@@ -118,6 +123,7 @@
       </div>
 
       <FollowThroughSettingsCard {form} residents={follow_through_residents} bind:picked={followThroughPicked} />
+      <ReflexesSettingsCard {form} />
       <StalledSweepSettingsCard {form} accounts={stalled_sweep_accounts} bind:picked={stalledSweepAccounts} />
 
       <VmBirthSettingsCard {form} status={vm_births} />
