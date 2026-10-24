@@ -31,6 +31,19 @@ module Agents
       assert_equal packed[:archive].bytesize, packed[:bytes]
     end
 
+    test "a reviewed home holding a name the runner's seed reserves is refused before anything is staged" do
+      %w[.souls-house-seed .souls-house-seed-staging/x .souls-house-seed.tmp].each do |name|
+        path = File.join(@root, name)
+        FileUtils.mkdir_p(File.dirname(path))
+        File.write(path, "reviewed bytes")
+        error = assert_raises(GithubImportStage::Error) { GithubImportStage.pack(@root) }
+        assert_match(/seed reserves/, error.message)
+        FileUtils.rm_rf(File.join(@root, name.split("/").first))
+      end
+      File.write(File.join(@root, "memory", ".souls-house-seed"), "deeper is fine")
+      assert GithubImportStage.pack(@root)
+    end
+
     test "links are refused, not followed" do
       File.symlink("/etc/passwd", File.join(@root, "passwd"))
       assert_raises(GithubImportStage::Error) { GithubImportStage.pack(@root) }

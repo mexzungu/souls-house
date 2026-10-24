@@ -20,6 +20,15 @@ module Agents
 
     # Matches SEED_MAX_BYTES in host-runner/souls_house_runner.py.
     MAX_BYTES = 64.megabytes
+    # The names the runner writes at the top of a seeded volume (SEED_MARKER,
+    # its .tmp, and SEED_STAGING in host-runner/souls_house_runner.py). A home
+    # that holds one is refused when it is staged, never silently rewritten by
+    # the seed (Mira's review of #531).
+    RESERVED_TOP_LEVEL = %w[.souls-house-seed .souls-house-seed.tmp .souls-house-seed-staging].freeze
+
+    def self.reserved_path?(relative)
+      RESERVED_TOP_LEVEL.include?(relative.to_s.delete_prefix("./").split("/").first)
+    end
     LIVE = %w[queued delivered done].freeze
 
     class Unavailable < StandardError; end

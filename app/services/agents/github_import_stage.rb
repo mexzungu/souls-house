@@ -20,6 +20,9 @@ module Agents
     # admission lock is taken. Refused, not truncated, past the runner's limits.
     def pack(root)
       entries = Agents::Volume.home_entries!(root)
+      if (reserved = entries.keys.find { |path| Agents::VmSeed.reserved_path?(path) })
+        raise Error, "The reviewed home contains #{reserved.split('/').first}, a name a resident server's seed reserves"
+      end
       files = entries.count { |_, item| item["type"] == "file" }
       unpacked = entries.sum { |_, item| item["type"] == "file" ? item["size"] : 0 }
       raise Error, "The reviewed home has more files than a resident server can be seeded with" if entries.size > Agents::Portability::Stage.max_role_entries

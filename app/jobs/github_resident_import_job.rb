@@ -100,7 +100,12 @@ class GithubResidentImportJob < ApplicationJob
       return
     end
     owner, repo = request.repository.split("/", 2)
-    agent = request.build_agent(account: request.account, name: request.name, model_id: request.model_id,
+    # Built by id, not through request.build_agent: the request must never
+    # hold an unsaved resident it could autosave outside admission (a
+    # refusal's status write, the failure rescue below), which a later
+    # approval would then find already made and take to the house (Mira's
+    # review of #531). Only admit! saves it.
+    agent = request.account.agents.new(github_resident_import_id: request.id, name: request.name, model_id: request.model_id,
       home_profile: "portable_v1", portable_home_id: request.portable_home_id,
       runtime: "provisioning", active: false, paused: true, scheduled_wakes_enabled: false,
       github_repo_owner: owner, github_repo_name: repo, github_repo_url: "https://github.com/#{request.repository}")
@@ -109,9 +114,10 @@ class GithubResidentImportJob < ApplicationJob
         Agents::GithubImportStage.persist!(agent, packed)
       end
     rescue Agents::VmBirthPolicy::Refused => refused
-      request.update!(status: "failed", last_error: refused.message)
+      request.reload.update!(status: "failed", last_error: refused.message)
       return
     end
+    request.reload
     Agents::HostedProvisioning.new(agent:, user: request.requested_by).prepare!(started_at: Time.current)
     agent.agent_service_accesses.find_or_create_by!(service_connection: request.service_connection) do |access|
       access.enabled = true
@@ -131,7 +137,21 @@ class GithubResidentImportJob < ApplicationJob
     placement = agent.placement
     case placement.state
     when "pending", "ready"
-      recheck_trust!(agent, placement)
+      if agent.runtime_ready_at.present?
+        # Ready and approved again: as on the house, trust is checked again
+        # before the runtime is refreshed with the newly approved values.
+        # ProvisionVmAgentJob carries it on; it never fails or cleans up a
+        # ready resident's server.
+        begin
+          agent.update!(container_image: Agents::Config.default_image)
+          Agents::RemoteRuntime.check_runtime_trust!(agent)
+        rescue Agents::RemoteRuntime::Unavailable => e
+          request.update!(status: "failed", last_error: "Its server could not be asked to check runtime trust: #{e.message}".first(1000))
+          return
+        end
+      else
+        recheck_trust!(agent, placement)
+      end
     else
       begin
         Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: request.approved_by)

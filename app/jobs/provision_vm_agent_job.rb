@@ -58,7 +58,10 @@ class ProvisionVmAgentJob < ApplicationJob
 
   def advance(agent_id)
     agent = Agent.find_by(id: agent_id)
-    return :done if agent.nil? || agent.runtime_ready_at.present?
+    return :done if agent.nil?
+    if agent.runtime_ready_at.present?
+      return reapproval_pending?(agent) ? reapprove!(agent) : :done
+    end
 
     placement = Agents::RemoteRuntime.placement_for(agent)
     return :done unless placement&.vm_birth?
@@ -169,6 +172,49 @@ class ProvisionVmAgentJob < ApplicationJob
       Agents::RemoteRuntime.check_runtime_trust!(agent)
       false
     end
+  end
+
+  # A ready GitHub import approved again (GithubResidentImportJob sent a
+  # fresh trust check). As on the house: trusted, the runtime is refreshed
+  # with the approved values between turns (begin_refresh!, the credential
+  # and service restart) and the request is ready again; not trusted, the
+  # request waits in needs_runtime_trust and the resident is paused. A
+  # refresh refused as busy is tried again by the next sweep. Nothing here
+  # fails the birth or touches its server's lifecycle.
+  def reapproval_pending?(agent)
+    placement = Agents::RemoteRuntime.placement_for(agent)
+    github_import?(placement) && placement.state == "ready" && agent.github_resident_import&.status == "provisioning"
+  end
+
+  def reapprove!(agent)
+    placement = Agents::RemoteRuntime.placement_for(agent)
+    request = agent.github_resident_import
+    last = RunnerCommand.where(agent_placement_id: placement.id, kind: "check_runtime_trust", generation: placement.generation)
+      .order(:id).last
+    case last && Agents::RemoteRuntime.runtime_trust_outcome(last)
+    when :pending then :wait
+    when :trusted
+      request.require_approval!
+      return :wait if Agents::RemoteRuntime.begin_refresh!(agent) == :busy
+
+      RemoteRefreshSettleJob.set(wait: RemoteRefreshSettleJob::RECHECK_AFTER).perform_later(placement.id)
+      agent.update_columns(active: true, paused: false, updated_at: Time.current)
+      request.update!(status: "ready", last_error: nil)
+      :done
+    when :untrusted
+      agent.update_columns(active: false, paused: true, updated_at: Time.current)
+      request.update!(status: "needs_runtime_trust", last_error: nil)
+      :done
+    else
+      agent.update_columns(active: false, paused: true, updated_at: Time.current)
+      request.update!(status: "failed", last_error: "The runtime trust check on its server did not answer trusted " \
+                                                  "(#{last&.result&.dig('error') || last&.result&.dig('result', 'trust') || 'no check'}).")
+      :done
+    end
+  rescue Agent::RuntimeAvailability::Unavailable => e
+    agent.update_columns(active: false, paused: true, updated_at: Time.current)
+    request&.update!(status: "failed", last_error: e.message.to_s.first(1000))
+    :done
   end
 
   # The placement becomes ready only now, after a seeded home, and the start
