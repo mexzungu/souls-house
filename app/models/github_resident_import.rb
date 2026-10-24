@@ -5,6 +5,19 @@ class GithubResidentImport < ApplicationRecord
   FUTURE_BRANCH_TRUST_NOTICE = "Approval permits ALL code in this repository, including hooks and sync scripts, and future pushes to this branch to run with the resident's container credentials. Fine-grained token format does not prove least privilege. Revoking approval does not kill already running code or recall copied credentials.".freeze
   STATUSES = %w[pending_review approved provisioning needs_runtime_trust ready failed].freeze
   RUNTIME_TRUST_NOTICE = "The reviewed home is seeded, but Chaos has no supported headless project-trust grant command. A site operator must open Chaos's interactive trust screen for /home/agent/identity in this resident's own runtime home, then retry activation. Trust the OAuth runtime separately if it is used. No repository hooks, sync scripts or first wake are permitted before trust. Do not copy another resident's database or edit trust/hook tables.".freeze
+  # The same rule for a resident on its own server (docs/2026-10-10-vm-imports.md,
+  # point 4): its runtime home is on that server, so trust is granted there.
+  RUNTIME_TRUST_NOTICE_VM = "The reviewed home is seeded on this resident's own server, which waits for runtime trust. " \
+                            "A site operator must open Chaos's interactive trust screen for /home/agent/identity in this " \
+                            "resident's runtime home on that server, then retry activation. Trust the OAuth runtime separately " \
+                            "if it is used. No repository hooks, sync scripts or first wake are permitted before trust. Do not " \
+                            "copy another resident's database or edit trust/hook tables. The " \
+                            "server is released if trust is not granted within 45 minutes; the reviewed home is kept and " \
+                            "retrying orders a new server, where trust must be granted again.".freeze
+
+  def runtime_trust_notice
+    agent&.placement&.kind == "github_import" ? RUNTIME_TRUST_NOTICE_VM : RUNTIME_TRUST_NOTICE
+  end
 
   belongs_to :account
   belongs_to :service_connection

@@ -67,7 +67,9 @@ class GithubResidentImportJobTest < ActiveSupport::TestCase
     end
     request.reload
     assert_equal "failed", request.status
-    assert_equal Agents::VmBirthPolicy::IMPORT_REFUSAL, request.last_error
+    expected = Agents::VmBirthPolicy.current.refusal(kind: :import)
+    assert expected, "this test house can't admit a VM (no procurement), so the import is refused with that reason"
+    assert_equal expected, request.last_error
     assert_nil request.agent
   end
 

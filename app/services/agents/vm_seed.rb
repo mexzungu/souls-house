@@ -13,12 +13,22 @@ module Agents
   # (AgentImportStage), under the same digest, marker and refusal rules, one
   # volume each. A birth seeds identity only, with the payload it always had.
   #
-  # GitHub-imported homes are not seeded here yet: their reviewed home has to
-  # reach the VM by a path of its own (slice 2).
+  # A GitHub import (placement kind github_import) seeds identity only, from
+  # the reviewed checkout staged at import (Agents::GithubImportStage), with
+  # the payload a birth has. No other imported home is seeded on a VM.
   class VmSeed
 
     # Matches SEED_MAX_BYTES in host-runner/souls_house_runner.py.
     MAX_BYTES = 64.megabytes
+    # The names the runner writes at the top of a seeded volume (SEED_MARKER,
+    # its .tmp, and SEED_STAGING in host-runner/souls_house_runner.py). A home
+    # that holds one is refused when it is staged, never silently rewritten by
+    # the seed (Mira's review of #531).
+    RESERVED_TOP_LEVEL = %w[.souls-house-seed .souls-house-seed.tmp .souls-house-seed-staging].freeze
+
+    def self.reserved_path?(relative)
+      RESERVED_TOP_LEVEL.include?(relative.to_s.delete_prefix("./").split("/").first)
+    end
     LIVE = %w[queued delivered done].freeze
 
     class Unavailable < StandardError; end
@@ -41,9 +51,9 @@ module Agents
     # the identity command for a birth, and the commands by role for an
     # archive import.
     def issue!
-      raise Unavailable, "Imported homes cannot be seeded on a VM yet" if agent.imported_home?
-
       placement = remote_placement!
+      raise Unavailable, "Imported homes cannot be seeded on a VM yet" if agent.imported_home? && !github?(placement)
+
       enrollment = Agents::RemoteRuntime.live_enrollment!(agent)
       require_role_support!(enrollment) if import?(placement)
       placement.with_lock do
@@ -105,6 +115,8 @@ module Agents
     end
 
     def import?(placement) = placement.kind == "archive_import"
+    def github?(placement) = placement.kind == "github_import"
+    def staged?(placement) = import?(placement) || github?(placement)
 
     # A runner from before seed roles ignores role and seeds identity: an
     # empty identity volume would take the repo home, and identical digests
@@ -132,7 +144,7 @@ module Agents
     # [sha256, bytes] of the role's archive. A birth's is built once and kept
     # on the placement; an import's was staged when it was imported.
     def archive_for!(placement, role)
-      if import?(placement)
+      if staged?(placement)
         stage = agent.import_stages.find_by(role:) || raise(Unavailable, "The #{role} home was not staged")
         [ stage.sha256, stage.bytes ]
       else

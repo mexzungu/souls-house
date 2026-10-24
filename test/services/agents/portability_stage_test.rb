@@ -29,9 +29,23 @@ class Agents::PortabilityStageTest < ActiveSupport::TestCase
     @target = accounts(:team_account).agents.create!(name: "Staged copy", model_id: @source.model_id, runtime: "offline", active: false, paused: true)
   end
 
-  def with_archive
+  # A repo home that happens to hold the runner's seed marker.
+  class ReservedTransport < FakeTransport
+
+    def capture(root, output)
+      return super unless root == "repo"
+
+      Gem::Package::TarWriter.new(output) do |tar|
+        tar.mkdir(".", 0755)
+        tar.add_file_simple("./.souls-house-seed", 0644, 4) { |file| file.write("mine") }
+      end
+    end
+
+  end
+
+  def with_archive(transport: FakeTransport.new)
     Agents::Config.stub(:internal_url, "http://synthetic.invalid") do
-      Agents::Portability::Export.call(@source, exporter: @user, transport: FakeTransport.new) do |path|
+      Agents::Portability::Export.call(@source, exporter: @user, transport:) do |path|
         File.open(path, "rb") { |file| Archive.with_upload(file) { |archive| yield archive } }
       end
     end
@@ -98,6 +112,22 @@ class Agents::PortabilityStageTest < ActiveSupport::TestCase
       assert_empty Dir.glob(File.join(archive.stage, "seed-*"))
     end
     assert_equal 0, AgentImportStage.where(agent: @target).count
+  end
+
+  test "a role holding a name the runner's seed reserves is refused, not rewritten by the seed" do
+    with_archive(transport: ReservedTransport.new) do |archive|
+      error = assert_raises(Error) { Stage.persist!(archive, @target) }
+      assert_match(/repo home contains \.souls-house-seed/, error.message)
+    end
+    assert_equal 0, AgentImportStage.where(agent: @target).count
+  end
+
+  test "the reserved names are exactly the ones the runner writes at a volume's top" do
+    runner = Rails.root.join("host-runner/souls_house_runner.py").read
+    marker = runner[/^SEED_MARKER = "([^"]+)"/, 1]
+    staging = runner[/^SEED_STAGING = "([^"]+)"/, 1]
+    assert_includes runner, 'tmp = marker + ".tmp"'
+    assert_equal [ marker, "#{marker}.tmp", staging ].sort, Agents::VmSeed::RESERVED_TOP_LEVEL.sort
   end
 
   test "the role limits are the runner's seed limits" do

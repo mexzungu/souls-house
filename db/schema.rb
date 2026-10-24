@@ -669,6 +669,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
     t.datetime "last_reconciled_at"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.integer "placement_generation", default: 1, null: false
     t.index ["agent_placement_id"], name: "index_cloud_procurement_operations_one_unresolved", unique: true, where: "((state)::text <> ALL (ARRAY[('refused'::character varying)::text, ('deleted'::character varying)::text]))"
     t.index ["location", "state"], name: "index_cloud_procurement_operations_on_location_and_state"
     t.index ["provider_name"], name: "index_cloud_procurement_operations_on_provider_name", unique: true
@@ -676,6 +677,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
     t.index ["public_id"], name: "index_cloud_procurement_operations_on_public_id", unique: true
     t.index ["requested_by_id"], name: "index_cloud_procurement_operations_on_requested_by_id"
     t.check_constraint "image_id > 0", name: "cloud_procurement_operations_positive_image_id"
+    t.check_constraint "placement_generation >= 1", name: "cloud_procurement_operations_positive_placement_generation"
     t.check_constraint "provider_server_id > 0", name: "cloud_procurement_operations_positive_server_id"
     t.check_constraint "state::text = ANY (ARRAY['planned'::character varying::text, 'create_in_flight'::character varying::text, 'reconciling'::character varying::text, 'provisioned'::character varying::text, 'unknown'::character varying::text, 'refused'::character varying::text, 'needs_review'::character varying::text, 'deleting'::character varying::text, 'deleted'::character varying::text])", name: "cloud_procurement_operations_state"
   end

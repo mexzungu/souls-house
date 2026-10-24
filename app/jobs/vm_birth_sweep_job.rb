@@ -11,6 +11,13 @@ class VmBirthSweepJob < ApplicationJob
       .joins(:agent).where(agents: { runtime_ready_at: nil })
     births.pluck(:agent_id).each { |agent_id| ProvisionVmAgentJob.perform_later(agent_id) }
 
+    # A ready GitHub import approved again, waiting on its trust check or a
+    # refresh refused as busy.
+    AgentPlacement.where(backend: "hetzner_cloud", kind: "github_import", state: "ready")
+      .joins(agent: :github_resident_import).where(github_resident_imports: { status: "provisioning" })
+      .where.not(agents: { runtime_ready_at: nil })
+      .pluck(:agent_id).each { |agent_id| ProvisionVmAgentJob.perform_later(agent_id) }
+
     AgentPlacement.where.not(cleanup_requested_at: nil).where.not(state: "retired")
       .pluck(:id).each { |placement_id| VmCleanupJob.perform_later(placement_id) }
 

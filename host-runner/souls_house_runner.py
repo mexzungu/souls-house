@@ -7,7 +7,8 @@ signed heartbeats with facts about the host.
 
 When its config says "commands_enabled": true it also polls Rails for
 commands; Rails answers at once with at most one. The vocabulary is fixed here (start_resident, stop_resident,
-submit_turn, turn_status, cancel_turn, seed_home, provider_auth) and anything else is refused locally,
+submit_turn, turn_status, cancel_turn, seed_home, backup_resident, provider_auth, check_runtime_trust) and anything
+else is refused locally,
 whatever Rails asks. Rails supplies values, never Docker flags: the runner
 builds every docker argv itself from a fixed template and validates each value
 against a strict pattern. A turn is relayed to the resident's trigger server on
@@ -62,7 +63,7 @@ ENROLL_BACKOFF_SECONDS = (5, 15, 30, 60, 120, 300)
 # The runner's whole vocabulary. Anything else is refused here, not only in
 # Rails.
 COMMAND_KINDS = frozenset({"start_resident", "stop_resident", "submit_turn", "turn_status", "cancel_turn", "seed_home",
-                           "backup_resident", "provider_auth"})
+                           "backup_resident", "provider_auth", "check_runtime_trust"})
 ALLOWED_ACTIONS = frozenset({"report_facts", "heartbeat"}) | COMMAND_KINDS
 
 
@@ -200,6 +201,9 @@ def collect_facts(runtime_image=None, server_id_reader=provider_server_id, comma
         # that says it can seed each role into its own volume. A runner from
         # before roles would put every role into identity.
         "seed_roles": list(SEED_ROLES),
+        # The house sends a GitHub import's runtime trust check only to a
+        # runner that carries it; an older one would refuse the kind anyway.
+        "runtime_trust_check": RUNTIME_TRUST_CHECK_VERSION,
     }
 
 
@@ -293,8 +297,15 @@ LEDGER_ID_RE = re.compile(r"\A[0-9A-Za-z_\-]{1,64}\Z")
 ENV_KEY_RE = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 # The environment a resident may be given. Rails cannot add PATH, LD_PRELOAD,
 # DOCKER_HOST or anything else that changes what the container is. Provider
-# API keys are the account's own, as a local resident gets them (#246 parity);
-# GitHub-import settings are still absent.
+# API keys are the account's own, as a local resident gets them (#246 parity).
+# A GitHub import gets exactly the names Agents::ImportedHomeEnv gives it
+# locally (docs/2026-10-10-vm-imports.md, point 6).
+IMPORTED_HOME_ENV_KEYS = frozenset({
+    "SOULSHOUSE_HOME_ROOT", "SOULSHOUSE_IMPORTED_CLAMP_OMIT_FORCED_LOGIN",
+    "SOULSHOUSE_GITHUB_IMPORT_ID", "SOULSHOUSE_GITHUB_IMPORT_FINGERPRINT", "SOULSHOUSE_GITHUB_IMPORT_REPOSITORY",
+    "SOULSHOUSE_GITHUB_IMPORT_BRANCH", "SOULSHOUSE_HOME_SYNC_STRATEGY", "SOULSHOUSE_HOME_SYNC_CONFIGURATION",
+    "SOULSHOUSE_GITHUB_IMPORT_CONNECTION", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST",
+})
 RESIDENT_ENV_KEYS = frozenset({
     "AGENT_ID", "AGENT_SLUG", "AGENT_PROVIDER", "AGENT_DEFAULT_MODEL",
     "TRIGGER_BEARER_TOKEN", "SOULSHOUSE_BEARER_TOKEN", "SOULSHOUSE_APP_URL",
@@ -303,7 +314,7 @@ RESIDENT_ENV_KEYS = frozenset({
     "SOULSHOUSE_REQUIRE_HOUSE_TRUST", "TZ",
     "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
     "XAI_API_KEY", "ZAI_API_KEY", "MOONSHOT_API_KEY", "MINIMAX_API_KEY",
-})
+}) | IMPORTED_HOME_ENV_KEYS
 # External-service credentials (Gmail and the like), copied into the
 # container before it starts, exactly as Agents::Sandbox does locally. The
 # entrypoint moves it into tmpfs; it never reaches a volume.
@@ -323,6 +334,38 @@ VOLUME_MOUNTS = (
     ("work", "/home/agent/work"),
     ("state", "/home/agent/state"),
 )
+# check_runtime_trust (docs/2026-10-10-vm-imports.md, point 5): the check
+# Agents::Sandbox#imported_runtime_trusted? runs locally, run here inside the
+# resident's image against its own identity and Chaos volumes, read-only.
+# The script is fixed in the runner; Rails sends values, never code. It is a
+# byte-for-byte copy of Agents::ImportedHomeEnv::RUNTIME_TRUST_CHECK, and a
+# house test keeps the two equal.
+RUNTIME_TRUST_CHECK_VERSION = 1
+RUNTIME_TRUST_CHECK = """from pathlib import Path
+import sys
+try:
+    import github_import_approval
+    import imported_home
+    import os
+    if os.environ.get('SOULSHOUSE_HOME_SYNC_STRATEGY') == 'standard':
+        import standard_home_sync
+        assert callable(imported_home.standard_sync_configuration)
+    entrypoint = Path('/usr/local/bin/entrypoint.sh').read_text()
+    assert entrypoint.index('github_import_approval.py') < entrypoint.index('runtime_hooks.py')
+    assert entrypoint.index('--runtime-trust-check') < entrypoint.index('home_sync_loop.py')
+except (ImportError, OSError, ValueError, AssertionError):
+    print('unsupported-managed-import-runtime')
+    sys.exit(79)
+try:
+    imported_home.main(['imported_home.py', '--runtime-trust-check'])
+except (ValueError, KeyError, OSError):
+    sys.exit(78)
+"""
+# What the check runs with besides the fixed profile and root, in this order.
+TRUST_CHECK_ENV_KEYS = ("SOULSHOUSE_PORTABLE_HOME_ID", "SOULSHOUSE_HOME_SYNC_STRATEGY",
+                        "SOULSHOUSE_HOME_SYNC_CONFIGURATION", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST")
+TRUST_CHECK_SECONDS = 120
+TRUST_CHECK_UNSUPPORTED_EXIT = 79
 MEMORY_MB_RANGE = (256, 16384)
 CPU_SHARES_RANGE = (2, 4096)
 # Processes plus threads (the pids controller counts both). A house that
@@ -475,6 +518,16 @@ def _docker(argv, timeout=120):
     return completed.returncode == 0, (completed.stdout if completed.returncode == 0 else completed.stderr).strip()
 
 
+def _docker_exit(argv, timeout=TRUST_CHECK_SECONDS):
+    """Like _docker, but says how the command exited: (returncode, stdout).
+    returncode is None when it could not be run or did not finish."""
+    try:
+        completed = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    return completed.returncode, completed.stdout
+
+
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
     """The relay talks to one resident on the private bridge. A redirect is
     answered as the 3xx it is, never followed with the trigger token."""
@@ -512,9 +565,11 @@ class ResidentHost:
     """Carries out the six commands. Docker and HTTP are injected so tests
     can see exactly what would run."""
 
-    def __init__(self, state_dir, docker=_docker, http=_http, sleep=time.sleep, load_image=None, fetch_seed=None, backup_request=None):
+    def __init__(self, state_dir, docker=_docker, http=_http, sleep=time.sleep, load_image=None, fetch_seed=None,
+                 backup_request=None, docker_exit=_docker_exit):
         self.state_dir = state_dir
         self.docker = docker
+        self.docker_exit = docker_exit
         self.http = http
         self.sleep = sleep
         # load_image(image_id) streams the image from the house into
@@ -787,6 +842,28 @@ class ResidentHost:
     # holding the digest is written last, so a retry after a lost answer is
     # recognised as done. Anything else already in the volume is refused and
     # never wiped.
+    def check_runtime_trust(self, payload):
+        """Whether Chaos in this resident's own runtime home trusts its
+        imported home. trusted / untrusted / unsupported (the image has no
+        managed-import runtime). A Chaos home that does not exist yet is made,
+        empty, and is untrusted: trust is granted by a person on Chaos's own
+        interactive screen, never here."""
+        name, image, env = validate_trust_check(payload)
+        self._pull({"image": image})
+        chaos = volume_name(name, "chaos")
+        exists, _ = self.docker(["docker", "volume", "inspect", chaos])
+        if not exists:
+            ok, error = self.docker(["docker", "volume", "create", chaos])
+            if not ok:
+                raise CommandFailed(f"could not create the Chaos home: {error}")
+            return {"trust": "untrusted", "reason": "no_chaos_home"}
+        code, stdout = self.docker_exit(trust_check_argv(name, image, env))
+        if code is None:
+            raise CommandFailed("the runtime trust check did not finish")
+        if "unsupported-managed-import-runtime" in (stdout or "") or code == TRUST_CHECK_UNSUPPORTED_EXIT:
+            return {"trust": "unsupported"}
+        return {"trust": "trusted" if code == 0 else "untrusted", "exit": code}
+
     def _volume_mountpoint(self, volume):
         ok, error = self.docker(["docker", "volume", "create", volume])
         if not ok:
@@ -848,6 +925,39 @@ class ResidentHost:
             os.fsync(handle.fileno())
         os.rename(tmp, marker)
         return {"state": "seeded", "sha256": digest, "already": False, "entries": entries}
+
+
+def validate_trust_check(payload):
+    name = payload.get("container_name")
+    _require(isinstance(name, str) and NAME_RE.match(name), "bad container_name")
+    image = payload.get("image")
+    _require(isinstance(image, str) and IMAGE_RE.match(image), "image must be a sha256 image ID")
+    env = payload.get("env")
+    _require(isinstance(env, dict) and set(env) == set(TRUST_CHECK_ENV_KEYS), "trust check env must name exactly its keys")
+    for key in TRUST_CHECK_ENV_KEYS:
+        value = env[key]
+        _require(isinstance(value, str) and value and "\n" not in value and "\r" not in value and "\0" not in value,
+                 f"bad env value for {key}")
+    _require(env["SOULSHOUSE_HOME_SYNC_STRATEGY"] in ("existing", "standard"), "bad sync strategy")
+    _require(env["SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST"] in ("0", "1"), "bad oauth trust flag")
+    return name, image, env
+
+
+def trust_check_argv(name, image, env):
+    """The only docker run the trust check issues. It mirrors the house's
+    local check: the identity and Chaos volumes read-only, the fixed profile
+    and root, the values, python3 and the fixed script. Nothing else."""
+    argv = [
+        "docker", "run", "--rm",
+        "-v", f"{volume_name(name, 'identity')}:/home/agent/identity:ro",
+        "-v", f"{volume_name(name, 'chaos')}:/home/agent/.chaos:ro",
+        "-e", "SOULSHOUSE_HOME_PROFILE=portable_v1",
+        "-e", "SOULSHOUSE_HOME_ROOT=/home/agent/identity",
+    ]
+    for key in TRUST_CHECK_ENV_KEYS:
+        argv += ["-e", f"{key}={env[key]}"]
+    argv += ["--entrypoint", "python3", image, "-c", RUNTIME_TRUST_CHECK]
+    return argv
 
 
 def execute_command(command, state, host):

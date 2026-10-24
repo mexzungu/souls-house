@@ -36,6 +36,10 @@ module Agents::Portability
 
     def self.check_unpacked!(archive, role)
       members = archive.entries.select { |path, _| path.start_with?("resident/#{role}/") }
+      if (reserved = members.keys.find { |path| Agents::VmSeed.reserved_path?(path.delete_prefix("resident/#{role}/")) })
+        raise Error, "The #{role} home contains #{reserved.delete_prefix("resident/#{role}/").split('/').first}, " \
+                     "a name a resident server's seed reserves"
+      end
       raise Error, "The #{role} home has more files than a resident server can be seeded with (#{max_role_entries})" if members.length > max_role_entries
 
       unpacked = members.sum { |_, item| item["type"] == "file" ? item["size"] : 0 }

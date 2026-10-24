@@ -1,10 +1,13 @@
 require "test_helper"
+require_relative "../support/github_import_fixtures"
 
 # A whole VM birth (#246 slice 5) against a fake provider and a fake slice-4
 # backup seam: admission, order, enrollment, seed, start, first backup, and
 # only then a dispatchable resident. Plus the ways a birth fails and is
 # cleaned up.
 class ProvisionVmAgentJobTest < ActiveJob::TestCase
+
+  include GithubImportFixtures
 
   IMAGE = "sha256:#{'c' * 64}".freeze
   IMAGE_ID = 161_547_269
@@ -98,13 +101,7 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
     client = @client
     config = @config
     ProvisionVmAgentJob.procurement_factory = -> { CloudProcurement.new(client:, config:, renderer:) }
-    @client.on_create = lambda do |kwargs|
-      server = fake_server(id: 4242, status: "initializing", name: kwargs[:name], placement_id: kwargs[:placement_id],
-        operation_id: kwargs[:labels][HetznerCloudClient::OPERATION_LABEL], location: kwargs[:location])
-      @client.servers[server.id] = server
-      @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "running", error_code: nil)
-      HetznerCloudClient::Created.new(server:, action_id: 77, action_status: "running")
-    end
+    serve_creates_as(4242)
     @backups = FakeBackups.new
     @previous_env = %w[SOULSHOUSE_DOMAIN HOUSE_INFERENCE_OPENROUTER_API_KEY].to_h { |key| [ key, ENV[key] ] }
     ENV["SOULSHOUSE_DOMAIN"] = "souls.example"
@@ -114,6 +111,19 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
   teardown do
     ProvisionVmAgentJob.procurement_factory = -> { CloudProcurement.from_credentials }
     @previous_env.each { |key, value| ENV[key] = value }
+  end
+
+  # The next create answers with this server id. A retried activation buys a
+  # new server, which the provider gives a new id.
+  def serve_creates_as(server_id)
+    @server_id = server_id
+    @client.on_create = lambda do |kwargs|
+      server = fake_server(id: server_id, status: "initializing", name: kwargs[:name], placement_id: kwargs[:placement_id],
+        operation_id: kwargs[:labels][HetznerCloudClient::OPERATION_LABEL], location: kwargs[:location])
+      @client.servers[server.id] = server
+      @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "running", error_code: nil)
+      HetznerCloudClient::Created.new(server:, action_id: 77, action_status: "running")
+    end
   end
 
   def fake_server(id:, status:, name:, placement_id:, operation_id:, location:)
@@ -175,13 +185,13 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
 
   def boot_and_enroll!(agent)
     @client.actions[77] = HetznerCloudClient::Action.new(id: 77, command: "create_server", status: "success", error_code: nil)
-    @client.servers[4242] = @client.servers[4242].with(status: "running")
+    @client.servers[@server_id] = @client.servers[@server_id].with(status: "running")
     run_job(agent)
     assert_equal "provisioned", operation(agent).state
     enrollment = operation(agent).runner_enrollment
-    enrollment.enroll!(token: @tokens.last, public_key: Base64.strict_encode64("k" * 32), reported_server_id: 4242,
+    enrollment.enroll!(token: @tokens.last, public_key: Base64.strict_encode64("k" * 32), reported_server_id: @server_id,
       facts: {}, nonce: SecureRandom.hex(16))
-    enrollment.heartbeat!(reported_server_id: 4242, facts: {}, nonce: SecureRandom.hex(16))
+    enrollment.heartbeat!(reported_server_id: @server_id, facts: {}, nonce: SecureRandom.hex(16))
   end
 
   test "a whole birth: order, enroll, seed, start, verified backup, and only then dispatchable" do
@@ -320,6 +330,218 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       assert_equal 0, RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "seed_home").count
       assert_not agent.active?
       assert_equal 3, agent.import_stages.count
+    end
+  end
+
+  # Seeds every role of the current generation and answers them done.
+  def seed_all!(placement)
+    seeds = RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: placement.reload.generation).order(:id)
+    assert_equal %w[identity repo work], seeds.map(&:seed_role)
+    seeds.each { |command| command.deliver!(now: Time.current); command.record_result!({ "outcome" => "done" }, now: Time.current) }
+    seeds
+  end
+
+  def roles_enrolled!(agent)
+    operation(agent).runner_enrollment.update!(last_facts: { "seed_roles" => AgentImportStage::ROLES })
+  end
+
+  test "past its deadline an activation fails and releases its server; Activate again buys one new server and finishes" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      first_seeds = seed_all!(placement)
+      staged_digests = agent.import_stages.order(:role).pluck(:role, :sha256)
+
+      travel 46.minutes do
+        assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+        assert_match(/\AActivation on its own server failed: .*deadline/, agent.sandbox_last_error)
+        assert_equal "failed", placement.reload.state
+        assert_not agent.active?
+        assert agent.paused?
+
+        # Its server is not yet confirmed gone: the retry is refused, nothing bought.
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::STILL_RELEASING, error.message
+        assert_equal 1, @client.creates.size
+        assert_equal 1, policy.vm_count, "the slot is held until deletion is confirmed"
+
+        VmCleanupJob.perform_now(placement.id)
+        assert_equal [ [ 4242, placement.id.to_s ] ], @client.deletes
+        assert_equal "deleted", operation(agent).state
+        assert_equal "retired", placement.reload.state
+        assert_equal 0, policy.vm_count
+        assert_equal 3, agent.reload.import_stages.count, "the staged homes outlive the server"
+
+        serve_creates_as(4343)
+        policy.admit_import!(placement:, requested_by: @user)
+        placement.reload
+        assert_equal "pending", placement.state
+        assert_equal 2, placement.generation
+        assert_nil placement.cleanup_requested_at
+        assert_nil placement.first_backup_command_id
+        assert_in_delta 45.minutes.from_now, placement.birth_deadline_at, 5
+        assert_equal 1, policy.vm_count
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::ALREADY_ACTIVATING, error.message, "a second Activate on the retry buys nothing"
+
+        run_job(agent)
+        assert_equal 2, @client.creates.size, "one new server for the new attempt"
+        run_job(agent)
+        assert_equal 2, @client.creates.size, "never a second order for it"
+        assert_equal 2, operation(agent).placement_generation
+        boot_and_enroll!(agent)
+        roles_enrolled!(agent)
+        run_job(agent)
+        second_seeds = seed_all!(placement)
+        assert_equal staged_digests, agent.reload.import_stages.order(:role).pluck(:role, :sha256),
+          "the retry seeds the same staged bytes"
+        assert_equal first_seeds.size, second_seeds.size
+
+        run_job(agent)
+        assert_equal "ready", placement.reload.state
+        answer_latest(placement, "start_resident")
+        run_job(agent)
+        assert_nil agent.runtime_ready_at, "no turn before the first verified backup"
+        assert_nil Agents::RemoteRuntime.enrollment_for(agent)
+        @backups.state = "verified"
+        assert_no_enqueued_jobs(only: OrientNewAgentJob) { run_job(agent) }
+        assert agent.runtime_ready_at
+        assert agent.active?
+        assert_not agent.scheduled_wakes_enabled?
+        assert_nil agent.sandbox_last_error
+        assert_equal [ 1, 2 ], placement.cloud_procurement_operations.order(:id).pluck(:placement_generation)
+        assert_equal %w[deleted provisioned], placement.cloud_procurement_operations.order(:id).pluck(:state)
+      end
+    end
+  end
+
+  test "a retry waits for a backup hold left by the failed attempt to be released" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      @client.on_create = ->(_) { raise HetznerCloudClient::Error.new("no capacity", status: 412, code: "resource_unavailable") }
+      run_job(agent)
+      VmCleanupJob.perform_now(placement.id)
+      assert_equal "retired", placement.reload.state
+
+      held = Object.new
+      held.define_singleton_method(:exists?) { |agent_id:| agent_id == agent.id }
+      VmBackup.stub(:holding, held) do
+        error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+        assert_equal Agents::VmBirthPolicy::STILL_RELEASING, error.message
+      end
+      assert_equal "retired", placement.reload.state
+      assert_equal 1, placement.generation
+
+      policy.admit_import!(placement:, requested_by: @user)
+      assert_equal 2, placement.reload.generation
+    end
+  end
+
+  test "a retry is capped like any admission and stays retryable when refused" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      @client.on_create = ->(_) { raise HetznerCloudClient::Error.new("no capacity", status: 412, code: "resource_unavailable") }
+      run_job(agent)
+      VmCleanupJob.perform_now(placement.id)
+
+      @setting.update!(vm_resident_limit: 1)
+      born!
+      error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+      assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, error.message
+      assert_equal "retired", placement.reload.state
+      assert_equal 1, placement.generation
+      assert placement.cleanup_requested?, "nothing about the failed attempt is reset by a refused retry"
+
+      @setting.update!(vm_resident_limit: 2)
+      @setting.update!(new_residents_on_vm: false)
+      error = assert_raises(Agents::VmBirthPolicy::Refused) { policy.admit_import!(placement:, requested_by: @user) }
+      assert_equal Agents::VmBirthPolicy::IMPORT_SWITCHED_OFF, error.message
+      assert_equal "retired", placement.reload.state
+    end
+  end
+
+  test "a ready import is never failed or cleaned up by its deadline, and a late run does nothing" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      seed_all!(placement)
+      run_job(agent)
+      answer_latest(placement, "start_resident")
+      run_job(agent)
+      @backups.state = "verified"
+      run_job(agent)
+      assert agent.runtime_ready_at
+
+      travel 46.minutes do
+        assert_no_enqueued_jobs(only: VmCleanupJob) { run_job(agent) }
+        assert_equal "ready", placement.reload.state
+        assert_not placement.cleanup_requested?
+        assert agent.active?
+        error = assert_raises(Agents::VmBirthPolicy::Refused) do
+          Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: @user)
+        end
+        assert_equal Agents::VmBirthPolicy::ALREADY_ACTIVATING, error.message
+      end
+      assert_equal 1, @client.creates.size
+      assert_empty @client.deletes
+    end
+  end
+
+  test "a runner command from the failed attempt never counts for the retry" do
+    with_house do
+      agent = staged_import!
+      placement = agent.placement
+      policy = Agents::VmBirthPolicy.current
+      policy.admit_import!(placement:, requested_by: @user)
+      run_job(agent)
+      boot_and_enroll!(agent)
+      roles_enrolled!(agent)
+      run_job(agent)
+      old_seeds = RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home").to_a
+      travel 46.minutes do
+        run_job(agent)
+        VmCleanupJob.perform_now(placement.id)
+        VmCleanupJob.perform_now(placement.id)
+        serve_creates_as(4343)
+        policy.admit_import!(placement:, requested_by: @user)
+
+        # The old attempt's seeds: one answered late as done, one left
+        # delivered, one unknown. None is this attempt's, and none blocks it.
+        old_seeds[0].update_columns(state: "done", finished_at: Time.current)
+        old_seeds[1].update_columns(state: "delivered", delivered_at: Time.current)
+        old_seeds[2].update_columns(state: "unknown", finished_at: Time.current)
+        assert Agents::VmSeed.new(agent.reload).status.none?
+        run_job(agent)
+        boot_and_enroll!(agent)
+        roles_enrolled!(agent)
+        run_job(agent)
+        assert_equal 3, RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: 2).count
+        assert_not Agents::VmSeed.new(agent.reload).status.done?
+        assert Backup::VmResident.busy?(agent), "this attempt's own queued seeds block a backup"
+
+        seed_all!(placement)
+        run_job(agent)
+        answer_latest(placement, "start_resident")
+        assert_not Backup::VmResident.busy?(agent),
+          "the failed attempt's delivered and unknown seeds never block the retry's first backup"
+      end
     end
   end
 
@@ -595,6 +817,493 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       clear_enqueued_jobs
       VmBirthSweepJob.perform_now
       assert_no_enqueued_jobs(only: VmCleanupJob) # a retired placement with nothing held is finished
+    end
+  end
+
+
+  # --- GitHub imports on their own VM (docs/2026-10-10-vm-imports.md, points 4, 5, 8) ---
+
+  # A reviewed checkout on disk, as GithubImportSource#with_checkout yields it.
+  def reviewed_checkout
+    root = Dir.mktmpdir("reviewed-home-")
+    FileUtils.mkdir_p(File.join(root, "memory"))
+    File.write(File.join(root, "soul.md"), "I am imported.\n")
+    File.write(File.join(root, "memory", "index.md"), "- first\n")
+    root
+  end
+
+  def github_source(request, root)
+    source = Object.new
+    source.define_singleton_method(:with_checkout) do |branch:, commit_sha: nil, &block|
+      block.call(root, { "identity_id" => request.portable_home_id }, commit_sha || "a" * 40, branch.presence || "main")
+    end
+    source
+  end
+
+  def run_import(request, root)
+    Agents::GithubImportSource.stub(:new, github_source(request, root)) do
+      Agents::Volume.stub(:new, ->(*) { flunk "a GitHub import on its own server never touches a house volume" }) do
+        Agents::Sandbox.stub(:new, ->(*) { flunk "a GitHub import on its own server never reaches the house sandbox" }) do
+          GithubResidentImportJob.perform_now(request.id)
+        end
+      end
+    end
+    request.reload
+  end
+
+  def approved_import
+    request = import_request
+    approve_fixture(request)
+    request
+  end
+
+  def trust_enrolled!(agent)
+    operation(agent).runner_enrollment.update!(last_facts: { "runtime_trust_check" => Agents::RemoteRuntime::RUNTIME_TRUST_CHECK_VERSION })
+  end
+
+  def answer_trust(placement, trust)
+    command = RunnerCommand.where(agent_placement_id: placement.id, kind: "check_runtime_trust").order(:id).last
+    command.deliver!(now: Time.current)
+    command.record_result!({ "outcome" => "done", "result" => { "trust" => trust } }, now: Time.current)
+    command
+  end
+
+  def trust_checks(placement) = RunnerCommand.where(agent_placement_id: placement.id, kind: "check_runtime_trust")
+
+  # Imported, admitted, ordered, enrolled and seeded: up to its first trust check.
+  def github_import_seeded!(request = approved_import)
+    root = reviewed_checkout
+    assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, root) }
+    agent = request.agent
+    run_job(agent)
+    boot_and_enroll!(agent)
+    trust_enrolled!(agent)
+    run_job(agent)
+    seed = RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "seed_home").sole
+    assert_nil seed.seed_role, "a GitHub import seeds identity only, with a birth's payload"
+    assert_equal agent.import_stages.sole.sha256, JSON.parse(seed.payload_json)["sha256"]
+    seed.deliver!(now: Time.current)
+    seed.record_result!({ "outcome" => "done" }, now: Time.current)
+    [ request, agent.reload ]
+  end
+
+  test "a GitHub import on its own VM: admitted at import, seeded from the reviewed checkout, trust-gated, then ready" do
+    with_house do
+      request = approved_import
+      root = reviewed_checkout
+      assert_difference("Agent.count", 1) do
+        assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, root) }
+      end
+      agent = request.agent
+      placement = agent.placement
+      assert_equal "provisioning", request.status
+      assert_equal "github_import", placement.kind
+      assert_equal "pending", placement.state
+      assert placement.vm_birth?
+      assert_equal @user, placement.birth_requested_by
+      assert_equal %w[identity], agent.import_stages.pluck(:role)
+      assert_not agent.active?
+      assert agent.paused?
+      assert_equal 1, Agents::VmBirthPolicy.current.vm_count
+
+      run_job(agent)
+      assert_equal 1, @client.creates.size, "bought at import"
+      boot_and_enroll!(agent)
+      trust_enrolled!(agent)
+      run_job(agent)
+      answer_latest(placement, "seed_home")
+
+      run_job(agent)
+      assert_equal 1, trust_checks(placement).count
+      assert_equal 0, RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").count, "nothing starts before trust"
+      payload = JSON.parse(trust_checks(placement).last.payload_json)
+      assert_equal Agents::ImportedHomeEnv.trust_check(agent), payload["env"]
+
+      answer_trust(placement, "untrusted")
+      run_job(agent)
+      assert_equal "needs_runtime_trust", request.reload.status
+      assert_not agent.reload.active?
+      assert agent.paused?
+      assert_equal "pending", placement.reload.state
+      run_job(agent)
+      assert_equal 1, trust_checks(placement).count, "an untrusted home waits; it is not asked again on its own"
+      assert_equal 0, RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").count
+
+      # The operator grants trust on Chaos's own screen on that server, then retries.
+      assert_enqueued_with(job: GithubResidentImportJob) { request.retry_activation!(@user) }
+      assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, root) }
+      assert_equal 2, trust_checks(placement).count, "a retry asks again"
+      answer_trust(placement, "trusted")
+
+      run_job(agent)
+      assert_equal "ready", placement.reload.state
+      start = RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").sole
+      env = JSON.parse(start.payload_json)["env"]
+      assert_equal request.id.to_s, env["SOULSHOUSE_GITHUB_IMPORT_ID"]
+      assert_equal "portable_v1", env["SOULSHOUSE_HOME_PROFILE"]
+      answer_latest(placement, "start_resident")
+      run_job(agent)
+      assert_nil agent.reload.runtime_ready_at, "no turn before the first verified backup"
+      assert_nil Agents::RemoteRuntime.enrollment_for(agent)
+      @backups.state = "verified"
+      assert_no_enqueued_jobs(only: OrientNewAgentJob) { run_job(agent) }
+      assert agent.runtime_ready_at
+      assert agent.active?
+      assert_not agent.paused?
+      assert_not agent.scheduled_wakes_enabled?
+      assert agent.identity_seeded_at
+      assert_equal "ready", request.reload.status
+      assert_equal 1, @client.creates.size
+      assert_equal [ request.service_connection_id ], agent.agent_service_accesses.pluck(:service_connection_id)
+    end
+  end
+
+  test "waiting for trust past the deadline releases the server, keeps the home and the retry, and the retry buys one new server" do
+    with_house do
+      request, agent = github_import_seeded!
+      placement = agent.placement
+      run_job(agent)
+      answer_trust(placement, "untrusted")
+      run_job(agent)
+      assert_equal "needs_runtime_trust", request.reload.status
+      staged = agent.import_stages.pluck(:sha256)
+
+      travel 46.minutes do
+        assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+        assert_equal "needs_runtime_trust", request.reload.status, "a person taking longer than 45 minutes is not a failed import"
+        assert_equal ProvisionVmAgentJob::TRUST_RELEASED, request.last_error
+        assert_equal "failed", placement.reload.state
+        assert_equal staged, agent.reload.import_stages.pluck(:sha256), "the reviewed home is never discarded"
+        assert_not agent.active?
+        VmCleanupJob.perform_now(placement.id)
+        assert_equal "retired", placement.reload.state
+        assert_equal 0, Agents::VmBirthPolicy.current.vm_count
+
+        serve_creates_as(4343)
+        request.retry_activation!(@user)
+        assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, reviewed_checkout) }
+        assert_equal "pending", placement.reload.state
+        assert_equal 2, placement.generation
+        assert_equal "provisioning", request.reload.status
+        run_job(agent)
+        assert_equal 2, @client.creates.size, "one new server for the retry"
+        boot_and_enroll!(agent)
+        trust_enrolled!(agent)
+        run_job(agent)
+        seed = RunnerCommand.where(agent_placement_id: placement.id, kind: "seed_home", generation: 2).sole
+        assert_equal staged.first, JSON.parse(seed.payload_json)["sha256"], "the same reviewed bytes"
+        seed.deliver!(now: Time.current)
+        seed.record_result!({ "outcome" => "done" }, now: Time.current)
+        run_job(agent)
+        assert_equal 1, trust_checks(placement).where(generation: 2).count, "the new server is checked afresh"
+      end
+    end
+  end
+
+  test "a retry while the released server is still being deleted is refused plainly and buys nothing" do
+    with_house do
+      request, agent = github_import_seeded!
+      run_job(agent)
+      answer_trust(agent.placement, "untrusted")
+      run_job(agent)
+      travel 46.minutes do
+        run_job(agent)
+        request.retry_activation!(@user)
+        run_import(request, reviewed_checkout)
+        assert_equal "failed", request.status
+        assert_equal Agents::VmBirthPolicy::STILL_RELEASING, request.last_error
+        assert_equal 1, @client.creates.size
+      end
+    end
+  end
+
+  test "an image without the managed-import runtime fails plainly and never starts" do
+    with_house do
+      request, agent = github_import_seeded!
+      run_job(agent)
+      answer_trust(agent.placement, "unsupported")
+      assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+      assert_equal "failed", request.reload.status
+      assert_match(/does not support managed GitHub imports/, request.last_error)
+      assert_equal 0, RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "start_resident").count
+      assert_not agent.reload.active?
+    end
+  end
+
+  test "a runner without the trust check gets none and the start fails plainly" do
+    with_house do
+      request = approved_import
+      run_import(request, reviewed_checkout)
+      agent = request.agent
+      run_job(agent)
+      boot_and_enroll!(agent)
+      run_job(agent)
+      answer_latest(agent.placement, "seed_home")
+      assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+      assert_equal 0, trust_checks(agent.placement).count
+      assert_match(/newer runner/, request.reload.last_error)
+      assert_equal "failed", request.status
+      assert_equal 0, RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "start_resident").count
+    end
+  end
+
+  test "trust checks that keep failing fail the start; a failed one is asked again first" do
+    with_house do
+      request, agent = github_import_seeded!
+      placement = agent.placement
+      run_job(agent)
+      2.times do
+        command = trust_checks(placement).order(:id).last
+        command.deliver!(now: Time.current)
+        command.record_result!({ "outcome" => "failed", "error" => "docker went away" }, now: Time.current)
+        run_job(agent)
+      end
+      assert_equal 3, trust_checks(placement).count
+      command = trust_checks(placement).order(:id).last
+      command.deliver!(now: Time.current)
+      command.record_result!({ "outcome" => "unknown" }, now: Time.current)
+      assert_enqueued_with(job: VmCleanupJob) { run_job(agent) }
+      assert_equal "failed", request.reload.status
+      assert_equal 0, RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").count
+    end
+  end
+
+  test "an import the cap can't admit fails with the reason and leaves nothing" do
+    with_house do
+      @setting.update!(vm_resident_limit: 1)
+      born!
+      request = approved_import
+      assert_no_difference [ "Agent.count", "AgentPlacement.count", "AgentImportStage.count" ] do
+        assert_no_enqueued_jobs(only: ProvisionVmAgentJob) { run_import(request, reviewed_checkout) }
+      end
+      assert_equal "failed", request.status
+      assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, request.last_error
+    end
+  end
+
+  test "switched off after admission, an import stays on its own server and is never made on the house" do
+    with_house do
+      request, agent = github_import_seeded!
+      @setting.update!(new_residents_on_vm: false)
+      run_job(agent)
+      answer_trust(agent.placement, "untrusted")
+      run_job(agent)
+      request.retry_activation!(@user)
+      assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, reviewed_checkout) }
+      assert_equal 2, trust_checks(agent.placement).count
+      assert_equal "github_import", agent.reload.placement.kind
+    end
+  end
+
+  test "an import whose approval changed while waiting is not started" do
+    with_house do
+      request, agent = github_import_seeded!
+      run_job(agent)
+      request.update_columns(approved_commit_sha: "b" * 40)
+      answer_trust(agent.placement, "trusted")
+      run_job(agent)
+      assert_equal 0, RunnerCommand.where(agent_placement_id: agent.placement.id, kind: "start_resident").count
+      assert_not agent.reload.active?
+    end
+  end
+
+
+  test "admission refusing after the checkout leaves no resident, and a later approval is admitted again, never on the house" do
+    with_house do
+      @setting.update!(vm_resident_limit: 1)
+      request = approved_import
+      root = reviewed_checkout
+      source = Object.new
+      test = self
+      source.define_singleton_method(:with_checkout) do |branch:, commit_sha: nil, &block|
+        test.born! # the last slot is taken while the repository is fetched
+        block.call(root, { "identity_id" => request.portable_home_id }, commit_sha || "a" * 40, branch.presence || "main")
+      end
+      Agents::GithubImportSource.stub(:new, source) do
+        Agents::Volume.stub(:new, ->(*) { flunk "never a house volume" }) do
+          assert_no_difference "AgentImportStage.count" do
+            GithubResidentImportJob.perform_now(request.id)
+          end
+        end
+      end
+      request.reload
+      assert_equal "failed", request.status
+      assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, request.last_error
+      assert_nil request.agent, "a refused admission never leaves a resident behind to be autosaved"
+      assert_nil Agent.find_by(github_resident_import_id: request.id)
+
+      @setting.update!(vm_resident_limit: 2)
+      approve_fixture(request)
+      run_import(request, root)
+      assert_equal "github_import", request.agent.placement.kind, "admitted to its own server, not made on the house"
+    end
+  end
+
+  test "a failure while staging rolls the whole admission back and leaves nothing" do
+    with_house do
+      request = approved_import
+      Agents::GithubImportStage.stub(:persist!, ->(*) { raise ActiveRecord::RecordInvalid, AgentImportStage.new }) do
+        assert_raises(ActiveRecord::RecordInvalid) { run_import(request, reviewed_checkout) }
+      end
+      assert_nil Agent.find_by(github_resident_import_id: request.id)
+      assert_equal 0, AgentPlacement.where(kind: "github_import").count
+      assert_equal "failed", request.reload.status
+    end
+  end
+
+  test "a reviewed home holding the runner's seed marker is refused before admission" do
+    with_house do
+      request = approved_import
+      root = reviewed_checkout
+      File.write(File.join(root, ".souls-house-seed"), "a reviewed file")
+      run_import(request, root)
+      assert_equal "failed", request.status
+      assert_match(/seed reserves/, request.last_error)
+      assert_nil Agent.find_by(github_resident_import_id: request.id)
+      assert_empty @client.creates
+    end
+  end
+
+  # Brought all the way to ready.
+  def github_import_ready!
+    request, agent = github_import_seeded!
+    placement = agent.placement
+    run_job(agent)
+    answer_trust(placement, "trusted")
+    run_job(agent)
+    answer_latest(placement, "start_resident")
+    run_job(agent)
+    @backups.state = "verified"
+    run_job(agent)
+    assert agent.reload.runtime_ready_at
+    assert_equal "ready", request.reload.status
+    [ request, agent ]
+  end
+
+  test "approved again when ready, it is trust-checked, then refreshed between turns, then ready again" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      starts = -> { RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").count }
+      assert_equal 1, starts.call
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      assert_enqueued_with(job: ProvisionVmAgentJob) { run_import(request, reviewed_checkout) }
+      assert_equal "provisioning", request.status
+      assert_equal 2, trust_checks(placement).count, "re-approval checks trust again, as on the house"
+
+      run_job(agent)
+      assert_equal 1, starts.call, "no refresh before the check answers"
+      answer_trust(placement, "trusted")
+      assert_enqueued_with(job: RemoteRefreshSettleJob) { run_job(agent) }
+      assert_equal 2, starts.call, "the approved values reach its server through the credential/service restart"
+      assert placement.reload.refresh_command_id
+      assert_equal "provisioning", request.reload.status, "not ready until the restart is confirmed"
+      run_job(agent)
+      assert_equal "provisioning", request.reload.status
+
+      answer_refresh(placement)
+      run_job(agent)
+      assert_nil placement.reload.refresh_command_id
+      assert_equal "ready", request.reload.status
+      assert agent.reload.active?
+      assert_equal "ready", placement.state
+      assert_equal 2, starts.call
+      assert_empty @client.deletes
+
+      assert_no_enqueued_jobs(only: ProvisionVmAgentJob) { VmBirthSweepJob.perform_now }
+      run_job(agent)
+      assert_equal 2, starts.call, "no second refresh after settlement"
+    end
+  end
+
+  test "approved again when ready, a restart the runner never answers fails the request once its answer window passes" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "trusted")
+      run_job(agent)
+      run_job(agent)
+      assert_equal "provisioning", request.reload.status, "pending while the runner may still answer"
+      travel Agents::RemoteRuntime::REFRESH_ANSWER_WITHIN + 1.minute do
+        run_job(agent)
+        assert_equal "failed", request.reload.status
+        assert_match(/did not settle: .*no answer/, request.last_error)
+        assert placement.reload.refresh_command_id, "turns stay held"
+        assert_equal "ready", placement.state
+        assert_empty @client.deletes
+      end
+    end
+  end
+
+  def answer_refresh(placement, image: IMAGE, outcome: "done")
+    command = RunnerCommand.find(placement.reload.refresh_command_id)
+    command.deliver!(now: Time.current)
+    command.record_result!({ "outcome" => outcome, "result" => { "image" => image } }, now: Time.current)
+  end
+
+  test "approved again when ready, a restart that never settles fails the request plainly and keeps turns held" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "trusted")
+      run_job(agent)
+      answer_refresh(placement, outcome: "failed")
+      run_job(agent) # one recovery start
+      assert_equal "provisioning", request.reload.status
+      answer_refresh(placement, outcome: "failed")
+      run_job(agent)
+      assert_equal "failed", request.reload.status
+      assert_match(/did not settle/, request.last_error)
+      assert placement.reload.refresh_command_id, "turns stay held until an operator releases the hold"
+      assert_empty @client.deletes
+    end
+  end
+
+  test "approved again when ready and not trusted, it waits paused with its server; nothing is cleaned up" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "untrusted")
+      assert_no_enqueued_jobs(only: VmCleanupJob) { run_job(agent) }
+      assert_equal "needs_runtime_trust", request.reload.status
+      assert agent.reload.paused?
+      assert_not agent.active?
+      assert_equal "ready", placement.reload.state
+      assert_not placement.cleanup_requested?
+
+      travel 2.hours do
+        assert_no_enqueued_jobs(only: VmCleanupJob) { run_job(agent) }
+        assert_equal "ready", placement.reload.state, "a ready resident's server is never released by the birth deadline"
+      end
+    end
+  end
+
+  test "a refresh refused as busy is tried again by the sweep" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "trusted")
+      Agents::RemoteRuntime.stub(:begin_refresh!, :busy) { run_job(agent) }
+      assert_equal "provisioning", request.reload.status
+      assert_nil placement.reload.refresh_command_id
+      assert_enqueued_with(job: ProvisionVmAgentJob, args: [ agent.id ]) { VmBirthSweepJob.perform_now }
+      run_job(agent)
+      answer_refresh(placement)
+      run_job(agent)
+      assert_equal "ready", request.reload.status
     end
   end
 

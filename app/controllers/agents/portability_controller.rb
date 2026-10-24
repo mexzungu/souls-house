@@ -136,19 +136,19 @@ class Agents::PortabilityController < ApplicationController
   def activate_on_vm!(agent)
     placement = agent.placement
     raise Agents::Portability::Error, "This resident is already running on its own server" if placement.state == "ready"
-    if %w[failed retired].include?(placement.state)
-      raise Agents::Portability::Error, "Its last start on its own server failed, and trying again isn't available yet. " \
-                                        "It stays imported, inactive and paused."
-    end
     raise Agents::Portability::Error, "Only inactive paused residents can activate here" if agent.active? || !agent.paused?
 
+    # A failed attempt is retried here too, once its server is confirmed
+    # gone; until then admit_import! refuses in plain words.
+    retrying = %w[failed retired].include?(placement.state)
     begin
       Agents::VmBirthPolicy.current.admit_import!(placement:, requested_by: Current.user)
     rescue Agents::VmBirthPolicy::Refused => error
       raise Agents::Portability::Error, error.message
     end
     AuditLog.create!(user: Current.user, account: agent.account, action: "vm_import_activation_admitted", auditable: agent,
-      data: { "placement_id" => placement.id, "confirmed_trust_review" => true })
+      data: { "placement_id" => placement.id, "confirmed_trust_review" => true, "generation" => placement.reload.generation,
+              "retry" => retrying })
     agent.update_columns(runtime: "provisioning", health_state: "unknown", sandbox_last_error: nil, sandbox_last_error_at: nil)
     ProvisionVmAgentJob.perform_later(agent.id)
     redirect_to edit_account_agent_path(current_account, agent, tab: "portability"), status: :see_other,
