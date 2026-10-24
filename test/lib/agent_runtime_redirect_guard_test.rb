@@ -40,29 +40,27 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
     server.serve_forever()
   PYTHON
 
-  # Loads a runtime script as a module, then sends a request carrying a
-  # synthetic credential through every redirect handler the script defines.
-  HANDLER_PROBE = <<~PYTHON
-    import importlib.machinery, importlib.util, inspect, json, sys, urllib.error, urllib.request
-    path, base = sys.argv[1], sys.argv[2]
-    sys.path.insert(0, sys.argv[3])
-    loader = importlib.machinery.SourceFileLoader("guarded_script", path)
-    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("guarded_script", loader))
-    loader.exec_module(module)
-    handlers = [value for value in vars(module).values()
-                if inspect.isclass(value) and issubclass(value, urllib.request.HTTPRedirectHandler)
-                and value is not urllib.request.HTTPRedirectHandler]
-    results = []
-    for handler in handlers:
-        for code in (301, 302, 303, 307, 308):
-            request = urllib.request.Request(f"{base}/moved/{code}", headers={"Authorization": "Bearer #{TOKEN}"})
-            try:
-                urllib.request.build_opener(handler).open(request, timeout=10).read()
-                results.append({"handler": handler.__name__, "code": code, "refused": False})
-            except BaseException as error:  # some helpers exit from the handler
-                results.append({"handler": handler.__name__, "code": code, "refused": True, "error": str(error)})
-    print(json.dumps(results))
-  PYTHON
+  # Each helper changed in #502, driven through its real request path. The
+  # app URL (or the manifest endpoint) points at /moved/<code>, so the first
+  # authenticated request is answered with a redirect to /elsewhere.
+  HELPERS = {
+    "soulshouse-post-message" => { args: %w[c1], stdin: "hello" },
+    "soulshouse-model" => { args: %w[c1] },
+    "soulshouse-quiet-reason" => { args: %w[c1], stdin: "busy elsewhere",
+                                   env: { "SOULSHOUSE_RUNTIME_CHAT_ID" => "c1", "SOULSHOUSE_RUNTIME_RUN_ID" => "r1" } },
+    "soulshouse-usage" => { args: [] },
+    "soulshouse-send-telegram" => { args: %w[alice hello] },
+    "soulshouse-x" => { args: %w[search redirect guards] },
+    "soulshouse-youtube" => { args: %w[ask https://www.youtube.com/watch?v=dQw4w9WgXcQ what] },
+    "soulshouse-reflex" => { args: %w[list] },
+    "soulshouse-gws" => { args: %w[drive files list], manifest: :google_workspace },
+    "soulshouse-comms" => { args: %w[chats], manifest: :whatsapp },
+    "github_import_approval.py" => { python: "import github_import_approval as g; g.fetch_approval()" }
+  }.freeze
+
+  # Guarded before #502 and covered by their own tests; the static check
+  # still holds them to the rule.
+  GUARDED_EARLIER = %w[soulshouse-ghost soulshouse-integrations soulshouse-stone memory_client.py runtime_activity.py].freeze
 
   def self.credential_senders
     Dir.glob(RUNTIME.join("**/*").to_s).select { |path| File.file?(path) }.filter_map do |path|
@@ -115,18 +113,25 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
     end
   end
 
-  test "every redirect handler refuses all five redirect codes before anything reaches the target" do
-    File.write(File.join(@dir, "probe.py"), HANDLER_PROBE)
+  test "every credential sender is either driven end to end here or was guarded earlier" do
+    assert_equal self.class.credential_senders, (HELPERS.keys + GUARDED_EARLIER).sort
+  end
 
-    self.class.credential_senders.each do |relative|
-      File.delete(@log) if File.exist?(@log)
-      out, err, status = Open3.capture3("python3", File.join(@dir, "probe.py"), RUNTIME.join(relative).to_s, @base, RUNTIME.to_s)
-      assert status.success?, "#{relative}: #{err}"
+  test "each changed helper, through its real request path, stops at the redirect with the credential unsent onward" do
+    HELPERS.each do |name, spec|
+      REDIRECT_CODES.each do |code|
+        File.delete(@log) if File.exist?(@log)
+        out, err, status = invoke(name, spec, "#{@base}/moved/#{code}")
+        label = "#{name} #{code}"
 
-      results = JSON.parse(out)
-      assert_equal REDIRECT_CODES, results.map { |result| result["code"] }.uniq.sort, relative
-      results.each { |result| assert result["refused"], "#{relative} #{result['handler']} followed #{result['code']}" }
-      assert_empty requests.select { |request| request["path"].start_with?("/elsewhere") }, relative
+        assert_not status.success?, label
+        assert_equal 1, requests.size, "#{label}: #{requests.inspect}\n#{err}"
+        assert requests.first["path"].start_with?("/moved/#{code}"), label
+        assert_equal "Bearer #{TOKEN}", requests.first["auth"], label
+        assert_empty requests.select { |request| request["path"].start_with?("/elsewhere") }, label
+        assert_match "refused to follow a redirect (#{code}) to 127.0.0.1:#{@port}", out + err, label
+        assert_not_includes out + err, TOKEN, label
+      end
     end
   end
 
@@ -167,6 +172,28 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
               "HELIXKIT_APP_URL" => nil, "HELIXKIT_BEARER_TOKEN" => nil,
               "SOULSHOUSE_RUNTIME_CHAT_ID" => nil, "SOULSHOUSE_RUNTIME_RUN_ID" => nil }
       Open3.capture3(env, "python3", RUNTIME.join(name).to_s, *args, stdin_data: stdin)
+    end
+
+    def invoke(name, spec, url)
+      env = { "SOULSHOUSE_APP_URL" => url, "SOULSHOUSE_BEARER_TOKEN" => TOKEN,
+              "HELIXKIT_APP_URL" => nil, "HELIXKIT_BEARER_TOKEN" => nil,
+              "SOULSHOUSE_RUNTIME_CHAT_ID" => nil, "SOULSHOUSE_RUNTIME_RUN_ID" => nil,
+              "SOULSHOUSE_SERVICES_FILE" => manifest(spec[:manifest], url), "HELIXKIT_SERVICES_FILE" => nil,
+              "SOULSHOUSE_GWS_BINARY" => "/bin/false", "PYTHONPATH" => RUNTIME.to_s }.merge(spec[:env] || {})
+      command = spec[:python] ? [ "python3", "-c", spec[:python] ] : [ "python3", RUNTIME.join(name).to_s, *spec[:args] ]
+      Open3.capture3(env, *command, stdin_data: spec[:stdin] || "")
+    end
+
+    def manifest(provider, url)
+      path = File.join(@dir, "services.yml")
+      credentials = case provider
+      when :google_workspace then { "access_token_endpoint" => "#{url}/api/v1/google/token" }
+      when :whatsapp then { "chats_endpoint" => "#{url}/api/v1/service_connections/svc_1/comms/chats",
+                            "messages_endpoint" => "#{url}/api/v1/service_connections/svc_1/comms/messages" }
+      else {}
+      end
+      File.write(path, { "services" => [ { "connection_id" => "svc_1", "provider" => provider.to_s, "credentials" => credentials } ] }.to_yaml)
+      path
     end
 
     def requests
