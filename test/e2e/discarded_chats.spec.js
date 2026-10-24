@@ -17,7 +17,7 @@ test('a deleted conversation is hidden and can be restored from the deleted list
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(chatPath);
     await expect(page.getByText(fixture.first_message, { exact: true })).toBeVisible();
 

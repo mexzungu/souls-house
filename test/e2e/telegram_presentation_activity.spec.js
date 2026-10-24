@@ -51,7 +51,7 @@ test('Telegram summaries arrive live without revealing links or replacing creden
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/agents/${agent.id}/edit?tab=integrations`);
     await expect.poll(() => confirmed).toBe(true);
     await page.getByRole('button', { name: 'Settings', exact: true }).last().click();

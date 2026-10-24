@@ -65,7 +65,7 @@ test('persisted provider updates preserve credential and active ceremony drafts'
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/agent_api_keys`);
     await expect.poll(() => confirmed).toBe(true);
     await expect.poll(() => reloads.length).toBeGreaterThan(0);

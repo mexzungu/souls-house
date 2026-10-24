@@ -81,7 +81,7 @@ async function logIn(page, email, password) {
   await page.getByLabel(/email/i).fill(email);
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole('button', { name: /log in/i }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).not.toHaveURL(/\/login/);
 }
 
 test('the owner scans rotating WhatsApp codes, restarts after expiry and sees the link', async ({

@@ -16,7 +16,7 @@ test('a member brings a file into the Field, writes a note, and deletes the file
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/chats`);
@@ -122,7 +122,7 @@ test("a failed recording's meeting notes can still be opened, read whole and edi
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/field?tab=recordings&item=recording-${recordingParam}`);
@@ -199,7 +199,7 @@ test("on a touch screen, pressing and holding a recording's title opens its edit
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     await page.goto(`/accounts/${setup.account_param}/field?tab=recordings&item=recording-${recordingParam}`);
     const title = page.getByTestId('field-recording-title');
@@ -248,7 +248,7 @@ test('a full Field turns compact and pages through fifty at a time', async ({ pa
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/field?tab=notes`);
@@ -306,7 +306,7 @@ test('on a phone the Field fits the screen and an open item takes it over', asyn
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/field`);

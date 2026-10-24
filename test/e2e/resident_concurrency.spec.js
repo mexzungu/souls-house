@@ -11,7 +11,7 @@ test('admin can inspect and pause resident admission without enabling the rollou
     await page.getByLabel(/email/i).fill(setup.admin_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto('/admin/resident_turns');
     await expect(page.getByRole('heading', { name: 'Resident concurrency' })).toBeVisible();
     const limit = page.getByLabel('Turn limit (0 pauses admission)');

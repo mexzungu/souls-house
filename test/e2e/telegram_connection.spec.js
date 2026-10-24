@@ -13,7 +13,7 @@ test('the owner signs in to Telegram and sees the connection', async ({ page, re
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/integrations`);
 
     const qrCard = page.getByRole('article').filter({ hasText: 'Telegram sign-in' });

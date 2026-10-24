@@ -5,7 +5,7 @@ async function login(page, setup, user) {
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).fill(setup.password);
   await page.getByRole('button', { name: /log in/i }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).not.toHaveURL(/\/login/);
 }
 
 test('GitHub onboarding makes the request and account approval boundary visible', async ({

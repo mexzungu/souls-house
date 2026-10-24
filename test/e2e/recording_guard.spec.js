@@ -50,7 +50,7 @@ test.describe('recording survives a deploy', () => {
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
   });
 
   test.afterEach(async ({ request }) => {

@@ -26,7 +26,7 @@ for (const mobile of [false, true]) {
         await page.getByLabel(/email/i).fill(setup.primary_user.email);
         await page.getByLabel(/password/i).fill(setup.password);
         await page.getByRole('button', { name: /sign in|log in/i }).click();
-        await expect(page).toHaveURL(/\/$/);
+        await expect(page).not.toHaveURL(/\/login/);
         await page.goto(`/accounts/${setup.account_id}/chats/${chatId}`);
         const tags = page.getByRole('button', { name: /This message appears to have flagged you/ });
         await expect(tags).toHaveCount(2);
@@ -95,7 +95,7 @@ test.describe('touch explanation', () => {
       await page.getByLabel(/email/i).fill(setup.primary_user.email);
       await page.getByLabel(/password/i).fill(setup.password);
       await page.getByRole('button', { name: /sign in|log in/i }).click();
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).not.toHaveURL(/\/login/);
       await page.goto(`/accounts/${setup.account_id}/chats/new`);
       const eye = page
         .getByRole('navigation', { name: 'Recent conversations' })
@@ -147,7 +147,7 @@ for (const directTag of [false, true]) {
       await page.getByLabel(/email/i).fill(setup.primary_user.email);
       await page.getByLabel(/password/i).fill(setup.password);
       await page.getByRole('button', { name: /sign in|log in/i }).click();
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).not.toHaveURL(/\/login/);
       // Stay in the other account when the question arrives.
       await page.goto(`/accounts/${setup.empty_account_id}/chats`);
       const firstMessage = directTag

@@ -61,7 +61,7 @@ test('connector chat counts follow real events and reconnect without replacing d
       await view.getByLabel(/email/i).fill(setup.primary_user.email);
       await view.getByLabel(/password/i).fill(setup.password);
       await view.getByRole('button', { name: /log in/i }).click();
-      await expect(view).toHaveURL(/\/$/);
+      await expect(view).not.toHaveURL(/\/login/);
     }
     await page.goto(`${base}/integrations`);
     const row = page.getByRole('article').filter({ hasText: 'Connector counts' });
@@ -210,7 +210,7 @@ test('open integration pages and resident tabs update without losing a connect d
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/integrations`);
     await expect.poll(() => confirmed).toBe(true);

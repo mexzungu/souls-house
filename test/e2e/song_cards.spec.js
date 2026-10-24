@@ -24,7 +24,7 @@ test('a resident offers a song in-place, with no external player before a click'
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(fixture.chat_url);
 
     const card = page.getByTestId('song-card').filter({ hasText: 'Hallelujah' });

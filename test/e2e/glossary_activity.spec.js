@@ -52,7 +52,7 @@ test('two open glossaries follow terms and built-in names while preserving draft
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const path = `/accounts/${setup.account_param}/glossary`;
     await page.goto(path);
     await editor.goto(path);

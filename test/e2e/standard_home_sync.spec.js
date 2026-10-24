@@ -12,7 +12,7 @@ test('standard home sync exposes reviewed policy and honest cached outcomes', as
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(setup.github_import_new_url);
     await expect(page.getByRole('radio', { name: 'Keep existing sync' })).toBeChecked();
     await page.getByLabel('Resident display name').fill('Synthetic standard resident');

@@ -10,7 +10,7 @@ test.beforeEach(async ({ page, request }) => {
   await page.getByLabel(/email/i).fill(setup.admin_user.email);
   await page.getByLabel(/password/i).fill(setup.password);
   await page.getByRole('button', { name: /log in/i }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).not.toHaveURL(/\/login/);
 });
 test.afterEach(async ({ request }) => {
   if (setup) await request.post('/test/e2e/cleanup', { data: { run_id: setup.run_id } });

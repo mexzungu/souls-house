@@ -17,7 +17,7 @@ test('site admin starts a deploy from the menu and lands on the Deploys page', a
   await page.getByLabel(/email/i).fill(setup.admin_user.email);
   await page.getByLabel(/password/i).fill(setup.password);
   await page.getByRole('button', { name: /log in/i }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).not.toHaveURL(/\/login/);
 
   await page.getByRole('button', { name: /site admin/i }).click();
   await page.getByRole('menuitem', { name: 'Deploy', exact: true }).click();

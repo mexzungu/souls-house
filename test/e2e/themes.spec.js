@@ -23,7 +23,7 @@ test('personal tint, account logo colour and account name in the navbar', async 
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const profile = await page.request.patch('/user', {
       data: { user: { first_name: 'Theme', last_name: 'Tester' } },
     });

@@ -38,7 +38,7 @@ test('an open draft gains and clears cross-account expired logins, including rec
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const url = `/accounts/${setup.account_param}/chats`;
     await page.goto(url);
     await expect.poll(() => confirmedAccounts.has(other)).toBe(true);

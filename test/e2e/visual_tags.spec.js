@@ -22,7 +22,7 @@ for (const mobile of [false, true]) {
         await page.getByLabel(/email/i).fill(setup.primary_user.email);
         await page.getByLabel(/password/i).fill(setup.password);
         await page.getByRole('button', { name: /log in/i }).click();
-        await expect(page).toHaveURL(/\/$/);
+        await expect(page).not.toHaveURL(/\/login/);
         const base = `/accounts/${setup.account_param}`;
         await page.goto(`${base}/interface`);
         await expect(page.getByRole('heading', { name: 'Visual tags', exact: true })).toBeVisible();

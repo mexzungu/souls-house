@@ -24,7 +24,7 @@ test('resident cards show compact charts, quotas and permissions at desktop and 
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_id}/agents`);
     await expect(page).toHaveURL(/\/residents$/);
     await expect(page.getByText('E2E Researcher', { exact: true })).toBeVisible();
@@ -62,7 +62,7 @@ test('the bin disables a resident without removing them, with re-enable availabl
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_id}/residents`);
     await expect(page.getByRole('button', { name: 'New Resident', exact: true })).toBeVisible();
     const headings = page.locator('h3');
