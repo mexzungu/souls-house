@@ -100,6 +100,25 @@ class ResidentFacingNameTest < ActiveSupport::TestCase
     assert_equal "Ada Lovelace", @agent.agent_runtime_interactions.last.requested_by
   end
 
+  test "an unnamed Telegram subscriber is a member id in full and delta prompts; typed addresses stay" do
+    nameless = person("nameless.telegram.private@example.test", nil, nil)
+    subscription = @agent.telegram_subscriptions.create!(user: nameless, telegram_chat_id: 333, telegram_username: "nm")
+    message = subscription.telegram_messages.create!(role: "user", text: "Reply to typed.address@example.test",
+      sender_name: "NM", sender_username: "nm", telegram_message_id: 1, sent_at: Time.current)
+    request = ExternalAgentTelegramRequest.new(agent: @agent, subscription:, telegram_message: message)
+    label = "Member #{nameless.obfuscated_id}"
+
+    full = request.send(:request_text)
+    delta = request.send(:request_delta_text)
+
+    assert_includes full, "Sender: #{label}\n"
+    assert_includes delta, "New Telegram DMs from #{label} "
+    [ full, delta ].each do |prompt|
+      refute_includes prompt, "nameless.telegram.private"
+      assert_includes prompt, "typed.address@example.test"
+    end
+  end
+
   private
 
   def person(email, first, last)

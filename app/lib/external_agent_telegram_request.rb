@@ -138,7 +138,7 @@ class ExternalAgentTelegramRequest
       Notices::Renderer.section_for(agent),
       SubagentPolicyRenderer.section_for(agent),
       <<~TEXT
-      New Telegram DMs from #{subscription.subscriber_name} (thread #{subscription.to_param}), oldest first:
+      New Telegram DMs from #{subscriber_label} (thread #{subscription.to_param}), oldest first:
       #{messages_prompt}
 
       Reply by piping stdin to `soulshouse-send-telegram --reply-to #{subscription.to_param}` if appropriate. Stdout is diagnostic only.
