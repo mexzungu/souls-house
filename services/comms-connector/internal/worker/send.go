@@ -49,10 +49,6 @@ type SendResult struct {
 	SentAt    string
 }
 
-// testHookAfterClaim runs after the attempted record is committed and
-// before the provider is called (tests only).
-var testHookAfterClaim func()
-
 func digest(s string) []byte { d := sha256.Sum256([]byte(s)); return d[:] }
 
 // SendText runs one send_text, at most once per send_id for the life of
@@ -101,9 +97,6 @@ func (w *Worker) SendText(ctx context.Context, req SendRequest) (SendResult, err
 	}
 	if !claimed {
 		return w.replay(existing, rec)
-	}
-	if testHookAfterClaim != nil {
-		testHookAfterClaim()
 	}
 
 	// The send ends with the request or with the session, whichever is
