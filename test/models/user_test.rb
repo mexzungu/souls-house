@@ -663,6 +663,22 @@ class UserTest < ActiveSupport::TestCase
     assert_includes user.errors[:password], "is too short (minimum is 8 characters)"
   end
 
+  test "password length is one rule: 8 to 72, invited or not" do
+    assert_equal 8..72, User::PASSWORD_LENGTH
+
+    six = User.new(email_address: "six@example.com", password: "six666")
+    assert_not six.valid?
+    assert_equal [ "is too short (minimum is 8 characters)" ], six.errors[:password]
+
+    assert User.new(email_address: "eight@example.com", password: "eight888").valid?
+    assert_not User.new(email_address: "long@example.com", password: "x" * 73).valid?
+
+    invited = User.new(email_address: "invited-short@example.com")
+    Membership.create!(account: accounts(:team), user: invited, role: "member", invited_by: users(:admin))
+    invited.password = "seven77"
+    assert_not invited.valid?
+  end
+
   test "find_or_invite creates user without password" do
     assert_difference "User.count" do
       user = User.find_or_invite("brandnew@example.com")

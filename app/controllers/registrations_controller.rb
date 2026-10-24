@@ -27,7 +27,12 @@ class RegistrationsController < ApplicationController
   def set_password
     return redirect_with_invalid_password_request if user_already_has_password?
 
-    render inertia: "registrations/set_password", props: { email: @user.email_address, user: @user.as_json }
+    render inertia: "registrations/set_password", props: {
+      email: @user.email_address,
+      user: @user.as_json.merge(pending_profile),
+      password_min_length: User::PASSWORD_LENGTH.min,
+      password_max_length: User::PASSWORD_LENGTH.max
+    }
   end
 
   def update_password
@@ -99,7 +104,12 @@ class RegistrationsController < ApplicationController
 
   def complete_registration
     all_params = password_params.dup
-    profile_data = all_params.extract!(:first_name, :last_name)
+    profile_data = @profile_data = all_params.extract!(:first_name, :last_name)
+
+    if all_params[:password].blank?
+      @user.errors.add(:password, :blank)
+      return false
+    end
 
     User.transaction do
       return false unless @user.update(all_params)
@@ -118,7 +128,14 @@ class RegistrationsController < ApplicationController
 
   def redirect_with_password_errors
     flash[:errors] = @user.errors.full_messages
+    # Carry the names back so a password error never costs the user what
+    # else they typed.
+    flash[:pending_profile] = @profile_data.to_h.compact_blank if @profile_data.present?
     redirect_to set_password_path
+  end
+
+  def pending_profile
+    flash[:pending_profile].to_h.slice("first_name", "last_name")
   end
 
   def normalized_email

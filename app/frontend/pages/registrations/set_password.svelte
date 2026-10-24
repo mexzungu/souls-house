@@ -13,7 +13,7 @@
   import { CheckCircle } from 'phosphor-svelte';
   import * as logging from '$lib/logging';
 
-  let { user = $bindable(), email } = $props();
+  let { user = $bindable(), email, password_min_length = 8, password_max_length = 72 } = $props();
 
   logging.debug('User:', user);
 
@@ -57,7 +57,7 @@
           <Alert type="error" title="Error" description={errors} />
         {/if}
 
-        <SetPasswordForm {user} bind:processing />
+        <SetPasswordForm {user} minLength={password_min_length} maxLength={password_max_length} bind:processing />
       </Card.Content>
     </Card.Root>
   </div>
