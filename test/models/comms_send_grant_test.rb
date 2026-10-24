@@ -216,7 +216,7 @@ class CommsSendGrantTest < ActiveSupport::TestCase
 
   test "a resident with sends cannot be hard-deleted" do
     @connection.comms_sends.create!(agent: @agent, comms_chat: @chat, text: "hi", client_request_id: "keep", status: "sent",
-                                    requested_at: Time.current, provider_message_id: "3EB0#{"A" * 18}", connection_generation: 1)
+                                    requested_at: Time.current, provider_message_id: "3EB0#{"A" * 16}", connection_generation: 1)
     assert_not @agent.destroy
     assert Agent.exists?(@agent.id)
   end

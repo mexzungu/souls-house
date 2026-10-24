@@ -1,6 +1,7 @@
 # A resident sending one text through a comms connection, as the
 # connection's owner (WhatsApp spec §5). Provider-neutral: a provider whose
-# adapter implements new_send_message_id, send_generation and send_text can
+# adapter implements new_send_message_id, send_generation, send_text and
+# own_sender can
 # send (WhatsApp now; Telegram plugs in with its own adapter methods,
 # proposal 2026-10-11 §8), and only once it is listed in
 # COMMS_SEND_PROVIDERS.
@@ -80,7 +81,7 @@ module CommsSending
 
   def dispatchable?(provider)
     adapter = Services::Definition.fetch(provider).adapter
-    %i[new_send_message_id send_generation send_text].all? { |method| adapter.respond_to?(method) }
+    %i[new_send_message_id send_generation send_text own_sender].all? { |method| adapter.respond_to?(method) }
   rescue Services::Definition::UnknownProvider
     false
   end
@@ -163,9 +164,29 @@ module CommsSending
         attributes[:sent_at] = outcome.sent_at
       end
       send.update!(attributes)
+      record_own_message!(send) if outcome.status == "sent"
       link_echo!(send)
     end
     send
+  end
+
+  # WhatsApp does not echo a message back to the linked device that sent it
+  # (it reaches the owner's other devices), so attribution and the message's
+  # presence in the chat cannot wait for an echo. On a `sent` outcome Rails
+  # stores the message itself, through the same upsert the connector's
+  # events use: keyed on (chat, provider message id), so an echo that does
+  # arrive, before or after, is the same row, and later edits and deletions
+  # apply to it as to any message. The link is made by CommsMessage's
+  # after_create, or by link_echo! when the echo came first.
+  def record_own_message!(send)
+    connection = send.service_connection
+    sender = connection.definition.adapter.own_sender(connection)
+    CommsEvents.upsert_message!(connection, sender.merge(
+      "provider_message_id" => send.provider_message_id,
+      "chat" => send.comms_chat.provider_chat_id,
+      "sent_at" => send.sent_at || send.dispatched_at,
+      "body" => send.text
+    ))
   end
 
   # The acknowledgement side of echo-before-ack: the echo is already stored.

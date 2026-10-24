@@ -44,10 +44,15 @@ module CommsConnector
     def self.failed(code, reason = nil) = new(status: "failed", provider_message_id: nil, sent_at: nil, error_code: code, error_reason: reason)
   end
 
-  # Explicit refusals in the send_text contract: nothing was sent.
+  # Explicit refusals in the send_text contract: nothing was sent. Any 422
+  # error starting bad_ (bad_message_id, bad_chat, bad_text, bad_send_id, ...)
+  # is one too. A 401 is the connector's verifier refusing the command before
+  # it does anything, so it is failed (connector_refused_signature), not
+  # unknown. 500 send_failed and 502 send_unknown stay unknown: from here
+  # they are ambiguous.
   SEND_REFUSALS = {
     "409" => %w[not_connected stale_attempt],
-    "422" => %w[bad_message_id bad_chat unsupported_chat bad_text send_mismatch refused]
+    "422" => %w[unsupported_chat send_mismatch refused not_on_whatsapp recipient_lookup_failed group_lookup_failed]
   }.freeze
   SEND_READ_TIMEOUT = 30
 
@@ -122,9 +127,11 @@ module CommsConnector
         nil
       end
       SendOutcome.new(status: "sent", provider_message_id: body["message_id"].first(128), sent_at:, error_code: nil, error_reason: nil)
-    elsif SEND_REFUSALS.fetch(response.code, []).include?(error)
+    elsif SEND_REFUSALS.fetch(response.code, []).include?(error) || (response.code == "422" && error.match?(/\Abad_[a-z_]{1,40}\z/))
       reason = body["reason"].to_s.gsub(/[^a-z0-9_.:-]/i, "").first(64).presence if error == "refused"
       SendOutcome.failed(error, reason)
+    elsif response.code == "401"
+      SendOutcome.failed("connector_refused_signature")
     elsif response.code == "409" && error == "outcome_unknown"
       SendOutcome.unknown("outcome_unknown")
     elsif response.is_a?(Net::HTTPSuccess)

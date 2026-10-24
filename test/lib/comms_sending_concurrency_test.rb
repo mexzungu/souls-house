@@ -119,7 +119,7 @@ class CommsSendingConcurrencyTest < ActiveSupport::TestCase
     CommsSend.insert_all!((1..count).map do |n|
       { service_connection_id: @connection.id, agent_id: @agent.id, comms_chat_id: @chat.id, text: "earlier #{n}",
         client_request_id: "earlier-#{n}", status: "sent", requested_at: now - 10.seconds, dispatched_at: now - 10.seconds,
-        provider_message_id: "3EB0#{SecureRandom.hex(9).upcase}", connection_generation: @connection.pairing_attempt,
+        provider_message_id: "3EB0#{SecureRandom.hex(8).upcase}", connection_generation: @connection.pairing_attempt,
         created_at: now, updated_at: now }
     end)
   end
@@ -127,7 +127,7 @@ class CommsSendingConcurrencyTest < ActiveSupport::TestCase
   def pending_backlog(id)
     @connection.comms_sends.create!(agent: @agent, comms_chat: @chat, text: "old #{id}", client_request_id: id,
                                     status: "pending", requested_at: 3.days.ago,
-                                    provider_message_id: "3EB0#{SecureRandom.hex(9).upcase}", connection_generation: @connection.pairing_attempt)
+                                    provider_message_id: "3EB0#{SecureRandom.hex(8).upcase}", connection_generation: @connection.pairing_attempt)
   end
 
   # Runs the block in THREADS threads released together. The fake connector

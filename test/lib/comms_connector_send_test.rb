@@ -46,7 +46,9 @@ class CommsConnectorSendTest < ActiveSupport::TestCase
     {
       [ 409, "not_connected" ] => nil, [ 409, "stale_attempt" ] => nil,
       [ 422, "bad_message_id" ] => nil, [ 422, "bad_chat" ] => nil, [ 422, "unsupported_chat" ] => nil,
-      [ 422, "bad_text" ] => nil, [ 422, "send_mismatch" ] => nil, [ 422, "refused" ] => "not_on_whatsapp"
+      [ 422, "bad_text" ] => nil, [ 422, "send_mismatch" ] => nil, [ 422, "refused" ] => "not_on_whatsapp",
+      [ 422, "bad_send_id" ] => nil, [ 422, "not_on_whatsapp" ] => nil, [ 422, "recipient_lookup_failed" ] => nil,
+      [ 422, "group_lookup_failed" ] => nil
     }.each do |(status, error), reason|
       outcome, = answer(status, { error: error, reason: reason }.compact)
       assert_equal [ "failed", error, reason ], [ outcome.status, outcome.error_code, outcome.error_reason ], error
@@ -62,7 +64,8 @@ class CommsConnectorSendTest < ActiveSupport::TestCase
     assert_equal %w[unknown connector_unrecognised], answer(200, { status: "sent" }).first.to_h.values_at(:status, :error_code)
     assert_equal %w[unknown connector_http_409], answer(409, { error: "something_new" }).first.to_h.values_at(:status, :error_code)
     assert_equal %w[unknown connector_http_422], answer(422, { error: "something_new" }).first.to_h.values_at(:status, :error_code)
-    assert_equal %w[unknown connector_http_401], answer(401, { error: "bad_signature" }).first.to_h.values_at(:status, :error_code)
+    assert_equal %w[unknown connector_http_500], answer(500, { error: "send_failed" }).first.to_h.values_at(:status, :error_code)
+    assert_equal %w[unknown connector_http_502], answer(502, { error: "send_unknown" }).first.to_h.values_at(:status, :error_code)
 
     with_whatsapp_connector(stub_http: false) do
       Net::HTTP.stub(:start, ->(*, **) { raise Net::ReadTimeout }) do
@@ -72,6 +75,10 @@ class CommsConnectorSendTest < ActiveSupport::TestCase
         assert_equal %w[unknown connector_unreachable], CommsConnector.send_text(@send).to_h.values_at(:status, :error_code)
       end
     end
+  end
+
+  test "a 401 is the connector's verifier refusing before it does anything: failed" do
+    assert_equal %w[failed connector_refused_signature], answer(401, { error: "bad_signature" }).first.to_h.values_at(:status, :error_code)
   end
 
   test "a command that never left Rails is failed: no connector, no command key, no mutual TLS, plain http" do

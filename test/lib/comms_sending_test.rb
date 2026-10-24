@@ -20,11 +20,11 @@ class CommsSendingTest < ActiveSupport::TestCase
     send, created = claim
     assert created
     assert_match Services::WhatsappAdapter::SEND_MESSAGE_ID_FORMAT, send.provider_message_id
-    assert_equal 22, send.provider_message_id.length
+    assert_equal 20, send.provider_message_id.length
     assert_equal @connection.pairing_attempt, send.connection_generation
     assert_equal "pending", send.status
     ids = 50.times.map { Services::Definition.fetch("whatsapp").adapter.new_send_message_id }
-    assert ids.all? { |id| id.match?(/\A3EB0[0-9A-F]{18}\z/) }
+    assert ids.all? { |id| id.match?(/\A3EB0[0-9A-F]{16}\z/) }, "the shape the connector accepts, exactly"
     assert_equal 50, ids.uniq.size
   end
 
@@ -238,7 +238,7 @@ class CommsSendingTest < ActiveSupport::TestCase
 
   test "echo before ack under another message id: the ack links it" do
     send, = claim
-    other_id = "3EB0#{"B" * 18}"
+    other_id = "3EB0#{"B" * 16}"
     answer = lambda do |dispatched|
       receive_message(other_id, body: "hello")
       sent_outcome(dispatched, provider_message_id: other_id)
@@ -282,19 +282,63 @@ class CommsSendingTest < ActiveSupport::TestCase
     assert_equal send.id, message.comms_send_id
   end
 
-  test "a placeholder that came first (an edit before the original) links, and keeps the link once filled" do
+  test "a placeholder that came first (an edit before the ack) links, and keeps the link once the ack fills it" do
+    send, = claim
+    placeholder = nil
+    answer = lambda do |dispatched|
+      receive_event("message.edit", "messages" => [ { "provider_message_id" => dispatched.provider_message_id, "chat" => @chat.provider_chat_id,
+                                                      "body" => "hello!", "edited_at" => "2026-10-24T12:05:00Z" } ])
+      placeholder = @chat.comms_messages.find_by!(provider_message_id: dispatched.provider_message_id).attributes.slice("placeholder", "comms_send_id")
+      sent_outcome(dispatched)
+    end
+    with_fake_connector(answer) { CommsSending.deliver!(send) }
+    assert_equal({ "placeholder" => true, "comms_send_id" => send.id }, placeholder)
+
+    message = @chat.comms_messages.sole
+    assert_not message.placeholder?, "the ack filled it"
+    assert_equal [ "hello!", send.id ], [ message.body, message.comms_send_id ], "the newer edited content is kept"
+
+    receive_message(send.reload.provider_message_id, body: "hello")
+    assert_equal [ "hello!", send.id ], [ message.reload.body, message.comms_send_id ]
+    assert_equal 1, @chat.comms_messages.count
+  end
+
+  test "ack only, no echo ever: the house stores exactly one linked message from the owner" do
+    @connection.update!(external_subject_id: "447700900001", external_identity: "Daniel")
+    assert_not @access.reload.can_send?, "a new identity withdrew the grant"
+    grant_send!(@access)
     send, = claim
     with_fake_connector { CommsSending.deliver!(send) }
-    receive_event("message.edit", "messages" => [ { "provider_message_id" => send.reload.provider_message_id, "chat" => @chat.provider_chat_id,
-                                                    "body" => "hello!", "edited_at" => "2026-10-24T12:05:00Z" } ])
-    message = @chat.comms_messages.find_by!(provider_message_id: send.provider_message_id)
-    assert message.placeholder?
-    assert_equal send.id, message.comms_send_id
 
-    receive_message(send.provider_message_id, body: "hello")
-    message.reload
-    assert_not message.placeholder?
-    assert_equal [ "hello!", send.id ], [ message.body, message.comms_send_id ]
+    message = @chat.comms_messages.sole
+    assert_equal [ send.reload.provider_message_id, "hello", send.id, "447700900001@s.whatsapp.net", "Daniel" ],
+                 [ message.provider_message_id, message.body, message.comms_send_id, message.sender_id, message.sender_name ]
+    assert_equal Time.iso8601("2026-10-24T12:00:00Z"), message.sent_at
+    assert_equal message.sent_at, @chat.reload.last_activity_at
+  end
+
+  test "echo before ack, and ack before echo, each leave exactly one linked message" do
+    send, = claim("first")
+    answer = lambda do |dispatched|
+      receive_message(dispatched.provider_message_id, body: "hello")
+      sent_outcome(dispatched)
+    end
+    with_fake_connector(answer) { CommsSending.deliver!(send) }
+    assert_equal [ [ send.reload.provider_message_id, send.id ] ], @chat.comms_messages.pluck(:provider_message_id, :comms_send_id)
+
+    later, = claim("second")
+    with_fake_connector { CommsSending.deliver!(later) }
+    receive_message(later.reload.provider_message_id, body: "hello")
+    assert_equal 2, @chat.comms_messages.count
+    assert_equal later.id, @chat.comms_messages.find_by!(provider_message_id: later.provider_message_id).comms_send_id
+  end
+
+  test "a failed or unknown send stores no message" do
+    send, = claim("u2")
+    with_fake_connector(->(_) { CommsConnector::SendOutcome.unknown("connector_timeout") }) { CommsSending.deliver!(send) }
+    send, = claim("f2")
+    with_fake_connector(->(_) { CommsConnector::SendOutcome.failed("not_on_whatsapp") }) { CommsSending.deliver!(send) }
+    assert_equal 0, @chat.comms_messages.count
   end
 
   test "a message with the same id in another chat is never attributed" do
@@ -312,8 +356,8 @@ class CommsSendingTest < ActiveSupport::TestCase
 
     json = @chat.comms_messages.find_by!(provider_message_id: send.provider_message_id).as_comms_json
     assert_equal({ resident_id: @agent.to_param, resident_name: @agent.name, send_id: send.public_id }, json[:sent_by])
-    receive_message("3EB0#{"C" * 18}", body: "from Alice")
-    assert_nil @chat.comms_messages.find_by!(provider_message_id: "3EB0#{"C" * 18}").as_comms_json[:sent_by]
+    receive_message("3EB0#{"C" * 16}", body: "from Alice")
+    assert_nil @chat.comms_messages.find_by!(provider_message_id: "3EB0#{"C" * 16}").as_comms_json[:sent_by]
   end
 
   private
@@ -330,7 +374,7 @@ class CommsSendingTest < ActiveSupport::TestCase
     now = Time.current
     { service_connection_id: @connection.id, agent_id: @agent.id, comms_chat_id: @chat.id, text: "text #{id}",
       client_request_id: id, status: status, requested_at: requested_at, dispatched_at: dispatched_at,
-      provider_message_id: "3EB0#{SecureRandom.hex(9).upcase}", connection_generation: @connection.pairing_attempt,
+      provider_message_id: "3EB0#{SecureRandom.hex(8).upcase}", connection_generation: @connection.pairing_attempt,
       created_at: now, updated_at: now }
   end
 

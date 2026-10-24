@@ -170,7 +170,7 @@ class Agents::ServiceSendGrantsControllerTest < ActionDispatch::IntegrationTest
     CommsSend.insert_all!((1..count).map do |n|
       { service_connection_id: @connection.id, agent_id: @agent.id, comms_chat_id: @chat.id, text: "send #{n}",
         client_request_id: "page-#{n}", status: "sent", requested_at: at.call(n), dispatched_at: at.call(n),
-        provider_message_id: "3EB0#{SecureRandom.hex(9).upcase}", connection_generation: 1, created_at: now, updated_at: now }
+        provider_message_id: "3EB0#{SecureRandom.hex(8).upcase}", connection_generation: 1, created_at: now, updated_at: now }
     end)
     CommsSendGrantEvent.insert_all!((1..count).map do |n|
       { service_connection_id: @connection.id, agent_id: @agent.id, actor_user_id: @owner.id,
@@ -225,7 +225,7 @@ class Agents::ServiceSendGrantsControllerTest < ActionDispatch::IntegrationTest
 
   def create_send(text, id, status: "sent")
     @connection.comms_sends.create!(agent: @agent, comms_chat: @chat, text: text, client_request_id: id, status: status,
-                                    requested_at: Time.current, provider_message_id: "3EB0#{SecureRandom.hex(9).upcase}",
+                                    requested_at: Time.current, provider_message_id: "3EB0#{SecureRandom.hex(8).upcase}",
                                     connection_generation: @connection.pairing_attempt)
   end
 
