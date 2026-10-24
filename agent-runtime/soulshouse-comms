@@ -1,18 +1,32 @@
 #!/usr/bin/env python3
 """
-Read a WhatsApp or Telegram connection you have been granted, as JSON.
+Read a WhatsApp or Telegram connection you have been granted, as JSON, and
+send through it if its owner has also let you send.
 
 Usage:
   soulshouse-comms chats [--limit N]
   soulshouse-comms messages --chat CHAT [--since ISO8601 | --after CURSOR] [--limit N]
   soulshouse-comms search --query TEXT [--chat CHAT] [--limit N] [--scope synced|all_dialogs]
+  soulshouse-comms send --chat CHAT --text - [--request-id ID] < message.txt
   soulshouse-comms --connection svc_123 chats
 
 CHAT is a provider chat id or a chat_<n> id from `chats`. Without --since,
 messages returns the latest N (default 50, at most 200), oldest first; with
 --since, the first N at or after that time. A full page carries next_cursor:
 pass it back as --after to read on without skipping or repeating messages that
-share a second. Reading only: nothing can be sent.
+share a second.
+
+send writes one text message into an existing chat AS THE CONNECTION'S OWNER,
+from the owner's own account. It needs a separate grant from the owner; without
+it the connection has no send endpoint here, and the house refuses (403). The
+text is read from stdin with --text - (preferred; a literal --text works too).
+--request-id makes a retry safe: the same id with the same chat and text
+returns the original send and never sends again. Without it one is generated
+and printed on stderr; reuse it to retry. The JSON printed is the send record;
+its status is sent (exit 0: the provider accepted it, not delivered or read),
+failed (exit 2, with error_code) or unknown (exit 3: it may or may not have
+gone; read the chat, never just resend). Existing chats only, one chat at a
+time, no bulk and no unsolicited messages.
 
 search (Telegram only) asks Telegram itself, bounded (at most 50 results), over
 the synced chats unless the owner has allowed --scope all_dialogs. Results say
@@ -33,6 +47,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 import yaml
 
@@ -57,7 +72,7 @@ PROVIDERS = ("whatsapp", "telegram")
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="soulshouse-comms",
-        description="Read a granted WhatsApp or Telegram connection as JSON.",
+        description="Read a granted WhatsApp or Telegram connection as JSON, or send as its owner if granted.",
         epilog="Full souls.house manual: /usr/local/share/helixkit-agent/soulshouse-api.md",
     )
     parser.add_argument("--connection", help="service connection id (svc_...) when several are provisioned")
@@ -74,7 +89,23 @@ def main() -> int:
     search.add_argument("--chat")
     search.add_argument("--limit", type=int)
     search.add_argument("--scope", choices=("synced", "all_dialogs"))
+    send = commands.add_parser("send", help="send one text into an existing chat, as the connection's owner")
+    send.add_argument("--chat", required=True)
+    send.add_argument("--text", required=True, help="'-' to read the message from stdin (preferred)")
+    send.add_argument("--request-id", "--client-request-id", dest="request_id",
+                      help="idempotency key; reuse it to retry without sending twice")
     arguments = parser.parse_args()
+
+    if arguments.command == "send":
+        text = sys.stdin.read() if arguments.text == "-" else arguments.text
+        if arguments.text == "-" and text.endswith("\n"):
+            text = text[:-1]
+        if not text.strip():
+            print("the message is empty", file=sys.stderr)
+            return 64
+        if not arguments.request_id:
+            arguments.request_id = f"cli-{uuid.uuid4().hex}"
+            print(f"request_id: {arguments.request_id} (reuse it with --request-id to retry)", file=sys.stderr)
 
     # HELIXKIT_* are the pre-rename names, read as soulshouse-gws does.
     bearer_token = (
@@ -102,6 +133,11 @@ def main() -> int:
     try:
         connection = select_connection(manifest, arguments.connection)
         credentials = connection["credentials"]
+        if arguments.command == "send":
+            if "send_endpoint" not in credentials:
+                raise ValueError("This connection does not let you send: its owner has not granted it, "
+                                 "or sending is not switched on")
+            return send_message(credentials["send_endpoint"], bearer_token, arguments.chat, text, arguments.request_id)
         if arguments.command == "chats":
             url = with_query(credentials["chats_endpoint"], limit=arguments.limit)
         elif arguments.command == "search":
@@ -137,6 +173,26 @@ def main() -> int:
     json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")
     return 0
+
+
+SEND_EXIT = {"sent": 0, "failed": 2, "unknown": 3}
+
+
+def send_message(url: str, bearer_token: str, chat: str, text: str, request_id: str) -> int:
+    body = {"chat": chat, "text": text, "client_request_id": request_id}
+    try:
+        payload = post_json(url, bearer_token, body)
+    except urllib.error.HTTPError:
+        raise
+    except Exception as error:
+        # No answer from the house: the send may or may not exist. A retry
+        # with the same id returns its record and never sends twice.
+        print(f"No answer from souls.house ({error}); the outcome is unknown. "
+              f"Retry with --request-id {request_id} to see it; that never sends twice.", file=sys.stderr)
+        return 3
+    json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)
+    sys.stdout.write("\n")
+    return SEND_EXIT.get((payload.get("send") or {}).get("status"), 3)
 
 
 def select_connection(manifest: dict, connection_id: str | None) -> dict:
@@ -178,6 +234,23 @@ def get_json(url: str, bearer_token: str) -> dict:
         },
     )
     with NO_REDIRECT_OPENER.open(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def post_json(url: str, bearer_token: str, body: dict) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {bearer_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    # Longer than the house's own wait for the connector, so the house
+    # answers with the send record first.
+    with NO_REDIRECT_OPENER.open(request, timeout=60) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
