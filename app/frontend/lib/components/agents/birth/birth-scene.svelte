@@ -30,9 +30,41 @@
   const roofLength = 260;
   let roofDrawn = $derived(Math.min(1, (step + 1) / 5));
   let coreScale = $derived(coreScales[step] ?? coreScales[0]);
-  let satelliteOpacity = $derived(step === 1 ? 0.3 : step >= 4 ? 0 : 0.85);
+  let satelliteOpacity = $derived(step === 1 ? (colour ? 0.75 : 0.3) : step >= 4 ? 0 : 0.85);
   let coreColour = $derived(colour ? `text-${colour}-400` : 'text-[var(--account-dot,#f15d61)]');
   let hopping = $derived(step === 3 || processing);
+
+  // Once a colour is chosen the small dots stop being house-red and take colours that sit
+  // with it: its complement and the two hues either side of the complement.
+  const hues = [
+    'red',
+    'orange',
+    'amber',
+    'yellow',
+    'lime',
+    'green',
+    'emerald',
+    'teal',
+    'cyan',
+    'sky',
+    'blue',
+    'indigo',
+    'violet',
+    'purple',
+    'fuchsia',
+    'pink',
+    'rose',
+  ];
+  let satelliteColours = $derived.by(() => {
+    const at = hues.indexOf(colour);
+    if (at < 0) return null;
+    return [8, 6, 10].map((offset) => `text-${hues[(at + offset) % hues.length]}-400`);
+  });
+
+  function satelliteColour(index) {
+    if (satelliteColours) return satelliteColours[index % satelliteColours.length];
+    return index % 3 === 0 ? 'text-[var(--account-dot,#f15d61)]' : 'text-primary/60';
+  }
 </script>
 
 <div class="mx-auto w-full max-w-[15rem]" aria-hidden="true" data-testid="birth-scene" data-step={step}>
@@ -67,9 +99,7 @@
           <circle
             r="6"
             fill="currentColor"
-            class="satellite {hopping ? 'hop' : step <= 1 ? 'drift' : ''} {index % 3 === 0
-              ? 'text-[var(--account-dot,#f15d61)]'
-              : 'text-primary/60'}"
+            class="satellite {hopping ? 'hop' : step <= 1 ? 'drift' : ''} {satelliteColour(index)}"
             style="animation-delay: {index * (hopping ? 110 : 370)}ms" />
         </g>
       {/each}
@@ -98,6 +128,9 @@
   }
   .core {
     transition: color 600ms ease;
+  }
+  .satellite {
+    transition: color 900ms ease;
   }
   .satellite,
   .core {
