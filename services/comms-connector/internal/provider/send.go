@@ -41,10 +41,13 @@ func ParseChat(chat string) (types.JID, error) {
 			return types.JID{}, ErrBadChat
 		}
 	case types.GroupServer:
-	default:
+	case types.BroadcastServer, types.NewsletterServer, types.BotServer, types.HostedServer, types.HostedLIDServer,
+		types.MessengerServer, types.InteropServer, types.LegacyUserServer:
 		// broadcast (status@broadcast and broadcast lists), newsletter,
-		// bot, hosted, msgr, interop, c.us …
+		// bot, hosted, msgr, interop, c.us: real, but not sent to.
 		return types.JID{}, ErrUnsupportedChat
+	default:
+		return types.JID{}, ErrBadChat
 	}
 	return jid, nil
 }

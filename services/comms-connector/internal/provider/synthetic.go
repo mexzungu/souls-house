@@ -195,9 +195,8 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 		}
 	}
 	s.endOnce.Do(func() { close(s.ended) })
-	if err := sink.Connected(ctx, Identity{UserID: SyntheticOwnID, DisplayName: "Synthetic " + s.cfg.Marker}); err != nil {
-		return err
-	}
+	// Online before Connected is reported, as a whatsmeow client is
+	// connected before its Connected event.
 	s.mu.Lock()
 	s.online, s.sink = true, sink
 	s.mu.Unlock()
@@ -206,6 +205,9 @@ func (s *syntheticSession) Run(ctx context.Context, sink Sink, pair bool) error 
 		s.online, s.sink = false, nil
 		s.mu.Unlock()
 	}()
+	if err := sink.Connected(ctx, Identity{UserID: SyntheticOwnID, DisplayName: "Synthetic " + s.cfg.Marker}); err != nil {
+		return err
+	}
 	chats, msgs := s.cfg.Events()
 	if err := sink.Chats(ctx, chats); err != nil {
 		return err
