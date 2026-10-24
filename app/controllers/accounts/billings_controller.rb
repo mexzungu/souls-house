@@ -27,7 +27,7 @@ class Accounts::BillingsController < ApplicationController
   end
 
   def checkout
-    agent = current_account.agents.hosted.find(params[:agent_id])
+    agent = billable_agents.find(params[:agent_id])
     tier = Billing::Tier.find(params[:tier]) || raise(ActionController::BadRequest, "Unknown plan")
     url = Billing::Checkout.new(
       agent: agent,
@@ -48,11 +48,16 @@ class Accounts::BillingsController < ApplicationController
 
   private
 
+  # Disabled residents don't appear and can't be paid for: re-enable one first.
+  def billable_agents
+    current_account.agents.hosted.active
+  end
+
   def residents_json
     entitlements = ResidentEntitlement.includes(:current_subscription)
-      .where(agent_id: current_account.agents.hosted.select(:id)).index_by(&:agent_id)
+      .where(agent_id: billable_agents.select(:id)).index_by(&:agent_id)
 
-    current_account.agents.hosted.by_name.map do |agent|
+    billable_agents.by_name.map do |agent|
       { id: agent.to_param, name: agent.name, colour: agent.colour, entitlement: entitlements[agent.id]&.as_json }
     end
   end
