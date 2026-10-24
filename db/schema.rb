@@ -51,6 +51,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_23_203000) do
     t.string "main_room_name"
     t.text "main_room_description"
     t.boolean "auto_name_voices", default: true, null: false
+    t.boolean "x_posting_house_app", default: false, null: false
     t.index ["account_type"], name: "index_accounts_on_account_type"
     t.index ["disabled_at"], name: "index_accounts_on_disabled_at"
     t.index ["resident_room_id"], name: "index_accounts_on_resident_room_id"
