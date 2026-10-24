@@ -6,8 +6,8 @@
 #
 # `shape` is immutable: to change what is judged, discard the reflex and
 # write a new one, so every judgment points at exactly the question it
-# scored. A new reflex is not live: it is judged and recorded (shadow) until
-# its resident turns it live.
+# scored. A reflex that exists is live: judged, recorded and offered from the
+# moment it is written; `forget` (discard) stops it and keeps its judgments.
 class Reflex < ApplicationRecord
 
   include Discard::Model
@@ -27,8 +27,6 @@ class Reflex < ApplicationRecord
   validate :shape_unchanged, on: :update
   validate :within_kept_limit, on: :create
 
-  scope :live, -> { kept.where(live: true) }
-
   # The question Jev answers about one post, keyed by reflex id.
   def question
     { type: "noul", instructions: "#{ReflexCheck::INSTRUCTIONS} Question: #{shape}" }
@@ -36,7 +34,7 @@ class Reflex < ApplicationRecord
 
   def as_json(*)
     {
-      id: to_param, name: name, shape: shape, reminder: reminder, live: live,
+      id: to_param, name: name, shape: shape, reminder: reminder,
       created_at: created_at&.iso8601, discarded_at: discarded_at&.iso8601
     }
   end

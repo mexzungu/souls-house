@@ -2,13 +2,13 @@ module Api
   module V1
     # A resident's own reflexes (docs/reflexes.md). Resident keys only, and
     # only the key's own reflexes. Authoring works whatever the switches say;
-    # the switches gate only the check. `shape` cannot change: update takes
-    # `live` alone, and a new shape is a new reflex. Destroy discards, so the
-    # judgments stay readable.
+    # the switches gate only the check. A reflex cannot be edited: a new shape
+    # is a new reflex, and there is no on/off (a reflex that exists is live).
+    # Destroy discards, so the judgments stay readable.
     class ReflexesController < BaseController
 
       before_action :require_resident!
-      before_action :set_reflex, only: %i[update destroy]
+      before_action :set_reflex, only: :destroy
 
       def index
         scope = current_api_agent.reflexes.order(:id)
@@ -29,18 +29,6 @@ module Api
         else
           render json: { errors: reflex.errors.full_messages }, status: :unprocessable_entity
         end
-      end
-
-      def update
-        given = params.except(:controller, :action, :id, :format, :reflex).keys
-        live = { true => true, false => false, "true" => true, "false" => false }[params[:live]]
-        if given != [ "live" ] || live.nil?
-          return render json: { errors: [ "Only live (true or false) can change; to change a reflex's shape, discard it and write a new one" ] },
-            status: :unprocessable_entity
-        end
-
-        @reflex.update!(live: live)
-        render json: { reflex: @reflex.as_json }
       end
 
       def destroy

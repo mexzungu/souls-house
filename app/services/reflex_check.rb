@@ -1,22 +1,21 @@
 # Judges one resident post against that resident's kept reflexes (#515,
 # docs/reflexes.md): one UtilityInference.decide call, one question per
 # reflex keyed by reflex id, state = the post and the six messages before it.
-# Every reflex asked gets a Reflex::Judgment row, live or not, so a shadow
-# week is readable; a failed call leaves rows with no score.
+# Every reflex asked gets a Reflex::Judgment row; a failed call leaves rows
+# with no score. Every kept reflex is live (#538): there is no shadow.
 #
-# Where it runs: while none of the resident's reflexes is live, off the post
-# path in ReflexCheckJob, so shadowing costs a post nothing. Once one is
-# live, synchronously after SafeguardConversationPost.save returns true,
-# outside any transaction, with a short timeout; the cues ride back in the
-# POST /messages response. A classifier failure is never the post's failure.
+# Where it runs: synchronously after SafeguardConversationPost.save returns
+# true, outside any transaction, with a short timeout; the cues ride back in
+# the POST /messages response. A classifier failure is never the post's
+# failure.
 class ReflexCheck
 
   THRESHOLD = 0.75
   CONTEXT_BEFORE = 6
   POST_CHARS = 4_000
   CONTEXT_CHARS = 1_000
-  # Per socket wait, on the request path only. The job uses decide's default.
-  LIVE_TIMEOUT = 5
+  # Per socket wait: the check runs on the request path.
+  TIMEOUT = 5
   INSTRUCTIONS = PromptTemplate.render("reflex_check", :instructions).squish.freeze
 
   Cue = Data.define(:id, :name, :reminder) do
@@ -38,12 +37,8 @@ class ReflexCheck
     return [] unless checkable?(message)
     reflexes = message.agent.reflexes.kept.to_a
     return [] if reflexes.empty?
-    unless reflexes.any?(&:live?)
-      ReflexCheckJob.perform_later(message.id)
-      return []
-    end
 
-    new(message, reflexes).call(timeout: LIVE_TIMEOUT)
+    new(message, reflexes).call
   rescue StandardError => error
     # Isolation: whatever goes wrong here, the post has already been made.
     Rails.logger.warn("[ReflexCheck] after_post failed for message #{message&.id}: #{error.class}")
@@ -57,27 +52,17 @@ class ReflexCheck
     @reflexes = reflexes || message.agent.reflexes.kept.to_a
   end
 
-  # Judges and records; returns the cues for live reflexes at or above the
-  # threshold. With raise_errors, a classifier failure propagates (for the
-  # job's retries) after nothing is recorded; without, it is recorded as
-  # unscored rows and answers no cues. With offer: false (the job), nothing
-  # is offered or marked offered, even if a reflex went live after the post:
-  # a cue only exists in the post's own response.
-  def call(timeout: UtilityInference::REQUEST_TIMEOUT, raise_errors: false, offer: true)
+  # Judges and records; returns the cues for reflexes at or above the
+  # threshold. A classifier failure is recorded as unscored rows and answers
+  # no cues.
+  def call(timeout: TIMEOUT)
     return [] if reflexes.empty?
 
-    scores = judge(timeout)
-    record(scores, offer: offer)
+    record(judge(timeout))
   rescue UtilityInference::Error => error
-    raise if raise_errors
-
     Rails.logger.warn("[ReflexCheck] classifier failed for message #{message.id}: #{error.class}")
-    record_failure
-    []
-  end
-
-  def record_failure
     write(reflexes.map { |reflex| row(reflex, nil, false) })
+    []
   end
 
   def state
@@ -96,8 +81,8 @@ class ReflexCheck
     UtilityInference.decide(state: state, questions: questions, timeout: timeout)
   end
 
-  def record(scores, offer:)
-    offered = offer ? reflexes.select { |reflex| reflex.live? && scores.fetch(reflex.to_param) >= THRESHOLD } : []
+  def record(scores)
+    offered = reflexes.select { |reflex| scores.fetch(reflex.to_param) >= THRESHOLD }
     write(reflexes.map { |reflex| row(reflex, scores.fetch(reflex.to_param), offered.include?(reflex)) })
     offered.map { |reflex| Cue.new(id: reflex.to_param, name: reflex.name, reminder: reflex.reminder) }
   end
@@ -107,14 +92,9 @@ class ReflexCheck
     { reflex_id: reflex.id, message_id: message.id, score: score, offered: offered, created_at: now, updated_at: now }
   end
 
-  # One row per reflex per post. A retry after a recorded failure fills the
-  # score in; a recorded score is never overwritten by a later failure.
+  # One row per reflex per post.
   def write(rows)
-    if rows.all? { |r| r[:score].nil? }
-      Reflex::Judgment.insert_all(rows, unique_by: %i[reflex_id message_id])
-    else
-      Reflex::Judgment.upsert_all(rows, unique_by: %i[reflex_id message_id], update_only: %i[score offered])
-    end
+    Reflex::Judgment.insert_all(rows, unique_by: %i[reflex_id message_id])
   end
 
   def describe(m, limit)

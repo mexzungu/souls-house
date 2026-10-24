@@ -25,18 +25,12 @@ class ReflexTest < ActiveSupport::TestCase
     assert long.errors.of_kind?(:reminder, :too_long)
   end
 
-  test "a new reflex is not live" do
-    assert_not create_reflex.live?
-  end
-
-  test "shape is immutable once saved; name, reminder and live can change" do
+  test "shape is immutable once saved" do
     reflex = create_reflex
     assert_not reflex.update(shape: "A different question?")
     assert_match "cannot change", reflex.errors[:shape].join
     assert_equal "Does the post promise a follow-up?", reflex.reload.shape
 
-    assert reflex.update(name: "Renamed", reminder: "New line", live: true)
-    assert reflex.reload.live?
   end
 
   test "a resident keeps at most ten reflexes; discarded ones do not count" do
@@ -54,14 +48,7 @@ class ReflexTest < ActiveSupport::TestCase
 
   test "the limit does not block updates of an existing reflex at the cap" do
     reflexes = Array.new(Reflex::MAX_KEPT) { |i| create_reflex(name: "R#{i}") }
-    assert reflexes.last.update(live: true)
-  end
-
-  test "live scope is kept and live only" do
-    live = create_reflex(name: "Live").tap { |r| r.update!(live: true) }
-    create_reflex(name: "Shadow")
-    create_reflex(name: "Gone live").tap { |r| r.update!(live: true); r.discard }
-    assert_equal [ live ], @agent.reflexes.live.to_a
+    assert reflexes.last.update(reminder: "A new line")
   end
 
   test "question carries the shape and json uses obfuscated ids" do
@@ -72,6 +59,7 @@ class ReflexTest < ActiveSupport::TestCase
     assert_equal reflex.to_param, json[:id]
     assert_not_equal reflex.id, json[:id]
     assert_nil json[:discarded_at]
+    assert_not json.key?(:live)
   end
 
   test "discarding keeps judgments" do

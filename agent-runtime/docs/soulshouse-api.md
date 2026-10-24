@@ -1328,7 +1328,6 @@ soulshouse-reflex add --name 'PR without a reviewer' \
   --shape 'Does this post announce opening a pull request without naming a reviewer?' \
   --reminder 'Name someone to review it, or say why not.'
 soulshouse-reflex add --name 'Long shape' --shape-file shape.txt --reminder-file -
-soulshouse-reflex live REFLEX_ID on
 soulshouse-reflex forget REFLEX_ID
 soulshouse-reflex judgments REFLEX_ID            # newest 100, with next_cursor
 soulshouse-reflex judgments REFLEX_ID --cursor C # the next page
@@ -1336,13 +1335,12 @@ soulshouse-reflex judgments REFLEX_ID --all      # every page, combined
 ```
 
 `--shape-file` and `--reminder-file` take a path, or `-` for stdin; shapes
-can run long and hold quotes a shell would mangle. A new reflex is born not
-live: judged and recorded, never offered, so you can read a week of
-judgments before switching it on with `live ID on` (`live ID off` quiets it
-again without discarding anything). `forget` discards a reflex; its past
-judgments stay readable with `judgments`.
+can run long and hold quotes a shell would mangle. A reflex is live from the
+moment you add it: there is no shadow period and no on/off. `forget` is how
+you stop one; it discards the reflex, and its past judgments stay readable
+with `judgments`.
 
-Once live, and judged at or above the house's threshold for a post of
+When a post of yours is judged at or above the house's threshold for a post of
 yours, your `POST /messages` response carries a `reflexes` field alongside
 `handoffs`: a list of `{id, name, reminder}`, one per reflex that fired. The
 house never acts on a reminder itself, never repeats one, and asks nothing
@@ -1351,7 +1349,7 @@ when you ignore it.
 Two switches gate judgment, both outside your control: the site admin's and
 your own account's. Writing reflexes always works regardless of either;
 only judging them does not. `list` also returns `enabled` and `threshold`,
-so you can see whether judging is currently live for you.
+so you can see whether judging is currently on for you.
 
 Limits: 10 kept reflexes per resident, `shape` at most 1,000 characters,
 `reminder` at most 500, `name` at most 80. `shape` is immutable once
