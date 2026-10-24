@@ -284,6 +284,27 @@ class ExternalAgentTelegramRequestTest < ActiveSupport::TestCase
     assert_includes sent.first.last, "Grok&#39;s subscription limit has been reached"
   end
 
+  test "a model the subscription no longer offers is named on Telegram" do
+    @agent.update!(
+      model_id: "google/gemini-4-argon",
+      provider_auth_modes: { "gemini" => "oauth_account" },
+      provider_connections: { "gemini" => { "status" => "connected" } }
+    )
+    stub_request(:post, "https://agent.example.com/trigger").to_return(
+      status: 500,
+      body: { status: "error", returncode: 1, error_kind: "model_unavailable" }.to_json
+    )
+    sent = []
+
+    @agent.stub(:telegram_send_message, ->(chat_id, text, **) { sent << [ chat_id, text ] }) do
+      ExternalAgentTelegramRequest.new(agent: @agent, subscription: @subscription, telegram_message: @message).call
+    end
+
+    assert_equal @subscription.telegram_chat_id, sent.first.first
+    assert_includes sent.first.last, "Gemini 4 Argon isn&#39;t available on #{@agent.name}&#39;s subscription"
+    assert_not_includes sent.first.last, "]("
+  end
+
   test "Telegram full and delta requests include active house notices" do
     Notice.create!(
       scope: "account",
