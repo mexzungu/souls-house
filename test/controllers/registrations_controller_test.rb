@@ -208,7 +208,7 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
       last_name: "Chars"
     }
 
-    assert_redirected_to root_path
+    assert_redirected_to new_account_agent_path(user.reload.personal_account)
     assert user.reload.authenticate("eight888")
   end
 
