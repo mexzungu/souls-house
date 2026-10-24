@@ -195,12 +195,28 @@ class ProvisionVmAgentJob < ApplicationJob
     when :pending then :wait
     when :trusted
       request.require_approval!
-      return :wait if Agents::RemoteRuntime.begin_refresh!(agent) == :busy
+      # Ready only once the restart carrying the approved values is
+      # confirmed, as the house's own recreate is done before it says ready.
+      refreshing = RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident", generation: placement.generation)
+        .where("id > ?", last.id).exists?
+      unless refreshing
+        return :wait if Agents::RemoteRuntime.begin_refresh!(agent) == :busy
 
-      RemoteRefreshSettleJob.set(wait: RemoteRefreshSettleJob::RECHECK_AFTER).perform_later(placement.id)
-      agent.update_columns(active: true, paused: false, updated_at: Time.current)
-      request.update!(status: "ready", last_error: nil)
-      :done
+        RemoteRefreshSettleJob.set(wait: RemoteRefreshSettleJob::RECHECK_AFTER).perform_later(placement.id)
+        return :wait
+      end
+      case Agents::RemoteRuntime.settle_refresh!(placement)
+      when :done
+        agent.update_columns(active: true, paused: false, updated_at: Time.current)
+        request.update!(status: "ready", last_error: nil)
+        :done
+      when :held
+        # Its turns stay held by the refresh (an operator can release it).
+        request.update!(status: "failed", last_error: "Its runtime restart with the newly approved values did not " \
+                                                    "settle: #{placement.reload.refresh_last_error.presence || 'no detail'}".first(1000))
+        :done
+      else :wait
+      end
     when :untrusted
       agent.update_columns(active: false, paused: true, updated_at: Time.current)
       request.update!(status: "needs_runtime_trust", last_error: nil)

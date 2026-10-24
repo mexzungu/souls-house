@@ -1198,9 +1198,70 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       assert_enqueued_with(job: RemoteRefreshSettleJob) { run_job(agent) }
       assert_equal 2, starts.call, "the approved values reach its server through the credential/service restart"
       assert placement.reload.refresh_command_id
+      assert_equal "provisioning", request.reload.status, "not ready until the restart is confirmed"
+      run_job(agent)
+      assert_equal "provisioning", request.reload.status
+
+      answer_refresh(placement)
+      run_job(agent)
+      assert_nil placement.reload.refresh_command_id
       assert_equal "ready", request.reload.status
       assert agent.reload.active?
       assert_equal "ready", placement.state
+      assert_equal 2, starts.call
+      assert_empty @client.deletes
+
+      assert_no_enqueued_jobs(only: ProvisionVmAgentJob) { VmBirthSweepJob.perform_now }
+      run_job(agent)
+      assert_equal 2, starts.call, "no second refresh after settlement"
+    end
+  end
+
+  test "approved again when ready, a restart the runner never answers fails the request once its answer window passes" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "trusted")
+      run_job(agent)
+      run_job(agent)
+      assert_equal "provisioning", request.reload.status, "pending while the runner may still answer"
+      travel Agents::RemoteRuntime::REFRESH_ANSWER_WITHIN + 1.minute do
+        run_job(agent)
+        assert_equal "failed", request.reload.status
+        assert_match(/did not settle: .*no answer/, request.last_error)
+        assert placement.reload.refresh_command_id, "turns stay held"
+        assert_equal "ready", placement.state
+        assert_empty @client.deletes
+      end
+    end
+  end
+
+  def answer_refresh(placement, image: IMAGE, outcome: "done")
+    command = RunnerCommand.find(placement.reload.refresh_command_id)
+    command.deliver!(now: Time.current)
+    command.record_result!({ "outcome" => outcome, "result" => { "image" => image } }, now: Time.current)
+  end
+
+  test "approved again when ready, a restart that never settles fails the request plainly and keeps turns held" do
+    with_house do
+      request, agent = github_import_ready!
+      placement = agent.placement
+      request.update!(status: "pending_review")
+      approve_fixture(request)
+      run_import(request, reviewed_checkout)
+      answer_trust(placement, "trusted")
+      run_job(agent)
+      answer_refresh(placement, outcome: "failed")
+      run_job(agent) # one recovery start
+      assert_equal "provisioning", request.reload.status
+      answer_refresh(placement, outcome: "failed")
+      run_job(agent)
+      assert_equal "failed", request.reload.status
+      assert_match(/did not settle/, request.last_error)
+      assert placement.reload.refresh_command_id, "turns stay held until an operator releases the hold"
       assert_empty @client.deletes
     end
   end
@@ -1237,7 +1298,10 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       answer_trust(placement, "trusted")
       Agents::RemoteRuntime.stub(:begin_refresh!, :busy) { run_job(agent) }
       assert_equal "provisioning", request.reload.status
+      assert_nil placement.reload.refresh_command_id
       assert_enqueued_with(job: ProvisionVmAgentJob, args: [ agent.id ]) { VmBirthSweepJob.perform_now }
+      run_job(agent)
+      answer_refresh(placement)
       run_job(agent)
       assert_equal "ready", request.reload.status
     end
