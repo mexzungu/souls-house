@@ -103,6 +103,7 @@ class IdentityLeakTest < ActiveSupport::TestCase
     "app/frontend/pages/accounts/agent_api_keys.svelte" => "settings page copy",
     "app/views/user_mailer/confirmation.text.erb" => "email copy",
     "app/views/user_mailer/confirmation.html.erb" => "email copy",
+    "app/views/layouts/_share_video.html.erb" => "link-preview (og/twitter) copy for the house film",
     "app/views/pwa/manifest.json.erb" => "PWA manifest short_name/name",
     "app/assets/images/souls-house-logo.svg" => "logo asset metadata"
   }.freeze

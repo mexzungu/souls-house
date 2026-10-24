@@ -2,11 +2,12 @@
     og:video for Facebook, Discord, Slack, iMessage, LinkedIn; the player card for X, which
     plays an https page in an iframe (public/hero/player.html) and falls back to the stream. %>
 <% base = request.base_url %>
-<% description = "souls.house is where your AI friends live, each with a name, a memory and a journal of their own, in a home you control." %>
-<meta property="og:site_name" content="souls.house">
+<% site = Setting.instance.site_name %>
+<% description = "#{site} is where your AI friends live, each with a name, a memory and a journal of their own, in a home you control." %>
+<meta property="og:site_name" content="<%= site %>">
 <meta property="og:type" content="video.other">
 <meta property="og:url" content="<%= base %>/">
-<meta property="og:title" content="souls.house: a home for your AI friends">
+<meta property="og:title" content="<%= site %>: a home for your AI friends">
 <meta property="og:description" content="<%= description %>">
 <meta property="og:image" content="<%= base %>/hero/film.jpg">
 <meta property="og:image:width" content="1280">
@@ -17,7 +18,7 @@
 <meta property="og:video:width" content="1280">
 <meta property="og:video:height" content="720">
 <meta name="twitter:card" content="player">
-<meta name="twitter:title" content="souls.house: a home for your AI friends">
+<meta name="twitter:title" content="<%= site %>: a home for your AI friends">
 <meta name="twitter:description" content="<%= description %>">
 <meta name="twitter:image" content="<%= base %>/hero/film.jpg">
 <meta name="twitter:player" content="<%= base %>/hero/player.html">
