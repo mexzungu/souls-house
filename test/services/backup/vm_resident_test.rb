@@ -68,6 +68,32 @@ module Backup
       assert_raises(AgentRestic::ResidentBusy) { issue }
     end
 
+    test "only the current generation's lifecycle commands make the resident busy" do
+      seed = RunnerCommand.enqueue!(enrollment: @enrollment, kind: "seed_home", payload: {})
+      start = RunnerCommand.enqueue!(enrollment: @enrollment, kind: "start_resident", payload: {})
+      start.update!(state: "unknown")
+      assert VmResident.busy?(@agent), "this generation's uncertainty blocks"
+
+      # A retried activation: the last attempt's server is gone and its runner
+      # revoked, and the placement moved on to the next generation.
+      @enrollment.revoke!
+      @placement.update!(generation: 2)
+      assert_equal %w[queued unknown], [ seed.reload.state, start.reload.state ]
+      assert_not VmResident.busy?(@agent), "a superseded generation's commands do not"
+
+      @enrollment, token = RunnerEnrollment.mint!(placement: @placement)
+      @enrollment.confirm_provider_server!(4242)
+      @enrollment.enroll!(token:, public_key: Base64.strict_encode64("k" * 32),
+        reported_server_id: 4242, facts: {}, nonce: SecureRandom.hex(16))
+      @enrollment.heartbeat!(reported_server_id: 4242, facts: {}, nonce: SecureRandom.hex(16))
+      assert issue, "the retry's first backup is admitted"
+      VmBackup.update_all(state: "verified", released_at: Time.current)
+      current = RunnerCommand.enqueue!(enrollment: @enrollment, kind: "seed_home", payload: {})
+      current.deliver!(now: Time.current)
+      assert VmResident.busy?(@agent), "the new generation's own delivered seed still blocks"
+      assert_raises(AgentRestic::ResidentBusy) { issue }
+    end
+
     test "a reconciled finished turn no longer stays busy because its submit acknowledgement was unknown" do
       interaction = AgentRuntimeInteraction.create!(agent: @agent, trigger_kind: "wake",
         started_at: 1.minute.ago, finished_at: Time.current)

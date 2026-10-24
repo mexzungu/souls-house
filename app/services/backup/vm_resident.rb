@@ -71,9 +71,16 @@ module Backup
       settle!(backup, result, error.message, release: safe)
     end
 
+    # Only the placement's current generation counts. A retried activation
+    # (docs/2026-10-10-vm-imports.md, point 8) is admitted only once cleanup
+    # has confirmed the last attempt's server deleted and revoked its runner,
+    # so an older generation's lifecycle commands, even ones left delivered or
+    # unknown, cannot touch the server this backup is for. The current
+    # generation's uncertainty still blocks, as before.
     def self.busy?(agent)
       commands = RunnerCommand.joins(:agent_placement).where(agent_placements: { agent_id: agent.id },
         kind: %w[submit_turn start_resident stop_resident seed_home])
+        .where("runner_commands.generation = agent_placements.generation")
       agent.agent_runtime_interactions.active.exists? ||
         ResidentTurn.occupying_capacity.where(agent_id: agent.id).exists? ||
         commands.where(state: %w[queued delivered]).exists? ||

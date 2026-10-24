@@ -34,6 +34,8 @@ module Agents
     IMPORT_SWITCHED_OFF = "This resident runs on its own server, and this house isn't creating resident servers " \
                           "right now. It stays imported, inactive and paused. Ask a site admin.".freeze
     ALREADY_ACTIVATING = "This resident is already being started on its own server.".freeze
+    STILL_RELEASING = "Its last start on its own server failed, and that server is still being released. " \
+                      "Try again in a few minutes. It stays imported, inactive and paused.".freeze
     # From admission to first verified backup. Past it the birth fails and its
     # server is cleaned up, so a stuck birth can't keep spending.
     BIRTH_DEADLINE = 45.minutes
@@ -91,13 +93,22 @@ module Agents
     end
 
     # Activating an archive import staged for its own server
-    # (docs/2026-10-10-vm-imports.md, points 2, 3, 9): the same lock, switch
-    # and checks as a birth, then the staged placement becomes a pending one
-    # with its admission stamp, deadline and requester, which is what lets
-    # ProvisionVmAgentJob and procurement act on it. A second Activate, or
-    # one racing this, finds it no longer staged and is refused. With the
-    # switch off nothing is admitted and the copy stays staged: it is never
-    # run here instead. Returns the placement.
+    # (docs/2026-10-10-vm-imports.md, points 2, 3, 8, 9): the same lock,
+    # switch and checks as a birth, then the staged placement becomes a
+    # pending one with its admission stamp, deadline and requester, which is
+    # what lets ProvisionVmAgentJob and procurement act on it. A second
+    # Activate, or one racing this, finds it no longer staged and is refused.
+    # With the switch off nothing is admitted and the copy stays staged: it is
+    # never run here instead.
+    #
+    # Pressing Activate again after a failed attempt (its deadline passed, or a
+    # step failed) admits the same placement afresh, at its next generation,
+    # but only once cleanup has confirmed the last server gone: the placement
+    # is retired, no purchase is unresolved and no backup hold is left. Until
+    # then the slot is still counted and the retry is refused, so a retry can
+    # never overlap the server it replaces. The next generation fences the
+    # last attempt's runner commands; its purchases stay as history. The
+    # staged role homes are the same bytes. Returns the placement.
     def admit_import!(placement:, requested_by:, now: Time.current)
       AgentPlacement.transaction do
         AgentPlacement.connection.execute("SELECT pg_advisory_xact_lock(#{CloudProcurement::ADMISSION_LOCK})")
@@ -105,13 +116,33 @@ module Agents
         raise Refused, IMPORT_SWITCHED_OFF unless enabled?
 
         placement.lock!
-        raise Refused, ALREADY_ACTIVATING unless placement.staged?
+        retry_attempt = retryable_import?(placement)
+        if !retry_attempt && placement.kind == "archive_import" && %w[failed retired].include?(placement.state)
+          raise Refused, STILL_RELEASING
+        end
+        raise Refused, ALREADY_ACTIVATING unless placement.staged? || retry_attempt
         refuse!(kind: :birth)
 
-        placement.update!(state: "pending", admitted_by_setting_at: now, birth_deadline_at: now + BIRTH_DEADLINE,
-          birth_requested_by: requested_by)
+        attributes = { state: "pending", admitted_by_setting_at: now, birth_deadline_at: now + BIRTH_DEADLINE,
+                       birth_requested_by: requested_by }
+        if retry_attempt
+          attributes.merge!(generation: placement.generation + 1, cleanup_requested_at: nil, cleanup_reason: nil,
+            first_backup_command_id: nil, provider_server_id: nil, location: nil, runtime_endpoint: nil)
+        end
+        placement.update!(attributes)
         placement
       end
+    end
+
+    # A failed archive activation whose server is confirmed gone. Read under
+    # the placement lock by admit_import!.
+    def retryable_import?(placement)
+      return false unless placement.backend == "hetzner_cloud" && placement.kind == "archive_import"
+      return false unless placement.state == "retired" && placement.agent.runtime_ready_at.nil?
+      return false if placement.cloud_procurement_operations.unresolved.exists?
+      return false if defined?(VmBackup) && VmBackup.holding.exists?(agent_id: placement.agent_id)
+
+      true
     end
 
     # Slice 4 of #246: without VM backups no VM resident can become ready.
