@@ -55,7 +55,7 @@ class AccountRegistrationFlowTest < ActionDispatch::IntegrationTest
 
     # Step 3: Set password
     patch set_password_path, params: { password: "securePassword123", password_confirmation: "securePassword123", first_name: "Password", last_name: "Set" }
-    assert_redirected_to root_path
+    assert_redirected_to new_account_agent_path(user.reload.personal_account)
 
     user.reload
     assert user.password_digest?
@@ -63,7 +63,7 @@ class AccountRegistrationFlowTest < ActionDispatch::IntegrationTest
 
     # Step 4: Login
     post login_path, params: { email_address: email, password: "securePassword123" }
-    assert_redirected_to root_path
+    assert_redirected_to new_account_agent_path(user.personal_account)
 
     # Verify user is logged in via session
     assert cookies[LocalInstance.current.cookie(:session_id)].present?

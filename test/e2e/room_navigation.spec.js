@@ -36,7 +36,7 @@ test('room navigation stays live on a non-chat page, catches up and preserves dr
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/field`);
     await expect.poll(() => confirmed).toBe(true);

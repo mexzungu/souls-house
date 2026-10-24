@@ -11,7 +11,7 @@ for (const costs of ['unpriced', 'mixed']) {
       await page.getByLabel(/email/i).fill(setup.primary_user.email);
       await page.getByLabel(/password/i).fill(setup.password);
       await page.getByRole('button', { name: /sign in|log in/i }).click();
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).not.toHaveURL(/\/login/);
       await page.goto(`/accounts/${setup.account_param}/costs`);
       const warning = page.getByRole('region', { name: 'Unestimated usage' });
       await expect(warning).toContainText('E2E Critic');

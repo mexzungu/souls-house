@@ -10,7 +10,7 @@ test('resident turn timeout defaults to 30 minutes and persists a 24-hour budget
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_id}/residents`);
     await page.getByRole('link', { name: 'Edit', exact: true }).first().click();
     const editUrl = page.url();

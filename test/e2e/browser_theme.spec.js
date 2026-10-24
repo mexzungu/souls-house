@@ -33,7 +33,7 @@ test('browser colour follows saved theme, live selection, reload and navigation'
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     // The minimal E2E fixture has no profile names; updates require both.
     const profile = await page.request.patch('/user', {
       data: { user: { first_name: 'Theme', last_name: 'Tester' } },

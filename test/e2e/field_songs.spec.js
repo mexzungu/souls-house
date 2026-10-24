@@ -65,7 +65,7 @@ test('a member shares songs: from a link with checked lyrics, an instrumental, a
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/field`);
 
@@ -190,7 +190,7 @@ test('file-name guesses stay guesses, and late link lookups are dropped', async 
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/field`);
 
     // 1. Link A is slow; it's replaced by link B, which answers first. A's

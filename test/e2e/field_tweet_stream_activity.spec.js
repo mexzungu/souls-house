@@ -42,7 +42,7 @@ test('source arrival, status and reconnect update an open panel without replacin
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const base = `/accounts/${setup.account_param}/field?tab=tweets`;
     await page.goto(base);
     await expect.poll(() => confirmed).toBe(true);

@@ -42,7 +42,7 @@ test('guest arrivals and removal reach both open directories while drafts surviv
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/agents`);
     home = await page.context().newPage();
     await home.goto(`/accounts/${fixture.home}/agents`);

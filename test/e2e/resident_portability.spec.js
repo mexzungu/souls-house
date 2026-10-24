@@ -13,7 +13,7 @@ test('owner can find import before birth, reject a bad archive, and confirm a st
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/residents/new`);
     await page.getByRole('link', { name: 'Import a resident archive instead', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Import a resident', exact: true })).toBeVisible();

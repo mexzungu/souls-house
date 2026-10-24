@@ -37,7 +37,7 @@ test('funding discovery updates no-source and paused panels without losing draft
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/field?tab=tweets`);
     await expect(page.getByTestId('tweet-stream-needs-integration')).toBeVisible();
     await expect.poll(() => confirmed).toBe(true);

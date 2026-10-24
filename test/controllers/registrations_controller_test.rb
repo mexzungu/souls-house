@@ -163,7 +163,9 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
       last_name: "User"
     }
 
-    assert_redirected_to root_path
+    # Their only account is their own and it has no resident yet: the next
+    # step is making one, not the marketing home page.
+    assert_redirected_to new_account_agent_path(user.reload.personal_account)
     assert_equal "Account setup complete! Welcome!", flash[:notice]
 
     user.reload
@@ -206,7 +208,7 @@ class RegistrationsControllerTest < ActionDispatch::IntegrationTest
       last_name: "Chars"
     }
 
-    assert_redirected_to root_path
+    assert_redirected_to new_account_agent_path(user.reload.personal_account)
     assert user.reload.authenticate("eight888")
   end
 

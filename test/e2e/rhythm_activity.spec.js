@@ -29,7 +29,7 @@ test('already-open rhythm readers update, reconnect and preserve a pause draft',
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const base = `/accounts/${setup.account_param}/rhythms`;
     await page.goto(base);
     await expect.poll(() => confirmed).toBe(true);

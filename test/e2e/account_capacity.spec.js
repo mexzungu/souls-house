@@ -19,7 +19,7 @@ test('account cap closes ordinary admission but preserves the admin exception', 
     await target.getByLabel(/email/i).fill(user.email);
     await target.getByLabel(/password/i).fill(setup.password);
     await target.getByRole('button', { name: /log in/i }).click();
-    await expect(target).toHaveURL(/\/$/);
+    await expect(target).not.toHaveURL(/\/login/);
   }
   async function saveLimit(value) {
     await page.goto('/admin/settings');

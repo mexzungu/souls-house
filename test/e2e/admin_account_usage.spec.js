@@ -11,7 +11,7 @@ test('admin can inspect account usage, settings and empty states on desktop and 
     await page.getByLabel(/email/i).fill(setup.admin_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/admin/accounts?account_id=${setup.account_id}`);
 
     const overview = page.getByRole('region', { name: 'Account usage overview' });

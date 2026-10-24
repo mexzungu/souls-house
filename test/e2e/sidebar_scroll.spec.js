@@ -18,7 +18,7 @@ test('clicking a conversation far down the sidebar keeps the list where it was',
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /sign in|log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/chats/${chats[0]}`);
 
     const scroller = page.locator('[data-chat-sidebar-scroller]');

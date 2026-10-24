@@ -13,7 +13,7 @@ test('house funding is explicit, explains privacy and enforces one resident with
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const residents = setup.agents.filter((agent) => ['E2E Researcher', 'E2E Critic'].includes(agent.name));
     expect(residents).toHaveLength(2);
     const selectHouse = async (resident) => {

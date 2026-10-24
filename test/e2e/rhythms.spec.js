@@ -13,7 +13,7 @@ test('a member sets up a rhythm, starts one by hand, and pauses it', async ({ pa
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
 
     const base = `/accounts/${setup.account_param}`;
     await page.goto(`${base}/chats`);

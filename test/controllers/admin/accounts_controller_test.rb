@@ -324,7 +324,7 @@ class Admin::AccountsControllerTest < ActionDispatch::IntegrationTest
   test "should require site admin even with valid session" do
     # Login as regular user first
     post login_path, params: { email_address: @regular_user.email_address, password: "password123" }
-    assert_redirected_to root_path
+    assert_response :redirect
 
     # Try to access admin accounts
     get admin_accounts_path

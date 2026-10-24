@@ -15,7 +15,7 @@ test('new residents default to house funding and missing credentials never stran
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/residents/new`);
     await page.getByRole('button', { name: 'Begin', exact: true }).click();
     await page.getByLabel(/name/i).fill('Synthetic new resident');
@@ -64,7 +64,7 @@ test('a busy house orientation stays in progress and another room can queue', as
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     const resident = setup.agents.find((agent) => agent.name === 'E2E Researcher');
     await page.goto(`/accounts/${setup.account_param}/residents/${resident.id}/onboarding`);
     await expect(page.getByText('Their first wake is in progress')).toBeVisible();

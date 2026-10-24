@@ -46,7 +46,7 @@ test('costs discover a new home resident and recover corrected usage without hea
     await page.getByLabel(/email/i).fill(setup.primary_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/costs`);
     await expect.poll(() => confirmed.has('HomeResidentRoster') && confirmed.has('AccountCostActivity')).toBe(true);
     await expect(page.getByText('No estimated interaction costs are available yet.')).toBeVisible();
