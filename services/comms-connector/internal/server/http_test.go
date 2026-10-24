@@ -80,6 +80,8 @@ type recorder struct {
 	mu       sync.Mutex
 	calls    []string
 	phoneErr error
+	sendRes  worker.SendResult
+	sendErr  error
 }
 
 func (r *recorder) StartPairing(_ context.Context, ref, secret string, version int64) error {
@@ -101,6 +103,13 @@ func (r *recorder) PairPhone(_ context.Context, ref, phone string, attempt int64
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, "pair_phone "+ref+" "+phone+" "+strconv.FormatInt(attempt, 10)+" "+request+" "+strconv.FormatInt(seq, 10))
 	return r.phoneErr
+}
+
+func (r *recorder) SendText(_ context.Context, ref string, req worker.SendRequest) (worker.SendResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "send_text "+ref+" "+strconv.FormatInt(req.Attempt, 10)+" "+req.SendID+" "+req.MessageID+" "+req.Chat+" "+req.Text)
+	return r.sendRes, r.sendErr
 }
 
 type tlsRig struct {

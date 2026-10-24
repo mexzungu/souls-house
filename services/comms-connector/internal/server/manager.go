@@ -1,6 +1,6 @@
 // Package server is the connector's command side: the manager that owns one
 // worker per connection, and the mutual-TLS HTTP handler for Rails's
-// commands: start_pairing, unpair and pair_phone.
+// commands: start_pairing, unpair, pair_phone and send_text.
 package server
 
 import (
@@ -161,6 +161,20 @@ func (m *Manager) PairPhone(ctx context.Context, ref, phone string, attempt int6
 	}
 	m.configFor(ref).Log.Info("command", slog.String("op", "pair_phone"))
 	return nil
+}
+
+// SendText runs a send_text on the connection's worker (worker.SendText).
+// The manager's lock is not held during the send, which can take as long
+// as the request allows: the worker keeps itself open until it ends.
+func (m *Manager) SendText(ctx context.Context, ref string, req worker.SendRequest) (worker.SendResult, error) {
+	m.mu.Lock()
+	w := m.workers[ref]
+	m.mu.Unlock()
+	if w == nil {
+		return worker.SendResult{}, worker.ErrNotConnected
+	}
+	m.configFor(ref).Log.Info("command", slog.String("op", "send_text"))
+	return w.SendText(ctx, req)
 }
 
 // removeLeftovers deletes a store-less connection directory under its

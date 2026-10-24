@@ -20,7 +20,19 @@ var e164 = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
 // phone pairing request, never derived from the number.
 var phoneRequest = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
+// Send ids are the house CommsSend public ids: at most 64 characters of
+// [A-Za-z0-9_-].
+var sendID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// Message ids are what whatsmeow.GenerateMessageID (send.go:73-75 in the
+// pinned version) returns: WebMessageIDPrefix "3EB0" and 8 random bytes as
+// upper-case hex, 20 characters. Rails mints them; the connector passes
+// them unchanged as SendRequestExtra.ID.
+var messageID = regexp.MustCompile(`^3EB0[0-9A-F]{16}$`)
+
 func ValidConnectionRef(s string) bool { return connRef.MatchString(s) }
 func ValidCommandID(s string) bool     { return commandID.MatchString(s) }
 func ValidE164(s string) bool          { return e164.MatchString(s) }
 func ValidPhoneRequest(s string) bool  { return phoneRequest.MatchString(s) }
+func ValidSendID(s string) bool        { return sendID.MatchString(s) }
+func ValidMessageID(s string) bool     { return messageID.MatchString(s) }

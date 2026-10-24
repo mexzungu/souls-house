@@ -1,6 +1,7 @@
 // Package store is the per-connection SQLCipher database: the connection's
 // metadata (its callback secret), the outbox of events not yet acknowledged
-// by Rails, and whatsmeow's own session tables (whatsmeow_*), which
+// by Rails, the record of send_text commands (sends: digests and outcomes,
+// never the text), and whatsmeow's own session tables (whatsmeow_*), which
 // whatsmeow creates on the same *sql.DB through sqlstore.NewWithDB. One
 // encrypted file per connection.
 //
@@ -172,11 +173,21 @@ CREATE TABLE IF NOT EXISTS carryover (
   body      BLOB NOT NULL,
   queued_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sends (
+  send_id     TEXT PRIMARY KEY,
+  message_id  TEXT NOT NULL UNIQUE,
+  chat_digest BLOB NOT NULL,
+  text_digest BLOB NOT NULL,
+  state       TEXT NOT NULL CHECK (state IN ('attempted', 'sent', 'refused')),
+  sent_at     TEXT,
+  reason      TEXT
+);
 `
 
 // ownTables are the store's own tables; every other table belongs to the
-// provider's session (whatsmeow_*), and ResetSession drops it.
-var ownTables = map[string]bool{"meta": true, "outbox": true, "carryover": true, "sqlite_sequence": true}
+// provider's session (whatsmeow_*), and ResetSession drops it. sends is
+// kept across a re-pairing: a send_id seen before is never sent again.
+var ownTables = map[string]bool{"meta": true, "outbox": true, "carryover": true, "sends": true, "sqlite_sequence": true}
 
 func (s *Store) init(ctx context.Context) error {
 	// Touch the database first: with a wrong key this is where it fails.
@@ -513,6 +524,110 @@ func (s *Store) OutboxDepth(ctx context.Context) (int, error) {
 		return 0, ErrStore
 	}
 	return n, nil
+}
+
+// Send states.
+const (
+	SendAttempted = "attempted"
+	SendSent      = "sent"
+	SendRefused   = "refused"
+)
+
+// ErrMessageIDTaken: ClaimSend for a new send_id whose message id another
+// send_id already has.
+var ErrMessageIDTaken = errors.New("message id belongs to another send")
+
+// Send is one send_text as the store records it: digests of the chat and
+// the text (SHA-256), never the text.
+type Send struct {
+	SendID     string
+	MessageID  string
+	ChatDigest []byte
+	TextDigest []byte
+	State      string
+	SentAt     string // RFC 3339, state sent
+	Reason     string // state refused
+}
+
+// ClaimSend records rec as attempted, committed (synchronous=FULL) before
+// it returns, unless its send_id is already recorded: then nothing is
+// written and that record is returned with claimed false. The check and
+// the insert are one IMMEDIATE transaction (the DSN's _txlock), so of any
+// number of concurrent claims for one send_id, across connections or
+// processes, exactly one is claimed.
+func (s *Store) ClaimSend(ctx context.Context, rec Send) (existing Send, claimed bool, err error) {
+	if rec.SendID == "" || rec.MessageID == "" || len(rec.ChatDigest) != 32 || len(rec.TextDigest) != 32 {
+		return Send{}, false, ErrBadInput
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Send{}, false, ErrStore
+	}
+	defer tx.Rollback()
+	got, found, err := getSend(ctx, tx, `send_id`, rec.SendID)
+	if err != nil {
+		return Send{}, false, err
+	}
+	if found {
+		return got, false, nil
+	}
+	if _, found, err := getSend(ctx, tx, `message_id`, rec.MessageID); err != nil {
+		return Send{}, false, err
+	} else if found {
+		return Send{}, false, ErrMessageIDTaken
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO sends (send_id, message_id, chat_digest, text_digest, state)
+		VALUES (?, ?, ?, ?, ?)`, rec.SendID, rec.MessageID, rec.ChatDigest, rec.TextDigest, SendAttempted); err != nil {
+		return Send{}, false, ErrStore
+	}
+	if tx.Commit() != nil {
+		return Send{}, false, ErrStore
+	}
+	return Send{}, true, nil
+}
+
+// FinishSend moves an attempted send to sent (with sentAt) or refused
+// (with reason). A send that is no longer attempted is left as it is.
+func (s *Store) FinishSend(ctx context.Context, sendID, state, sentAt, reason string) error {
+	if state != SendSent && state != SendRefused {
+		return ErrBadInput
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sends SET state = ?, sent_at = ?, reason = ?
+		WHERE send_id = ? AND state = ?`, state, nullable(sentAt), nullable(reason), sendID, SendAttempted); err != nil {
+		return ErrStore
+	}
+	return nil
+}
+
+// GetSend reads one send record.
+func (s *Store) GetSend(ctx context.Context, sendID string) (Send, bool, error) {
+	return getSend(ctx, s.db, `send_id`, sendID)
+}
+
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func getSend(ctx context.Context, q querier, column, value string) (Send, bool, error) {
+	var r Send
+	var sentAt, reason sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT send_id, message_id, chat_digest, text_digest, state, sent_at, reason
+		FROM sends WHERE `+column+` = ?`, value).Scan(&r.SendID, &r.MessageID, &r.ChatDigest, &r.TextDigest, &r.State, &sentAt, &reason)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Send{}, false, nil
+	}
+	if err != nil {
+		return Send{}, false, ErrStore
+	}
+	r.SentAt, r.Reason = sentAt.String, reason.String
+	return r, true, nil
+}
+
+func nullable(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Remove deletes a closed store's files: the database, its WAL and shared
