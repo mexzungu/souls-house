@@ -161,4 +161,24 @@ class SessionsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to account_path(user.personal_account)
   end
 
+  test "an accepted team member whose own account was never confirmed lands on home" do
+    user = User.create!(email_address: "invited-member@example.com", password: "password123")
+    assert_not user.personal_membership.confirmed?
+    accounts(:team_account).memberships.create!(user: user, role: "member", invited_by: users(:existing_user), confirmed_at: Time.current)
+
+    post login_path, params: { email_address: user.email_address, password: "password123" }
+
+    assert_redirected_to root_path
+  end
+
+  test "a team member whose own account is also confirmed lands on home" do
+    user = User.create!(email_address: "two-accounts@example.com", password: "password123")
+    user.personal_membership.update!(confirmed_at: Time.current)
+    accounts(:team_account).memberships.create!(user: user, role: "member", invited_by: users(:existing_user), confirmed_at: Time.current)
+
+    post login_path, params: { email_address: user.email_address, password: "password123" }
+
+    assert_redirected_to root_path
+  end
+
 end
