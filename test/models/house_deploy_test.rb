@@ -217,4 +217,74 @@ class HouseDeployTest < ActiveSupport::TestCase
     assert_equal [ 2 ], status[:runs].map { |run| run[:id] }
   end
 
+  test "deploying is true while a deploy workflow runs on master" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [
+      { "path" => ".github/workflows/ci-image.yml", "status" => "in_progress" },
+      { "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "queued" },
+      { "path" => ".github/workflows/deploy-rails.yml", "status" => "completed" }
+    ] } ]
+
+    assert_equal true, HouseDeploy.deploying?
+    assert_equal [ [ :get, "/repos/swombat/souls-house/actions/runs?branch=master&status=in_progress&per_page=100", nil ] ], @calls
+  end
+
+  test "deploying asks GitHub for active runs only, so a long deploy behind newer finished runs still counts" do
+    Rails.cache.clear
+    # The unfiltered listing would be 30+ finished runs with this deploy past
+    # the end; filtered by status, GitHub returns just the waiting deploy.
+    replies = {
+      "in_progress" => [ 200, {}, { "workflow_runs" => [] } ],
+      "queued" => [ 200, {}, { "workflow_runs" => [] } ],
+      "waiting" => [ 200, {}, { "workflow_runs" => [ { "path" => ".github/workflows/deploy-both.yml", "status" => "waiting" } ] } ]
+    }
+    calls = @calls
+    HouseDeploy.transport = ->(method, path, body) { calls << [ method, path, body ]; replies.fetch(path[/status=(\w+)/, 1]) }
+
+    assert_equal true, HouseDeploy.deploying?
+    assert_equal %w[in_progress queued waiting], @calls.map { |call| call[1][/status=(\w+)/, 1] }
+    assert(@calls.all? { |call| call[1].include?("branch=master") && call[1].include?("per_page=100") })
+  end
+
+  test "deploying is unknown when one active listing fails and none found a run" do
+    Rails.cache.clear
+    calls = @calls
+    HouseDeploy.transport = ->(method, path, body) {
+      calls << [ method, path, body ]
+      path.include?("status=queued") ? [ 502, {}, nil ] : [ 200, {}, { "workflow_runs" => [] } ]
+    }
+
+    assert_nil HouseDeploy.deploying?
+    assert_equal 3, @calls.size
+  end
+
+  test "deploying is true while CI runs on master, before any deploy starts" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [ { "path" => ".github/workflows/ci.yml", "status" => "in_progress" } ] } ]
+
+    assert_equal true, HouseDeploy.deploying?
+  end
+
+  test "deploying is false when only finished or unrelated runs are listed" do
+    Rails.cache.clear
+    @reply = [ 200, {}, { "workflow_runs" => [
+      { "path" => ".github/workflows/ci-image.yml", "status" => "in_progress" },
+      { "path" => ".github/workflows/ci.yml", "status" => "completed" },
+      { "path" => ".github/workflows/deploy-both.yml@refs/heads/master", "status" => "completed" }
+    ] } ]
+
+    assert_equal false, HouseDeploy.deploying?
+  end
+
+  test "deploying is unknown without a token or when GitHub fails" do
+    Rails.cache.clear
+    @reply = [ nil, {}, nil ]
+    assert_nil HouseDeploy.deploying?
+
+    HouseDeploy.token_source = -> { nil }
+    @calls.clear
+    assert_nil HouseDeploy.deploying?
+    assert_empty @calls
+  end
+
 end
