@@ -4,8 +4,9 @@
   import SoulSeedStep from '$lib/components/agents/birth/soul-seed-step.svelte';
   import AppearanceStep from '$lib/components/agents/birth/appearance-step.svelte';
   import BeginningStep from '$lib/components/agents/birth/beginning-step.svelte';
+  import BirthScene from '$lib/components/agents/birth/birth-scene.svelte';
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
+  import { fade, fly } from 'svelte/transition';
   import { useForm, router } from '@inertiajs/svelte';
   import { Button } from '$lib/components/shadcn/button/index.js';
 
@@ -27,7 +28,14 @@
   } = $props();
 
   const draftKey = `helixkit:agent-birth-draft:${account.id}`;
-  const steps = ['Beginning', 'Appearance', 'Soul seed', 'Runtime', 'Review'];
+  const steps = ['Welcome', 'Appearance', 'Soul seed', 'Runtime', 'Review'];
+  const captions = [
+    'Someone with a home of their own here: files, memory, and time.',
+    'A name and a colour to start with. Both can change later.',
+    'A few words for them to grow from.',
+    'The model they think with, and where they live.',
+    'Everything is ready when you are.',
+  ];
 
   let step = $state(0);
   let selectedModel = $state(default_model_id);
@@ -37,6 +45,8 @@
   let openBeginning = $state(false);
   let acknowledged = $state(false);
   let draftReady = $state(false);
+  let importOpen = $state(false);
+  let hasImport = $derived(Boolean(githubResidentImportUrl || residentImportUrl));
 
   let form = useForm({
     agent: {
@@ -130,28 +140,24 @@
 </script>
 
 <svelte:head>
-  <title>Begin a resident</title>
+  <title>A new resident</title>
 </svelte:head>
 
 <div class="mx-auto max-w-4xl px-4 py-8 sm:px-8">
-  <div class="mb-8">
-    {#if githubResidentImportUrl}
-      <p class="mb-4 text-sm">
-        <a class="text-primary underline" href={githubResidentImportUrl}>Bring an existing GitHub resident instead</a>
-      </p>
-    {/if}
-    {#if residentImportUrl}
-      <p class="mb-4 text-sm">
-        <a class="text-primary underline" href={residentImportUrl}>Import a resident archive instead</a>
-      </p>
-    {/if}
-    <p class="text-sm font-medium text-primary">Begin a resident</p>
-    <h1 class="mt-1 text-3xl font-bold">Offer a beginning</h1>
-    <p class="mt-2 max-w-2xl text-muted-foreground">
-      A persistent resident with their own runtime, files, and memory — beginning with a seed you offer, and a gentle
-      first wake.
-    </p>
-  </div>
+  <header class="mb-8 text-center">
+    <BirthScene {step} colour={$form.agent.colour} processing={$form.processing} />
+    <h1 class="mt-2 text-3xl font-bold">A new resident</h1>
+    <div class="mt-2 grid">
+      {#key step}
+        <p
+          class="text-muted-foreground [grid-area:1/1]"
+          in:fade={{ duration: 300, delay: 150 }}
+          out:fade={{ duration: 150 }}>
+          {captions[step]}
+        </p>
+      {/key}
+    </div>
+  </header>
 
   <nav class="mb-10" aria-label="Creation progress">
     <ol class="flex items-start">
@@ -263,7 +269,33 @@
     </CardFooter>
   </Card>
 
-  <p class="mt-4 text-center text-xs text-muted-foreground">
-    Your uncommitted draft is saved only in this browser until you create the resident.
+  {#if hasImport}
+    <div class="mt-6 text-center text-sm" data-testid="resident-import-options">
+      <button
+        type="button"
+        class="text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+        aria-expanded={importOpen}
+        aria-controls="resident-import-choices"
+        onclick={() => (importOpen = !importOpen)}>
+        Import a resident instead
+      </button>
+      {#if importOpen}
+        <div
+          id="resident-import-choices"
+          class="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center sm:gap-6">
+          {#if githubResidentImportUrl}
+            <a class="text-primary underline underline-offset-4" href={githubResidentImportUrl}
+              >Bring an existing GitHub resident</a>
+          {/if}
+          {#if residentImportUrl}
+            <a class="text-primary underline underline-offset-4" href={residentImportUrl}>Import a resident archive</a>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  <p class="mt-6 text-center text-xs text-muted-foreground">
+    Your draft is saved only in this browser until you create the resident.
   </p>
 </div>

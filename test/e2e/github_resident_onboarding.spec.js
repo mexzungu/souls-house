@@ -21,6 +21,7 @@ test('GitHub onboarding makes the request and account approval boundary visible'
   try {
     await login(page, setup, setup.primary_user);
     await page.goto(`/accounts/${setup.account_param}/residents/new`);
+    await page.getByRole('button', { name: 'Import a resident instead', exact: true }).click();
     await page.getByRole('link', { name: /Bring.*GitHub resident/i }).click();
     await expect(page.getByRole('heading', { name: 'Bring an existing GitHub resident' })).toBeVisible();
     await expect(page.getByText(/token format is not proof of least privilege/i).first()).toBeVisible();

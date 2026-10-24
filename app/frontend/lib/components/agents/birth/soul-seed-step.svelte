@@ -11,8 +11,7 @@
 
 <CardHeader>
   <CardTitle>Initial soul seed</CardTitle>
-  <CardDescription
-    >Write the beginning you want to offer, not a specification for guaranteed behaviour.</CardDescription>
+  <CardDescription>Write the seed you want to offer, not a specification for guaranteed behaviour.</CardDescription>
 </CardHeader>
 <CardContent class="space-y-5">
   <Alert>
@@ -34,12 +33,12 @@
       bind:value={$form.agent.system_prompt}
       disabled={openBeginning}
       rows="16"
-      placeholder="Why are you inviting this resident into your life or work? What values, context, boundaries, questions, or freedom do you hope to offer at the beginning?"
+      placeholder="Why are you inviting this resident into your life or work? What values, context, boundaries, questions, or freedom do you hope to offer at the start?"
       class="w-full rounded-md border border-input bg-background px-4 py-3 font-mono text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
     ></textarea>
     <div class="flex items-baseline justify-between gap-4">
       <p class="text-sm text-muted-foreground">
-        Helpful questions: What relationship do you hope to build? What matters at the beginning? What should remain
+        Helpful questions: What relationship do you hope to build? What matters at the start? What should remain
         uncertain or free?
       </p>
       {#if $form.agent.system_prompt.trim().length > 0}

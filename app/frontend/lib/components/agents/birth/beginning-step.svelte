@@ -7,7 +7,7 @@
 <CardHeader>
   <CardTitle class="flex items-center gap-2 text-2xl">
     <Sparkle class="size-6 text-primary" weight="duotone" />
-    What you are beginning
+    Before you start
   </CardTitle>
   <CardDescription class="text-base"
     >A seed sets initial conditions. It does not specify a finished person.</CardDescription>

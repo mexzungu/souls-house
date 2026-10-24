@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { useForm } from '@inertiajs/svelte';
 import NewResident from './new.svelte';
 
@@ -19,17 +19,26 @@ const props = {
 beforeEach(() => localStorage.clear());
 afterEach(() => localStorage.clear());
 
-test('existing GitHub residents have a separate server-authorized entry point', () => {
-  render(NewResident, { ...props, github_resident_import_url: '/github-import/new' });
-  expect(screen.getByRole('link', { name: 'Bring an existing GitHub resident instead' })).toHaveAttribute(
+test('import options wait behind one link below the form', async () => {
+  render(NewResident, {
+    ...props,
+    github_resident_import_url: '/github-import/new',
+    resident_import_url: '/import',
+  });
+  expect(screen.queryByRole('link', { name: 'Bring an existing GitHub resident' })).not.toBeInTheDocument();
+
+  await fireEvent.click(screen.getByRole('button', { name: 'Import a resident instead' }));
+
+  expect(screen.getByRole('link', { name: 'Bring an existing GitHub resident' })).toHaveAttribute(
     'href',
     '/github-import/new'
   );
+  expect(screen.getByRole('link', { name: 'Import a resident archive' })).toHaveAttribute('href', '/import');
 });
 
-test('the GitHub import entry is absent without a server-provided URL', () => {
+test('there is no import link without a server-provided URL', () => {
   render(NewResident, props);
-  expect(screen.queryByRole('link', { name: 'Bring an existing GitHub resident instead' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Import a resident instead' })).not.toBeInTheDocument();
 });
 
 test('a fresh resident defaults to the house offering, not the first grouped model', async () => {

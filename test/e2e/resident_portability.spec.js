@@ -15,7 +15,8 @@ test('owner can find import before birth, reject a bad archive, and confirm a st
     await page.getByRole('button', { name: /log in/i }).click();
     await expect(page).not.toHaveURL(/\/login/);
     await page.goto(`/accounts/${setup.account_param}/residents/new`);
-    await page.getByRole('link', { name: 'Import a resident archive instead', exact: true }).click();
+    await page.getByRole('button', { name: 'Import a resident instead', exact: true }).click();
+    await page.getByRole('link', { name: 'Import a resident archive', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Import a resident', exact: true })).toBeVisible();
     await expect(page.getByText(/confidential.*unencrypted/i).first()).toBeVisible();
     const upload = page.getByLabel('Resident archive (.tar.gz)');
