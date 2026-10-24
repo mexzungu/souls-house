@@ -40,7 +40,24 @@ module Authentication
     end
 
     def after_authentication_url
-      session.delete(:return_to_after_authenticating) || root_url
+      session.delete(:return_to_after_authenticating) || first_resident_url || root_url
+    end
+
+    # Someone whose only account is their own and who has no resident yet has
+    # nothing to do on the home page: the next step is making a resident, so
+    # sign-up and sign-in land them on that screen instead of the marketing page.
+    def first_resident_url
+      user = Current.session&.user
+      return unless user
+
+      accounts = user.confirmed_accounts.to_a
+      return unless accounts.one?
+
+      account = accounts.first
+      return unless account.personal_account_for?(user)
+      return if account.agents.exists?
+
+      new_account_agent_url(account)
     end
 
     def start_new_session_for(user)

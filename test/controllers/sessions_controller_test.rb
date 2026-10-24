@@ -127,4 +127,38 @@ class SessionsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to root_path
   end
 
+  test "a user with only their own account and no resident lands on the new resident screen" do
+    user = User.create!(email_address: "first-resident@example.com", password: "password123")
+    user.personal_membership.update!(confirmed_at: Time.current)
+    account = user.reload.personal_account
+    assert_empty account.agents
+
+    post login_path, params: { email_address: user.email_address, password: "password123" }
+
+    assert_redirected_to new_account_agent_path(account)
+  end
+
+  test "a user whose own account already has a resident lands on home" do
+    user = User.create!(email_address: "has-resident@example.com", password: "password123")
+    user.personal_membership.update!(confirmed_at: Time.current)
+    account = user.reload.personal_account
+    account.agents.create!(name: "Someone", model_id: "openrouter/auto")
+
+    post login_path, params: { email_address: user.email_address, password: "password123" }
+
+    assert_redirected_to root_path
+  end
+
+  test "a saved return-to url wins over the new resident screen" do
+    user = User.create!(email_address: "returning@example.com", password: "password123")
+    user.personal_membership.update!(confirmed_at: Time.current)
+
+    get account_path(user.reload.personal_account)
+    assert_redirected_to login_path
+
+    post login_path, params: { email_address: user.email_address, password: "password123" }
+
+    assert_redirected_to account_path(user.personal_account)
+  end
+
 end

@@ -61,6 +61,6 @@ class Agents::MemoryOverviewsControllerTest < ActionDispatch::IntegrationTest
 
   def login(user)
     post login_path, params: { email_address: user.email_address, password: "password123" }
-    assert_redirected_to root_path
+    assert_response :redirect
   end
 end

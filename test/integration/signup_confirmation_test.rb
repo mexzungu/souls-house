@@ -46,7 +46,7 @@ class SignupConfirmationTest < ActionDispatch::IntegrationTest
       first_name: "Signup",
       last_name: "Confirmation"
     }
-    assert_redirected_to root_path
+    assert_redirected_to new_account_agent_path(user.reload.personal_account)
 
     # User should have password now
     user.reload
