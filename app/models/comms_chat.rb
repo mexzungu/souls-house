@@ -17,6 +17,7 @@ class CommsChat < ApplicationRecord
 
   belongs_to :service_connection
   has_many :comms_messages, dependent: :restrict_with_error
+  has_many :comms_sends, dependent: :restrict_with_error
 
   encrypts :name
 

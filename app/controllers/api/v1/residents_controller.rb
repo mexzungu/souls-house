@@ -130,6 +130,31 @@ module Api
         render json: { service_connection: service_connection_json(connection, access) }
       end
 
+      # PATCH /api/v1/residents/:id/service_accesses/:connection_id/send_grant
+      # Lets the resident send through a comms connection as its owner, or
+      # stops it. Only the owner can grant; whoever manages the connection
+      # can withdraw. 404 unless sending is switched on for the provider.
+      def service_send_grant
+        connection = @account.service_connections.find_by_public_id!(params[:connection_id])
+        raise ActiveRecord::RecordNotFound unless CommsSending.available_for?(connection)
+
+        can_send = ActiveModel::Type::Boolean.new.cast(params.require(:can_send))
+        unless connection.send_grant_changeable_by?(current_api_user, can_send: can_send)
+          return render json: { error: can_send ? "Only the connection's owner can let a resident send" : "You cannot manage this connection" },
+                        status: :forbidden
+        end
+
+        access = @agent.agent_service_accesses.find_by(service_connection: connection)
+        return render json: { error: "Enable this resident's access first" }, status: :conflict if access.nil?
+
+        access.change_send_grant!(can_send, actor: current_api_user)
+        audit_human_action(can_send ? :grant_resident_comms_send : :withdraw_resident_comms_send,
+                           connection, account: @account, resident_id: @agent.to_param, provider: connection.provider)
+        render json: { service_connection: service_connection_json(connection, access) }
+      rescue AgentServiceAccess::SendGrantRefused => error
+        render json: { error: error.message }, status: :conflict
+      end
+
       private
 
       def require_residents_enabled!
@@ -225,7 +250,9 @@ module Api
         connection.as_connection_json(current_user: current_api_user).merge(
           enabled: access&.enabled? || false,
           provisioning_status: access&.provisioning_status
-        )
+        ).tap do |json|
+          json[:can_send] = access&.can_send? || false if CommsSending.available_for?(connection)
+        end
       end
 
       def render_invalid(errors)

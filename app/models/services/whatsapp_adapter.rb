@@ -68,6 +68,31 @@ module Services
       connection.record_unpair_failure!(e)
     end
 
+    # Sending (CommsSending). The three things a provider supplies.
+
+    # WhatsApp's own message id shape, as whatsmeow's Client.GenerateMessageID
+    # makes it for a non-Messenger client (go.mau.fi/whatsmeow
+    # v0.0.0-20261007111105-c386243a72ba, send.go): "3EB0" followed by 9
+    # bytes as upper-case hex. whatsmeow hashes the time, own JID and 16
+    # random bytes; the result is indistinguishable from 9 random bytes, so
+    # Rails uses those. The connector passes it unchanged as
+    # SendRequestExtra{ID: ...}.
+    SEND_MESSAGE_ID_FORMAT = /\A3EB0[0-9A-F]{18}\z/
+
+    def new_send_message_id
+      "3EB0#{SecureRandom.hex(9).upcase}"
+    end
+
+    # The session a send is bound to: the pairing attempt, which
+    # start_pairing hands the connector and every connector event carries.
+    def send_generation(connection)
+      connection.pairing_attempt
+    end
+
+    def send_text(send)
+      CommsConnector.send_text(send)
+    end
+
     private
 
     def credential_fingerprint(secret)

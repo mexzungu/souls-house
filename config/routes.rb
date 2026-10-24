@@ -148,6 +148,8 @@ Rails.application.routes.draw do
         post :restart
         post :phone
       end
+      # What residents sent as the owner, and the send grant history. Owner only.
+      resource :comms_sends, only: :show, controller: "service_connection_sends"
       resource :login, only: :show, controller: "service_connection_logins" do
         post :phone
         post :code
@@ -227,7 +229,10 @@ Rails.application.routes.draw do
           post :code
         end
         resource :provider_subscription_usage, only: :show
-        resources :service_accesses, only: :update
+        resources :service_accesses, only: :update do
+          # Sending as a comms connection's owner: granted by the owner only.
+          resource :send_grant, only: :update, controller: "service_send_grants"
+        end
         resource :tailnet, only: [ :show, :create ]
         resources :memories, only: [ :create ] do
           resource :discard, only: [ :create, :destroy ], module: :memories
@@ -503,6 +508,7 @@ Rails.application.routes.draw do
           post :orientation_retry
           get :memory_overview
           patch "service_accesses/:connection_id", action: :service_access, as: :service_access
+          patch "service_accesses/:connection_id/send_grant", action: :service_send_grant, as: :service_send_grant
         end
       end
       resources :telegram_conversations, only: :show
@@ -533,7 +539,7 @@ Rails.application.routes.draw do
         resource :access_token, only: :show, controller: "service_connection_tokens"
         namespace :comms do
           resources :chats, only: :index
-          resources :messages, only: :index
+          resources :messages, only: %i[index create]
           resource :search, only: :show
         end
       end

@@ -70,3 +70,8 @@ Rails.application.config.filter_parameters += [
 # arriving together pushed everything else out of the web container's 10 MB
 # log (2026-10-20), and a transcript is as private as a message.
 Rails.application.config.filter_parameters += [ /\A(?:words|text)\z/ ]
+
+# Sending through a comms connection (WhatsApp spec §5): the text is `text`
+# (filtered above), and the chat a resident names is a provider chat id,
+# which for WhatsApp is a phone number.
+Rails.application.config.filter_parameters += [ /\Achat\z/ ]
