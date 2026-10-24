@@ -31,6 +31,22 @@ class Accounts::BillingsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "complimentary", resident.dig("entitlement", "state")
   end
 
+  test "disabled residents are left off the list and can't be checked out" do
+    @agent.update!(active: false)
+
+    get account_billing_path(@account)
+
+    assert_response :success
+    assert_nil inertia_shared_props["residents"].find { |row| row["id"] == @agent.to_param }
+
+    Billing.stub(:client, @stripe) do
+      post checkout_account_billing_path(@account), params: { agent_id: @agent.to_param, tier: "conversation" },
+        headers: { "X-Inertia" => "true" }
+    end
+    assert_response :not_found
+    assert_empty @stripe.checkout_sessions
+  end
+
   test "checkout sends the owner to Stripe with tax, VAT ID collection and the resident in metadata" do
     Billing.stub(:client, @stripe) do
       post checkout_account_billing_path(@account), params: { agent_id: @agent.to_param, tier: "conversation" },
