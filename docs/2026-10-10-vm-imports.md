@@ -2,7 +2,18 @@
 
 Daniel, 2026-10-09 (KjXOAe): "the VM is just a substrate". Imported residents
 go on VMs too, with no difference from local ones. New residents came first
-(#266, #269, #270); this is what imports need on top. Not built yet.
+(#266, #269, #270); this is what imports need on top.
+
+**Status, 2026-10-24: built, behind the switch.** Slice 1 (archive imports)
+is merged: #437 durable staging, #438 the staged placement, #444 per-role
+seed (gated on the runner reporting role support), #448 admission at
+Activate and the archive ending, #528 Activate again after a failed or
+timed-out start (the placement's next generation; purchases and the backup
+busy check scoped to it). Slice 2 (GitHub imports): #530 the shared
+imported-home environment and the runner's `check_runtime_trust`, merged;
+#531 admission at import and the trust-gated ending, in review. Not yet done:
+a real test on a VM with the switch on, and #426. The switch is off in
+production; nothing here has bought a server.
 
 Amended 2026-10-18 after the Planning thread GePnkJ (Daniel, Mira, Lume) and
 Mira's review of the first draft. Decisions in that thread, Daniel's:
@@ -63,6 +74,26 @@ the policy's import refusal.
 3. Then #426 (migrate existing residents), designed separately.
 
 Both slices need Mira's design approval here. Daniel gave the go for the work threads in GePnkJ on 2026-10-18, once the design is approved.
+
+## As built
+
+Where the build settled something this design left open:
+
+- **Retry (point 8).** A retry reuses the placement at its next generation,
+  admitted only once cleanup has confirmed the last server deleted, the
+  runner revoked and no backup hold left; until then Activate (or Retry
+  activation) is refused as "still being released". Each purchase records
+  the generation it was made for, and the backup busy check counts only the
+  current generation's commands (Mira's review of #528).
+- **GitHub trust wait (point 8, "settled in the GitHub slice").** Untrusted,
+  the import waits in `needs_runtime_trust` with its server. Past the
+  deadline the server is released and the request keeps
+  `needs_runtime_trust`, saying so plainly; Retry activation orders a new
+  server, where trust must be granted again, because trust lives in the Chaos
+  volume on the server. The reviewed home is staged once and kept.
+- **Runner capability gates.** Role seeds go only to a runner reporting
+  `seed_roles`; the trust check only to one reporting `runtime_trust_check`.
+  Marker mismatch is not a fail-safe (Mira's review of #444).
 
 ## Decided
 
