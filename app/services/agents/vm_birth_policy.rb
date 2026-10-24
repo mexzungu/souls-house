@@ -14,8 +14,9 @@ module Agents
   # resident can use runs on a VM too (house inference, account API keys,
   # subscription logins). An archive import is not refused here: it is staged
   # with no server, and admitted when it is activated
-  # (docs/2026-10-10-vm-imports.md). GitHub imports are still refused. The
-  # reasons are checked in order, so the one a person sees is
+  # (docs/2026-10-10-vm-imports.md). A GitHub import is admitted at import,
+  # by the same checks as a birth, because its runtime trust check needs its
+  # server. The reasons are checked in order, so the one a person sees is
   # the one they can act on soonest. admit! re-checks under the procurement
   # admission lock and commits the placement in the same transaction, so two
   # births can't both take the last slot.
@@ -23,8 +24,6 @@ module Agents
 
     class Refused < HostedProvisioning::ConfigurationError; end
 
-    IMPORT_REFUSAL = "This house creates new residents on their own server, and imported residents can't " \
-                     "be created that way yet. A site admin can switch it off in Site Admin → Settings.".freeze
     NOT_CONFIGURED_REFUSAL = "This house creates new residents on their own server, but server ordering " \
                              "isn't configured. Ask a site admin.".freeze
     LIMIT_REFUSAL = "This house creates new residents on their own server, and it has reached its limit " \
@@ -34,6 +33,9 @@ module Agents
     IMPORT_SWITCHED_OFF = "This resident runs on its own server, and this house isn't creating resident servers " \
                           "right now. It stays imported, inactive and paused. Ask a site admin.".freeze
     ALREADY_ACTIVATING = "This resident is already being started on its own server.".freeze
+    # What admit_import! can admit again after a failed attempt. An archive
+    # import is first admitted there too; a GitHub import first by admit!.
+    IMPORT_KINDS = %w[archive_import github_import].freeze
     STILL_RELEASING = "Its last start on its own server failed, and that server is still being released. " \
                       "Try again in a few minutes. It stays imported, inactive and paused.".freeze
     # From admission to first verified backup. Past it the birth fails and its
@@ -56,12 +58,11 @@ module Agents
 
     # nil means yes. kind is :birth for a new resident, :archive_import for an
     # archive import (staged now, admitted at Activate, so nothing to refuse
-    # yet) and :import for a GitHub import. model_id, when given, is the new
-    # resident's.
+    # yet) and :import for a GitHub import, which is checked as a birth.
+    # model_id, when given, is the new resident's.
     def refusal(kind: :birth, model_id: nil)
       return nil unless enabled?
       return nil if kind == :archive_import
-      return IMPORT_REFUSAL if kind == :import
       return NOT_AVAILABLE_REFUSAL unless vm_backups_available?
       return NOT_CONFIGURED_REFUSAL unless procurement_configured?
       return LIMIT_REFUSAL if remaining <= 0
@@ -78,7 +79,14 @@ module Agents
     # procurement admission lock, after checking again with the lock held.
     # The placement durably records that the switch admitted it; nothing
     # later re-reads the switch. Returns the placement.
-    def admit!(agent:, requested_by:, now: Time.current)
+    # kind is "birth", or "github_import" for a GitHub import admitted at
+    # import (docs/2026-10-10-vm-imports.md, points 2 and 4). A block, given,
+    # runs inside the same transaction once the placement exists: a GitHub
+    # import records its staged home there, so an admitted import always has
+    # one and a refused one leaves nothing.
+    def admit!(agent:, requested_by:, kind: "birth", now: Time.current)
+      raise ArgumentError, "unknown admission kind #{kind.inspect}" unless %w[birth github_import].include?(kind)
+
       AgentPlacement.transaction do
         AgentPlacement.connection.execute("SELECT pg_advisory_xact_lock(#{CloudProcurement::ADMISSION_LOCK})")
         @setting.reload
@@ -87,8 +95,10 @@ module Agents
         refuse!(kind: :birth, model_id: agent.model_id)
         agent.uuid ||= SecureRandom.uuid_v7
         agent.save!
-        AgentPlacement.create!(agent:, backend: "hetzner_cloud", kind: "birth", state: "pending", admitted_by_setting_at: now,
-          birth_deadline_at: now + BIRTH_DEADLINE, birth_requested_by: requested_by)
+        placement = AgentPlacement.create!(agent:, backend: "hetzner_cloud", kind:, state: "pending",
+          admitted_by_setting_at: now, birth_deadline_at: now + BIRTH_DEADLINE, birth_requested_by: requested_by)
+        yield placement if block_given?
+        placement
       end
     end
 
@@ -117,7 +127,7 @@ module Agents
 
         placement.lock!
         retry_attempt = retryable_import?(placement)
-        if !retry_attempt && placement.kind == "archive_import" && %w[failed retired].include?(placement.state)
+        if !retry_attempt && IMPORT_KINDS.include?(placement.kind) && %w[failed retired].include?(placement.state)
           raise Refused, STILL_RELEASING
         end
         raise Refused, ALREADY_ACTIVATING unless placement.staged? || retry_attempt
@@ -137,7 +147,7 @@ module Agents
     # A failed archive activation whose server is confirmed gone. Read under
     # the placement lock by admit_import!.
     def retryable_import?(placement)
-      return false unless placement.backend == "hetzner_cloud" && placement.kind == "archive_import"
+      return false unless placement.backend == "hetzner_cloud" && IMPORT_KINDS.include?(placement.kind)
       return false unless placement.state == "retired" && placement.agent.runtime_ready_at.nil?
       return false if placement.cloud_procurement_operations.unresolved.exists?
       return false if defined?(VmBackup) && VmBackup.holding.exists?(agent_id: placement.agent_id)

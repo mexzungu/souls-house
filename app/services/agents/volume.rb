@@ -30,9 +30,11 @@ module Agents
       end
     end
 
-    def seed_from_directory!(root)
-      ensure!
-      raise SeedError, "Identity volume is not empty; refusing to overwrite a home" unless empty?
+    # What a reviewed checkout puts into an identity home, path by path. The
+    # same list seeds a house volume here and a VM's identity volume through
+    # its staged archive (Agents::GithubImportStage), so the two hold the same
+    # files.
+    def self.home_entries!(root)
       entries = {}
       Dir.glob(File.join(root, "**", "*"), File::FNM_DOTMATCH).each do |path|
         next if [ ".", ".." ].include?(File.basename(path))
@@ -44,6 +46,13 @@ module Agents
           "size" => stat.size, "mode" => stat.mode & 0755 }
       end
       raise SeedError, "Seed exceeds file limit" if entries.size > Agents::GithubImportSource::MAX_FILES * 2
+      entries
+    end
+
+    def seed_from_directory!(root)
+      ensure!
+      raise SeedError, "Identity volume is not empty; refusing to overwrite a home" unless empty?
+      entries = self.class.home_entries!(root)
       Dir.mktmpdir("github-resident-seed-") do |dir|
         archive = File.join(dir, "home.tar.gz")
         Agents::Portability::Archive.pack(root, entries, archive)

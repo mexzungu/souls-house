@@ -34,9 +34,12 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
     assert_nil policy.refusal(kind: :import)
   end
 
-  test "with the switch on, GitHub imports are refused before anything else is looked at" do
+  test "with the switch on, a GitHub import is checked exactly as a birth, because it is admitted at import" do
     @setting.update!(new_residents_on_vm: true, vm_resident_limit: 5)
-    assert_equal Agents::VmBirthPolicy::IMPORT_REFUSAL, policy(token: nil).refusal(kind: :import)
+    assert_equal Agents::VmBirthPolicy::NOT_CONFIGURED_REFUSAL, policy(token: nil).refusal(kind: :import)
+    assert_nil policy.refusal(kind: :import)
+    @setting.update!(vm_resident_limit: 0)
+    assert_equal Agents::VmBirthPolicy::LIMIT_REFUSAL, policy.refusal(kind: :import)
   end
 
   test "with the switch on, an archive import is not refused: it is staged and admitted at Activate" do
@@ -147,7 +150,8 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
     end
     request.reload
     assert_equal "failed", request.status
-    assert_equal Agents::VmBirthPolicy::IMPORT_REFUSAL, request.last_error
+    assert_equal Agents::VmBirthPolicy.current.refusal(kind: :import), request.last_error
+    assert request.last_error.present?
   end
 
 end
