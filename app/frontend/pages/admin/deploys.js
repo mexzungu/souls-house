@@ -36,13 +36,35 @@ export function inFlight(runs) {
   return (runs || []).some((run) => run.status !== 'completed');
 }
 
-// The polling state machine. `state` is { runs, error, failures, stopped }.
+// The row above the runs when master is ahead of what is live and its own
+// automatic deploy isn't listed yet: what happens next, or why nothing will.
+const NEXT_LABELS = {
+  waiting_ci: '… waiting for CI, deploys when green',
+  starting: '… CI green, deploy starting',
+  ci_failed: '✗ CI failed, will not deploy automatically',
+  ci_cancelled: '– CI cancelled, will not deploy automatically',
+  ci_unknown: '? could not read CI, retrying',
+};
+
+export function nextLabel(next) {
+  if (!next) return '';
+  return NEXT_LABELS[next.state] || next.state || '';
+}
+
+// Still heading for a deploy on its own, or not known yet because GitHub
+// didn't answer, so worth polling for.
+export function nextPending(next) {
+  return !!next && ['waiting_ci', 'starting', 'ci_unknown'].includes(next.state);
+}
+
+// The polling state machine. `state` is { runs, next, error, failures, stopped }.
 // `result` is one of:
 //   { kind: 'ok', status }      – a JSON status body from the server
 //   { kind: 'transient' }       – network error or 5xx (e.g. Rails restarting)
 //   { kind: 'unauthorized' }    – the session is no longer a site admin
 // A transient failure, or a GitHub error reported in the body, keeps the last
-// known runs, so a run that was in flight is still in flight and polling goes on.
+// known runs (and next row), so a run that was in flight is still in flight
+// and polling goes on.
 export function applyPollResult(state, result) {
   if (result.kind === 'unauthorized') {
     return { ...state, stopped: true, error: 'Signed out or no longer a site admin. Reload the page.' };
@@ -70,15 +92,17 @@ export function applyPollResult(state, result) {
     const kept = (state.runs || []).filter((run) => run.workflow === 'rails_auto');
     const fresh = (status.runs || []).filter((run) => run.workflow !== 'rails_auto');
     const runs = [...fresh, ...kept].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
-    return { runs, error: status.partial_error, failures: 0, stopped: false };
+    return { runs, next: state.next ?? null, error: status.partial_error, failures: 0, stopped: false };
   }
-  return { runs: status.runs || [], error: null, failures: 0, stopped: false };
+  // next_unknown: the server couldn't read master this time; keep the row we had.
+  const next = status.next_unknown ? (state.next ?? null) : (status.next ?? null);
+  return { runs: status.runs || [], next, error: null, failures: 0, stopped: false };
 }
 
 export function shouldPoll(state, requestedAt, now) {
   if (state.stopped) return false;
   if (requestedAt && now - requestedAt < POLL_AFTER_REQUEST_MS) return true;
-  return inFlight(state.runs);
+  return inFlight(state.runs) || nextPending(state.next);
 }
 
 // Classifies a fetch Response for applyPollResult (body read separately).

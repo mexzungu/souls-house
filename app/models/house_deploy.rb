@@ -52,6 +52,10 @@ class HouseDeploy
 
   class_attribute :token_source, default: -> { Rails.application.credentials.dig(:github, :deploy_token) }
 
+  # The sha the running build was made from (Kamal sets it), so the page can
+  # tell whether master is ahead of what is live.
+  class_attribute :deployed_version_source, default: -> { ENV["KAMAL_VERSION"] }
+
   def self.token
     token_source.call.presence
   end
@@ -93,8 +97,59 @@ class HouseDeploy
 
     automatic, partial_error = automatic_runs
     runs = (deploy_runs(body) + automatic).sort_by { |run| run[:created_at].to_s }.reverse.first(limit)
+    upcoming = partial_error ? nil : next_deploy(automatic)
+    # Couldn't read master: say so, so the page keeps the row it already has
+    # instead of clearing it on a GitHub blip.
+    next_unknown = partial_error.present? || upcoming == :unknown
+    upcoming = nil if upcoming == :unknown
 
-    { configured: true, runs: runs, token_expires_at: expires_at, error: nil, partial_error: partial_error }
+    { configured: true, runs: runs, next: upcoming, next_unknown: next_unknown,
+      token_expires_at: expires_at, error: nil, partial_error: partial_error }
+  end
+
+  # What happens next when master is ahead of the running build and no
+  # automatic run for master's head is listed yet. A superseded run reads like
+  # the end of the story; the next deploy is the newer commit's own green CI,
+  # and this says where that stands. nil when live is master, when an
+  # automatic run for master's head is already on the list, or when there is
+  # no deployed sha. :unknown when GitHub didn't say what master is.
+  #
+  # state: waiting_ci / starting (CI green, deploy run not listed yet) /
+  # ci_failed / ci_cancelled / ci_unknown (CI lookup failed; worth retrying).
+  def self.next_deploy(automatic)
+    deployed = deployed_version_source.call.to_s[DeployInfo::SHA, 1]
+    return nil if deployed.blank?
+
+    status, _headers, commit = transport.call(:get, "/repos/#{repo}/commits/#{REF}", nil)
+    return :unknown unless status == 200 && commit.is_a?(Hash) && commit["sha"].is_a?(String)
+
+    sha = commit["sha"]
+    return nil if sha.start_with?(deployed)
+
+    short = sha.first(7)
+    return nil if automatic.any? { |run| run[:head_sha] == short }
+
+    status, _headers, body = transport.call(:get, "/repos/#{repo}/actions/workflows/#{CI_FILE}/runs?head_sha=#{sha}&event=push&per_page=1", nil)
+    ci = status == 200 && body.is_a?(Hash) ? Array(body["workflow_runs"]).first : nil
+
+    {
+      head_sha: short,
+      message: commit.dig("commit", "message").to_s.lines.first.to_s.strip.truncate(80),
+      state: next_state(status, ci),
+      url: ci&.dig("html_url") || commit["html_url"]
+    }
+  end
+
+  def self.next_state(status, ci)
+    return "ci_unknown" unless status == 200
+    # A push's CI run can take a few seconds to be listed.
+    return "waiting_ci" if ci.nil? || ci["status"] != "completed"
+
+    case ci["conclusion"]
+    when "success" then "starting"
+    when "cancelled" then "ci_cancelled"
+    else "ci_failed"
+    end
   end
 
   DEPLOYING_TTL = 15.seconds

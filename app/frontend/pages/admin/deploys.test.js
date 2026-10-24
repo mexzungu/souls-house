@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   runLabel,
+  nextLabel,
+  nextPending,
   shouldPoll,
   applyPollResult,
   classifyResponse,
@@ -10,7 +12,7 @@ import {
 
 const running = { id: 1, status: 'in_progress' };
 const done = { id: 1, status: 'completed', conclusion: 'success' };
-const fresh = (runs = []) => ({ runs, error: null, failures: 0, stopped: false });
+const fresh = (runs = []) => ({ runs, next: null, error: null, failures: 0, stopped: false });
 
 describe('runLabel', () => {
   it('labels in-flight and finished runs', () => {
@@ -132,5 +134,51 @@ describe('applyPollResult with a partial failure', () => {
     expect(after.error).toMatch(/automatic deploys/);
     expect(after.stopped).toBe(false);
     expect(shouldPoll(after, 0, 1000)).toBe(true);
+  });
+});
+
+describe('next deploy row', () => {
+  const waiting = { head_sha: '7591bb2', message: 'Added stripe credentials', state: 'waiting_ci' };
+
+  it('says what happens next, or why nothing will', () => {
+    expect(nextLabel(waiting)).toBe('… waiting for CI, deploys when green');
+    expect(nextLabel({ state: 'starting' })).toBe('… CI green, deploy starting');
+    expect(nextLabel({ state: 'ci_failed' })).toMatch(/CI failed, will not deploy/);
+    expect(nextLabel({ state: 'ci_cancelled' })).toMatch(/CI cancelled/);
+    expect(nextLabel(null)).toBe('');
+  });
+
+  it('keeps polling while the next deploy is still coming, and stops when it will not', () => {
+    expect(nextPending(waiting)).toBe(true);
+    expect(nextPending({ state: 'starting' })).toBe(true);
+    expect(nextPending({ state: 'ci_failed' })).toBe(false);
+    expect(shouldPoll({ ...fresh([done]), next: waiting }, 0, 1000)).toBe(true);
+    expect(shouldPoll({ ...fresh([done]), next: { state: 'ci_failed' } }, 0, 1000)).toBe(false);
+  });
+
+  it('takes the next row from a fresh status and keeps it through a failed poll', () => {
+    const state = applyPollResult(fresh([done]), { kind: 'ok', status: { runs: [done], next: waiting } });
+    expect(state.next).toEqual(waiting);
+    expect(applyPollResult(state, { kind: 'transient' }).next).toEqual(waiting);
+    expect(applyPollResult(state, { kind: 'ok', status: { runs: [done] } }).next).toBeNull();
+  });
+
+  it('an unreadable CI result keeps polling until GitHub answers', () => {
+    const unknown = { ...waiting, state: 'ci_unknown' };
+    expect(nextLabel(unknown)).toMatch(/retrying/);
+    expect(nextPending(unknown)).toBe(true);
+    let state = applyPollResult(fresh([done]), { kind: 'ok', status: { runs: [done], next: unknown } });
+    expect(shouldPoll(state, 0, 1000)).toBe(true);
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: waiting } });
+    expect(state.next).toEqual(waiting);
+  });
+
+  it('a failed master lookup keeps the row it had and keeps polling', () => {
+    let state = applyPollResult(fresh([done]), { kind: 'ok', status: { runs: [done], next: waiting } });
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: null, next_unknown: true } });
+    expect(state.next).toEqual(waiting);
+    expect(shouldPoll(state, 0, 1000)).toBe(true);
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: { ...waiting, state: 'starting' } } });
+    expect(state.next.state).toBe('starting');
   });
 });

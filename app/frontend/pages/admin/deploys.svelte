@@ -4,12 +4,12 @@
   import { Card, CardHeader, CardTitle, CardDescription } from '$lib/components/shadcn/card';
   import { Button } from '$lib/components/shadcn/button';
   import { RocketLaunch, ArrowSquareOut } from 'phosphor-svelte';
-  import { runLabel, shouldPoll, applyPollResult, classifyResponse, expiryWarning } from './deploys.js';
+  import { runLabel, nextLabel, shouldPoll, applyPollResult, classifyResponse, expiryWarning } from './deploys.js';
 
   let { workflows = [], repo = '', deploy_status = null, just_requested = false, flash = {}, pollMs = 8000 } = $props();
   let sending = $state(null);
   let requestedAt = $state(0);
-  let poll = $state({ runs: [], error: null, failures: 0, stopped: false });
+  let poll = $state({ runs: [], next: null, error: null, failures: 0, stopped: false });
   let seeded = false;
   let destroyed = false;
   let busy = false;
@@ -136,6 +136,30 @@
 
   {#if status.configured}
     <h2 class="text-lg font-semibold mt-8 mb-3">Recent runs</h2>
+    {#if poll.next}
+      <div
+        class="mb-3 flex items-center justify-between gap-3 rounded-md border border-dashed px-3 py-2 text-sm"
+        data-testid="deploy-next">
+        <div class="min-w-0">
+          <div class="font-medium">Next: Deploy Rails (automatic)</div>
+          <div class="text-xs text-muted-foreground truncate">
+            {poll.next.head_sha}{poll.next.message ? ` · ${poll.next.message}` : ''}
+          </div>
+        </div>
+        {#if poll.next.url}
+          <a
+            href={poll.next.url}
+            target="_blank"
+            rel="noopener"
+            class="flex items-center gap-1 shrink-0 hover:underline">
+            {nextLabel(poll.next)}
+            <ArrowSquareOut class="size-3.5" />
+          </a>
+        {:else}
+          <span class="shrink-0">{nextLabel(poll.next)}</span>
+        {/if}
+      </div>
+    {/if}
     {#if poll.runs.length === 0}
       <p class="text-sm text-muted-foreground">No deploy runs found.</p>
     {:else}
