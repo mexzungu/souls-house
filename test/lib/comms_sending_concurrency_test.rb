@@ -63,6 +63,30 @@ class CommsSendingConcurrencyTest < ActiveSupport::TestCase
     assert_equal CommsSending::PER_MINUTE, CommsSend.where(service_connection_id: @connection.id).count
   end
 
+  # Pacing is per connection, so different residents' claims must also be
+  # serialised: by the connection's row lock, not only by each resident's
+  # own access row.
+  test "concurrent new requests from different residents cannot pass the pacing cap together" do
+    room = 2
+    fill_dispatched(CommsSending::PER_MINUTE - room)
+    residents = [ @agent, agents(:code_reviewer), agents(:with_save_memory_tool), agents(:without_tools) ]
+    residents.drop(1).each do |agent|
+      agent.agent_service_accesses.create!(service_connection: @connection, enabled: true).change_send_grant!(true, actor: @owner)
+    end
+
+    index = Concurrent::AtomicFixnum.new(-1)
+    calls, results = race do
+      agent = residents.fetch(index.increment)
+      CommsSending.request!(connection: @connection, agent: agent, chat: @chat, text: "hello", client_request_id: "per-resident")
+    end
+
+    created = results.select { |result| result.is_a?(CommsSending::Result) && result.created }
+    assert_equal room, created.size, results.inspect
+    assert_equal THREADS - room, results.count { |result| result.is_a?(CommsSending::Refused) && result.code == :rate_limited }
+    assert_equal room, calls.size
+    assert_equal CommsSending::PER_MINUTE, CommsSend.where(service_connection_id: @connection.id).count
+  end
+
   test "concurrent retries of an old pending backlog against a nearly full minute make one call" do
     room = 1
     fill_dispatched(CommsSending::PER_MINUTE - room)
