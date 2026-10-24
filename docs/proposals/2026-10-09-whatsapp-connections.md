@@ -2,6 +2,8 @@
 
 Status: **proposal, not implemented.** Revision 3, re-scoped after Daniel's
 correction in OjyBlJ. Reviewed by Mira in RjpvrY. Deploy remains Daniel's call.
+Revision 4 (PR #263, at Daniel's request in OjyBlJ) adds **sending**, §8; its
+Rails side is built, switched off, on branch `lume/whatsapp-send`.
 
 ## The scope correction
 
@@ -38,8 +40,8 @@ A WhatsApp connection is a `ServiceConnection` with `provider: "whatsapp"`
   explicit `connector` branch that gives residents the read endpoint and the
   connection's metadata, **never** the callback secret. (Today every strategy
   other than `refresh_broker` hands over the whole payload.)
-- One access profile, `read`. A `send` profile is reserved and not offered in
-  milestone 1. There is no send code anywhere.
+- One access profile, `read`. Sending is not a profile: it is a per-resident
+  grant on the access row, switched off house-wide by default (§8).
 
 Access is one `AgentServiceAccess` row per resident, the same as for Gmail.
 Enabling access goes through `resident_access_changeable_by?(enabled: true)`,
@@ -176,7 +178,8 @@ for 14 days, and how much history a new device receives.
 - Cross-connection and cross-account reads get 404.
 - A connector event signed for connection A is rejected for connection B, and
   unsigned or badly signed events are rejected.
-- No send endpoint, scope or connector code exists.
+- Sending (§8) is refused (404) and offered nowhere unless the house lists the
+  provider in `COMMS_SEND_PROVIDERS`.
 - The connector restarts and reconnects from its session store with no
   re-pairing.
 - A database backup restores the messages (they are ordinary encrypted
@@ -196,3 +199,101 @@ for 14 days, and how much history a new device receives.
    then the history import and cutover.
 
 Telegram (Telethon user session) follows the same shape in its own room.
+
+## 8. Sending (revision 4, as built in Rails)
+
+A message sent through a connection goes out **as its owner**, from their
+number, and shows on their phone. The requirement is that the owner can always
+see which resident said what, to whom, and when. The machinery is
+provider-neutral (`CommsSending`, `comms_sends`): Telegram's sending
+(proposal 2026-10-11 §8) adds only a dispatcher on its adapter, no parallel
+path.
+
+**Off until switched on.** `COMMS_SEND_PROVIDERS` (comma-separated, empty by
+default) lists the providers sending is offered for; a provider whose adapter
+has no dispatcher (Telegram today) is ignored. Unlisted, the grant control is
+not shown, the grant endpoints and the send endpoint answer 404, and nothing is
+created. Merging changes nothing for anyone.
+
+**The grant.** `agent_service_accesses.can_send`, default `false`. Read never
+implies send. Only the owner (`owner?`) can turn it on: account admins,
+`freely_provisionable` and `enabled_for_new_agents` confer nothing, and no
+other write may set it (a validation allows `true` only inside
+`change_send_grant!`). Anyone who manages the connection can withdraw it. It is
+cleared, never revived, when the access row is disabled, and on every row when
+the connection leaves `connected` (disconnect, logout, error, suspension), its
+session changes (WhatsApp's pairing attempt, Telegram's login generation), its
+number changes, or its owner changes. Grants and withdrawals are recorded in
+`comms_send_grant_events` (who, when, which resident, why). Every path that sets
+or clears it locks the connection row, then the access row, and reads owner,
+status and `enabled` under both locks.
+
+**The endpoint.** `POST /api/v1/service_connections/:id/comms/messages`
+`{ chat, text, client_request_id }`, behind the read scope (404 without
+enabled access, 409 while not connected), then the gate (404), then `can_send`
+(403). One existing chat on this connection (none is created), text only, at
+most 4096 characters and 12 KiB. `client_request_id` is unique per
+(connection, resident): a repeat with the same chat and text returns the
+original record and never calls the connector again; with a different chat or
+text, 409. Pacing per connection, provisional: 6/minute and 100/day, counted by
+`dispatched_at`, plus `pending` claims as reservations at claim time (429 over
+the cap, nothing created). `soulshouse-comms send --chat X --text -
+[--request-id ID]` drives it.
+
+**Claim, dispatch, outcome.** Under the connection's lock the claim creates the
+`comms_sends` row (`pending`), with the provider message id Rails chooses
+(WhatsApp: `3EB0` plus 16 upper-case hex, 20 characters, the shape of
+whatsmeow's package-level `GenerateMessageID` at the pinned version and exactly
+what the connector accepts) and the connection's
+generation. Dispatch, under the lock again, re-checks connected, grant, gate,
+generation and pacing; a refusal is `failed` with `refused_at_dispatch_<why>`
+and no connector call. Otherwise the row becomes `unknown` with `dispatched_at`
+and that commits **before** the connector is called, so a crash mid-call
+leaves `unknown`. Nothing ever retries an `unknown` send. A claim left
+`pending` (the request died before dispatch) is dispatched once by a retry.
+
+**The message, and the echo.** WhatsApp most likely does not echo a message
+back to the linked device that sent it (it reaches the owner's other devices),
+so nothing waits for an echo: on `sent`, Rails stores the message itself in its
+chat (the chosen id, the text, the provider's time, and as sender the
+connection's own account as it stood at dispatch, fixed on the send under the
+lock, so a late acknowledgement after a re-pair onto another number still
+names the account that sent it)
+through the same upsert the connector's events use. A message is linked to its
+send by `comms_messages.comms_send_id`, set by whichever of the stored message
+or echo and the acknowledgement comes second (same chat, same provider message
+id), including the placeholder an edit or deletion leaves first. An echo that
+does arrive is the same row; edits, tombstones and filled placeholders keep
+the link; a body is never rewritten for attribution. The read API shows `sent_by` (resident) on linked
+messages; the owner reads every send and grant at
+`/accounts/:id/service_connections/:id/comms_sends`, cursor-paged by
+(time, id).
+
+**Wire contract (Rails → WhatsApp connector, `send_text`).** Signed like every
+command (`CommsCommandSignature`, `COMMS_COMMAND_KEY`, mutual TLS). Body fields
+beyond the envelope: `attempt` (integer: the pairing attempt the send was
+claimed under, the value `start_pairing` carries as `callback_secret_version`
+and every event carries as `attempt`; the connector refuses any other with 409
+`stale_attempt`), `send_id` (the `CommsSend` public id), `message_id` (passed
+unchanged as `SendRequestExtra{ID}`; bad shape 422 `bad_message_id`), `chat`
+(the JID as the connector reported it; 422 `bad_chat`, or `unsupported_chat`
+for status, newsletters and broadcast lists), `text` (422 `bad_text`).
+Answers, and what Rails records:
+
+| Connector answer | `comms_sends.status` |
+| --- | --- |
+| 200 `{status: "sent", message_id, sent_at}` (also an idempotent replay) | `sent` |
+| 409 `not_connected` / `stale_attempt`; 422 `bad_*` (incl. `bad_send_id`) / `unsupported_chat` / `send_mismatch` / `not_on_whatsapp` / `recipient_lookup_failed` / `group_lookup_failed` / `refused` (+ `reason`) | `failed`, `error_code` (and `error_reason`) |
+| 401 (the connector's verifier refused the command before doing anything) | `failed`, `connector_refused_signature` |
+| 409 `outcome_unknown` (attempted before, outcome never recorded) | `unknown` |
+| anything else: timeout, connection error, 5xx (incl. 500 `send_failed`, 502 `send_unknown`), other 4xx, unparseable | `unknown` |
+| no request made (connector URL, command key or mutual TLS not configured) | `failed` |
+
+Before calling WhatsApp the connector durably records the send id as attempted
+(digests of chat and text, never the text), never calls `SendMessage` twice for
+one send id, and logs neither text nor chat. Rails filters `text`, `chat` and
+`provider_chat_id` from its logs.
+
+**Not built:** media, new conversations, scheduled sends, sending as anyone but
+the owner, signatures, Telegram's dispatcher, and the connector's `send_text`
+(a separate change to the same contract).

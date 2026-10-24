@@ -22,13 +22,16 @@ class Accounts::IntegrationsController < ApplicationController
       can_manage_account: can_manage_account,
       connections: connections.map do |connection|
         tailnet_visible = tailnet_visible?(connection)
+        # Sending as the owner (comms): offered only where sending is
+        # switched on for the provider, and granted by the owner alone.
+        sendable = CommsSending.available_for?(connection)
         json = connection.as_connection_json(current_user: Current.user).merge(
           can_delegate: connection.owner?(Current.user),
           residents: agents.filter_map do |agent|
             access = accesses[[ agent.id, connection.id ]]
             next unless agent.offered_for_sharing?(granted: access&.enabled? || false)
 
-            {
+            resident = {
               id: agent.to_param,
               name: agent.name,
               active: agent.active?,
@@ -40,8 +43,17 @@ class Accounts::IntegrationsController < ApplicationController
               tailnet_url: (account_agent_tailnet_path(current_account, agent) if tailnet_visible && access&.enabled?),
               integrations_url: (edit_account_agent_path(current_account, agent, tab: "integrations") if tailnet_visible)
             }
+            if sendable
+              resident[:can_send] = access&.can_send? || false
+              resident[:send_grant_url] = account_agent_service_access_send_grant_path(current_account, agent, connection.public_id)
+            end
+            resident
           end
         )
+        json[:can_grant_send] = connection.owner?(Current.user) if sendable
+        if comms_sends_visible?(connection, sendable)
+          json[:comms_sends_url] = account_service_connection_comms_sends_path(current_account, connection.public_id)
+        end
         json.merge!(repository_watch_props(connection, repositories.fetch(connection.id, []))) if connection.provider == "github"
         json
       end
@@ -49,6 +61,14 @@ class Accounts::IntegrationsController < ApplicationController
   end
 
   private
+
+  # The owner's record of sends and grants: wherever sending is on, and
+  # wherever there is history to read even if it has since been switched off.
+  def comms_sends_visible?(connection, sendable)
+    return false unless connection.credential_strategy == "connector" && connection.owner?(Current.user)
+
+    sendable || connection.comms_send_grant_events.exists?
+  end
 
   WATCHES_PER_REPOSITORY = 20
 

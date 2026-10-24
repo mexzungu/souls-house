@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_24_100000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_24_120000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -370,6 +370,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_100000) do
     t.string "provisioning_status"
     t.bigint "service_connection_id", null: false
     t.datetime "updated_at", null: false
+    t.boolean "can_send", default: false, null: false
     t.index ["agent_id", "service_connection_id"], name: "idx_on_agent_id_service_connection_id_9030aefd71", unique: true
     t.index ["agent_id"], name: "index_agent_service_accesses_on_agent_id"
     t.index ["service_connection_id"], name: "index_agent_service_accesses_on_service_connection_id"
@@ -711,8 +712,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_100000) do
     t.bigint "edit_version"
     t.datetime "deleted_at"
     t.boolean "placeholder", default: false, null: false
+    t.bigint "comms_send_id"
     t.index ["comms_chat_id", "provider_message_id"], name: "index_comms_messages_on_comms_chat_id_and_provider_message_id", unique: true
     t.index ["comms_chat_id", "sent_at", "id"], name: "index_comms_messages_on_comms_chat_id_and_sent_at_and_id"
+    t.index ["comms_send_id"], name: "index_comms_messages_on_comms_send_id", unique: true
     t.index ["service_connection_id"], name: "index_comms_messages_on_service_connection_id"
   end
 
@@ -722,6 +725,45 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_100000) do
     t.datetime "created_at", null: false
     t.index ["created_at"], name: "index_comms_request_nonces_on_created_at"
     t.index ["service_connection_id", "nonce"], name: "index_comms_request_nonces_on_service_connection_id_and_nonce", unique: true
+  end
+
+  create_table "comms_send_grant_events", force: :cascade do |t|
+    t.bigint "service_connection_id", null: false
+    t.bigint "agent_id", null: false
+    t.bigint "actor_user_id"
+    t.string "action", null: false
+    t.string "reason", null: false
+    t.datetime "created_at", null: false
+    t.index ["actor_user_id"], name: "index_comms_send_grant_events_on_actor_user_id"
+    t.index ["agent_id"], name: "index_comms_send_grant_events_on_agent_id"
+    t.index ["service_connection_id", "created_at", "id"], name: "index_comms_send_grant_events_on_connection_and_time"
+  end
+
+  create_table "comms_sends", force: :cascade do |t|
+    t.bigint "service_connection_id", null: false
+    t.bigint "agent_id", null: false
+    t.bigint "comms_chat_id", null: false
+    t.text "text", null: false
+    t.string "client_request_id", null: false
+    t.string "status", default: "pending", null: false
+    t.string "provider_message_id", null: false
+    t.bigint "connection_generation", null: false
+    t.string "error_code"
+    t.string "error_reason"
+    t.datetime "requested_at", null: false
+    t.datetime "dispatched_at"
+    t.datetime "sent_at"
+    t.text "sender_id"
+    t.text "sender_name"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["agent_id"], name: "index_comms_sends_on_agent_id"
+    t.index ["comms_chat_id"], name: "index_comms_sends_on_comms_chat_id"
+    t.index ["service_connection_id", "agent_id", "client_request_id"], name: "index_comms_sends_on_claim", unique: true
+    t.index ["service_connection_id", "dispatched_at"], name: "index_comms_sends_on_connection_and_dispatched_at"
+    t.index ["service_connection_id", "provider_message_id"], name: "index_comms_sends_on_provider_message_id", unique: true
+    t.index ["service_connection_id", "requested_at", "id"], name: "index_comms_sends_on_connection_and_requested_at"
+    t.index ["service_connection_id", "status", "requested_at"], name: "index_comms_sends_on_connection_status_requested_at"
   end
 
   create_table "companion_cable_tickets", force: :cascade do |t|
@@ -2756,8 +2798,15 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_24_100000) do
   add_foreign_key "cloud_procurement_operations", "users", column: "requested_by_id"
   add_foreign_key "comms_chats", "service_connections"
   add_foreign_key "comms_messages", "comms_chats"
+  add_foreign_key "comms_messages", "comms_sends"
   add_foreign_key "comms_messages", "service_connections"
   add_foreign_key "comms_request_nonces", "service_connections", on_delete: :cascade
+  add_foreign_key "comms_send_grant_events", "agents"
+  add_foreign_key "comms_send_grant_events", "service_connections"
+  add_foreign_key "comms_send_grant_events", "users", column: "actor_user_id"
+  add_foreign_key "comms_sends", "agents"
+  add_foreign_key "comms_sends", "comms_chats"
+  add_foreign_key "comms_sends", "service_connections"
   add_foreign_key "companion_cable_tickets", "companion_devices"
   add_foreign_key "companion_devices", "accounts"
   add_foreign_key "companion_devices", "companion_enrollment_grants"

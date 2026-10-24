@@ -10,11 +10,52 @@ module Api
       #     repeats; the (sent_at, id) cursor does neither.
       # next_cursor is present when a full page came back and is null when
       # the reader has caught up.
+      #
+      # create sends one text into an existing chat as the connection's owner
+      # (WhatsApp spec §5): the read scope, then the gate (404 unless sending
+      # is switched on for this provider), then the resident's can_send grant
+      # (403), then CommsSending's claim and dispatch. 201 for a new send, 200
+      # for a repeat of the same client_request_id; the record's status says
+      # what happened (sent, failed, unknown). Refused requests create
+      # nothing and call no connector.
       class MessagesController < BaseController
+
+        rescue_from CommsSending::Refused do |refusal|
+          render json: { error: refusal.code.to_s, message: refusal.message }, status: refusal.status
+        end
+
+        def create
+          unless CommsSending.available_for?(@connection)
+            raise CommsSending::Refused.new(:not_found, :not_found, "Sending is not available for this connection")
+          end
+
+          access = @connection.agent_service_accesses.find_by!(agent_id: current_api_agent.id)
+          unless access.enabled? && access.can_send?
+            raise CommsSending::Refused.new(:send_not_granted, :forbidden, "This resident may read this connection but not send through it")
+          end
+
+          text = params[:text]
+          unless CommsSend.acceptable_text?(text)
+            raise CommsSending::Refused.new(:invalid_text, :unprocessable_entity,
+                                            "text must be 1 to #{CommsSend::MAX_TEXT_LENGTH} characters of text")
+          end
+          client_request_id = params[:client_request_id]
+          unless client_request_id.is_a?(String) && client_request_id.match?(CommsSend::CLIENT_REQUEST_ID_FORMAT)
+            raise CommsSending::Refused.new(:invalid_client_request_id, :unprocessable_entity,
+                                            "client_request_id must be 1 to 100 letters, digits or . _ : -")
+          end
+          unless params[:chat].is_a?(String)
+            raise CommsSending::Refused.new(:invalid_chat, :unprocessable_entity, "chat must name one existing chat")
+          end
+          chat = find_chat
+
+          result = CommsSending.request!(connection: @connection, agent: current_api_agent, chat:, text:, client_request_id:)
+          render json: { send: result.send.as_comms_json }, status: result.created ? :created : :ok
+        end
 
         def index
           chat = find_chat
-          scope = chat.comms_messages.includes(:comms_chat)
+          scope = chat.comms_messages.includes(:comms_chat, comms_send: :agent)
           messages = if params[:after].present?
             cursor_sent_at, cursor_id = cursor
             scope.where("(comms_messages.sent_at, comms_messages.id) > (?, ?)", cursor_sent_at, cursor_id)

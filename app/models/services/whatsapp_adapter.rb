@@ -68,6 +68,42 @@ module Services
       connection.record_unpair_failure!(e)
     end
 
+    # Sending (CommsSending). The three things a provider supplies.
+
+    # A WhatsApp message id in the shape of whatsmeow's package-level
+    # GenerateMessageID (go.mau.fi/whatsmeow v0.0.0-20261007111105-c386243a72ba,
+    # send.go): "3EB0" followed by 8 random bytes as upper-case hex, 20
+    # characters. This is the shape the connector accepts for send_text
+    # (exactly this pattern) and passes unchanged as SendRequestExtra{ID: ...}.
+    # (Client.GenerateMessageID, at the same version, hashes time, own JID and
+    # random bytes into "3EB0" + 18 hex; WhatsApp accepts both.)
+    SEND_MESSAGE_ID_FORMAT = /\A3EB0[0-9A-F]{16}\z/
+
+    def new_send_message_id
+      "3EB0#{SecureRandom.hex(8).upcase}"
+    end
+
+    # The session a send is bound to: the pairing attempt, which
+    # start_pairing hands the connector and every connector event carries.
+    def send_generation(connection)
+      connection.pairing_attempt
+    end
+
+    def send_text(send)
+      CommsConnector.send_text(send)
+    end
+
+    # Who our own messages are from, as the connector stores them: the
+    # owner's phone-number JID (identity user_id is its user part) and push
+    # name.
+    def own_sender(connection)
+      user = connection.external_subject_id.to_s
+      {
+        "sender_id" => (user.include?("@") ? user : "#{user}@s.whatsapp.net" if user.present?),
+        "sender_name" => connection.external_identity
+      }
+    end
+
     private
 
     def credential_fingerprint(secret)

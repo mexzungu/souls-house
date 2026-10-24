@@ -1,6 +1,7 @@
 require "net/http"
 
-# Rails → comms connector commands. There is no send.
+# Rails → comms connector commands, and WhatsApp's send_text (the only
+# command whose answer is an outcome rather than an acknowledgement).
 #
 # Every command, for every provider, goes over mutual TLS and is signed with
 # the connector-wide COMMS_COMMAND_KEY (CommsCommandSignature), because some
@@ -35,6 +36,26 @@ module CommsConnector
   # configuration, so it may still hold the device.
   class NotConfigured < Error; end
 
+  # The connector's answer to send_text, mapped to a CommsSend status:
+  # "sent", "failed" or "unknown", nothing else. error_reason is the
+  # connector's short machine reason for a provider refusal.
+  SendOutcome = Data.define(:status, :provider_message_id, :sent_at, :error_code, :error_reason) do
+    def self.unknown(code) = new(status: "unknown", provider_message_id: nil, sent_at: nil, error_code: code, error_reason: nil)
+    def self.failed(code, reason = nil) = new(status: "failed", provider_message_id: nil, sent_at: nil, error_code: code, error_reason: reason)
+  end
+
+  # Explicit refusals in the send_text contract: nothing was sent. Any 422
+  # error starting bad_ (bad_message_id, bad_chat, bad_text, bad_send_id, ...)
+  # is one too. A 401 is the connector's verifier refusing the command before
+  # it does anything, so it is failed (connector_refused_signature), not
+  # unknown. 500 send_failed and 502 send_unknown stay unknown: from here
+  # they are ambiguous.
+  SEND_REFUSALS = {
+    "409" => %w[not_connected stale_attempt],
+    "422" => %w[unsupported_chat send_mismatch refused not_on_whatsapp recipient_lookup_failed group_lookup_failed]
+  }.freeze
+  SEND_READ_TIMEOUT = 30
+
   module_function
 
   # WhatsApp. start_pairing hands over the callback secret with its version;
@@ -51,6 +72,73 @@ module CommsConnector
 
   def unpair(connection)
     command(connection, "unpair", url: ENV[WHATSAPP_URL_ENV].presence)
+  end
+
+  # WhatsApp: hand one CommsSend to the connector (contract in the WhatsApp
+  # proposal, "Sending"). The connector records the send id as attempted
+  # before calling WhatsApp and never sends the same id twice; message_id is
+  # the WhatsApp message id Rails chose at claim time; attempt is the
+  # pairing attempt the send was claimed under (the value start_pairing
+  # carries), which the connector checks against its live session.
+  #
+  # Only the connector's explicit answer becomes sent or failed. A timeout,
+  # a lost connection, a 5xx, an unparseable or unrecognised answer, and the
+  # connector's own outcome_unknown, are unknown: the message may or may not
+  # have gone. A command that could not be built (no connector configured,
+  # no command key, no mutual TLS) never left Rails, so it is failed.
+  def send_text(send)
+    connection = send.service_connection
+    url = ENV[WHATSAPP_URL_ENV].presence
+    return SendOutcome.failed("connector_not_configured") unless url
+
+    begin
+      prepared = prepare_command(connection, "send_text", url:,
+                                                          attempt: send.connection_generation,
+                                                          send_id: send.public_id,
+                                                          message_id: send.provider_message_id,
+                                                          chat: send.comms_chat.provider_chat_id,
+                                                          text: send.text)
+    rescue Error
+      return SendOutcome.failed("connector_misconfigured")
+    end
+
+    send_outcome(perform(prepared, read_timeout: SEND_READ_TIMEOUT))
+  rescue Timeout::Error
+    SendOutcome.unknown("connector_timeout")
+  rescue SystemCallError, IOError, OpenSSL::SSL::SSLError, SocketError
+    SendOutcome.unknown("connector_unreachable")
+  rescue StandardError
+    SendOutcome.unknown("connector_error")
+  end
+
+  def send_outcome(response)
+    body = begin
+      JSON.parse(response.body.to_s)
+    rescue JSON::ParserError
+      nil
+    end
+    body = {} unless body.is_a?(Hash)
+    error = body["error"].to_s
+
+    if response.code == "200" && body["status"] == "sent" && body["message_id"].is_a?(String) && body["message_id"].present?
+      sent_at = begin
+        Time.iso8601(body["sent_at"].to_s)
+      rescue ArgumentError
+        nil
+      end
+      SendOutcome.new(status: "sent", provider_message_id: body["message_id"].first(128), sent_at:, error_code: nil, error_reason: nil)
+    elsif SEND_REFUSALS.fetch(response.code, []).include?(error) || (response.code == "422" && error.match?(/\Abad_[a-z_]{1,40}\z/))
+      reason = body["reason"].to_s.gsub(/[^a-z0-9_.:-]/i, "").first(64).presence if error == "refused"
+      SendOutcome.failed(error, reason)
+    elsif response.code == "401"
+      SendOutcome.failed("connector_refused_signature")
+    elsif response.code == "409" && error == "outcome_unknown"
+      SendOutcome.unknown("outcome_unknown")
+    elsif response.is_a?(Net::HTTPSuccess)
+      SendOutcome.unknown("connector_unrecognised")
+    else
+      SendOutcome.unknown("connector_http_#{response.code.to_s.gsub(/\D/, "").first(3)}")
+    end
   end
 
   # WhatsApp's "Link with phone number instead": ask the connection's
@@ -105,6 +193,24 @@ module CommsConnector
       return :not_configured
     end
 
+    response = perform(prepare_command(connection, operation, url:, **fields))
+    unless response.is_a?(Net::HTTPSuccess)
+      raise StaleRequest, "comms connector #{operation}: a newer request was accepted" if stale_request?(operation, response)
+
+      raise Error, "comms connector #{operation} failed (#{response.code})"
+    end
+
+    parsed = response.body.present? ? JSON.parse(response.body) : {}
+    parsed.is_a?(Hash) ? parsed : {}
+  rescue JSON::ParserError
+    raise Error, "comms connector #{operation} returned invalid JSON"
+  end
+
+  PreparedCommand = Data.define(:uri, :tls, :request)
+
+  # The signed request, or Error when it cannot be built (http, missing
+  # mutual TLS settings, no command key). Nothing has been sent yet.
+  def prepare_command(connection, operation, url:, **fields)
     uri = URI.join(url, "/connections/#{connection.public_id}/#{operation}")
     raise Error, "the comms connector must be reached over https" unless uri.scheme == "https"
     tls = tls_options
@@ -118,22 +224,15 @@ module CommsConnector
       connection_id: connection.public_id, operation:, command_id:, issued_at:, body:
     ).each { |name, value| request[name] = value }
     request.body = body
-
-    response = Net::HTTP.start(uri.hostname, uri.port, **tls, open_timeout: 5, read_timeout: 30) do |http|
-      http.request(request)
-    end
-    unless response.is_a?(Net::HTTPSuccess)
-      raise StaleRequest, "comms connector #{operation}: a newer request was accepted" if stale_request?(operation, response)
-
-      raise Error, "comms connector #{operation} failed (#{response.code})"
-    end
-
-    parsed = response.body.present? ? JSON.parse(response.body) : {}
-    parsed.is_a?(Hash) ? parsed : {}
-  rescue JSON::ParserError
-    raise Error, "comms connector #{operation} returned invalid JSON"
+    PreparedCommand.new(uri:, tls:, request:)
   rescue CommsCommandSignature::MissingKey => e
     raise Error, e.message
+  end
+
+  def perform(prepared, read_timeout: 30)
+    Net::HTTP.start(prepared.uri.hostname, prepared.uri.port, **prepared.tls, open_timeout: 5, read_timeout:) do |http|
+      http.request(prepared.request)
+    end
   end
 
   def stale_request?(operation, response)
