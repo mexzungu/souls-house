@@ -2,8 +2,8 @@
 // accessory on the private network holding one linked device per
 // ServiceConnection, each in its own SQLCipher store on the comms volume.
 //
-// Rails → connector: start_pairing and unpair over mutual TLS, signed with
-// COMMS_COMMAND_KEY. Connector → Rails: signed events to
+// Rails → connector: start_pairing, unpair, pair_phone and send_text over
+// mutual TLS, signed with COMMS_COMMAND_KEY. Connector → Rails: signed events to
 // COMMS_RAILS_URL/internal/comms/connections/:id/events.
 //
 // Required environment (see README.md):
@@ -105,6 +105,20 @@ func run() int {
 		// keeps pairing open long enough to pair by phone number instead.
 		if n, err := strconv.Atoi(os.Getenv("COMMS_SYNTHETIC_QR_CODES")); err == nil && n >= 0 && n <= 1000 {
 			syn.QRCodes = n
+		}
+		// What a synthetic send does (the Rails end-to-end test): succeed
+		// (unset), refuse (not_on_whatsapp), end unknown, or hang until
+		// the command's deadline.
+		switch os.Getenv("COMMS_SYNTHETIC_SEND") {
+		case "":
+		case "refuse":
+			syn.SendHook = provider.SendRefusing(provider.RefusedNotOnWhatsApp)
+		case "unknown":
+			syn.SendHook = provider.SendAmbiguous
+		case "hang":
+			syn.SendHook = provider.SendHanging
+		default:
+			return refuse(log, "synthetic_send")
 		}
 		factory = syn.Factory()
 	default:
