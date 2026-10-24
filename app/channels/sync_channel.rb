@@ -5,9 +5,62 @@ class SyncChannel < ApplicationCable::Channel
       model: User,
       collections: []
     },
+    "GuestDiscovery" => {
+      model: User,
+      collections: []
+    },
     # The room switchers' working spinners, per account (RoomActivity).
     "RoomActivity" => {
       model: Account,
+      collections: []
+    },
+    "FieldActivity" => {
+      model: Account,
+      collections: []
+    },
+    "FieldTweetStream" => {
+      model: Account,
+      collections: []
+    },
+    "FieldVoiceActivity" => {
+      model: Account,
+      collections: []
+    },
+    # Room names/order only, separate from chat traffic and working spinners.
+    "RoomNavigation" => {
+      model: Account,
+      collections: []
+    },
+    "RhythmActivity" => {
+      model: Account,
+      collections: []
+    },
+    "IntegrationStatus" => {
+      model: Account,
+      collections: []
+    },
+    "HomeResidentRoster" => {
+      model: Account,
+      collections: []
+    },
+    "GlossaryActivity" => {
+      model: Account,
+      collections: []
+    },
+    "AccountCostActivity" => {
+      model: Account,
+      collections: []
+    },
+    "GuestDirectory" => {
+      model: Account,
+      collections: []
+    },
+    "ProviderPresentation" => {
+      model: Account,
+      collections: []
+    },
+    "TelegramPresentation" => {
+      model: Agent,
       collections: []
     },
     "Account" => {
@@ -54,6 +107,7 @@ class SyncChannel < ApplicationCable::Channel
     # Native-app connections subscribe to AppSyncChannel, whose broadcasts
     # carry no content; the web's streams do.
     return reject_for_reason("app connections use AppSyncChannel") if current_app_session
+    return reject_for_reason("current_user is not present") unless current_user
 
     model_name = params[:model].to_s
     return reject_for_reason("params[:model] is not present") if model_name.blank?
@@ -76,7 +130,7 @@ class SyncChannel < ApplicationCable::Channel
     @model = model_config[:model].find_by_obfuscated_id(record_id)
     return reject_for_reason("model is not present") unless @model
 
-    accessible = model_name == "ReplyAttention" ? @model.id == current_user.id : @model.accessible_by?(current_user)
+    accessible = %w[ReplyAttention GuestDiscovery].include?(model_name) ? @model.id == current_user.id : @model.accessible_by?(current_user)
     return reject_for_reason("model is not accessible by current_user") unless accessible
 
     if collection_name

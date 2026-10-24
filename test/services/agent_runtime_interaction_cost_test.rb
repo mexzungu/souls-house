@@ -216,6 +216,61 @@ class AgentRuntimeInteractionCostTest < ActiveSupport::TestCase
     assert_equal "0.2", cost.dig(:components_usd, :cache_read_input)
   end
 
+  test "DeepSeek V4.1 Flash 1017 is priced from the DeepSeek endpoint off-peak rate" do
+    cost = build_interaction(
+      provider: "openrouter", model: "deepseek/deepseek-v4.1-flash-1017",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "0.753", cost[:amount_usd]
+    assert_equal "0.003", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "MiniMax M3.1 Flash is priced from the MiniMax endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "minimax/minimax-m3.1-flash",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "0.765", cost[:amount_usd]
+    assert_equal "0.015", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "Kimi K3.1 Pro is priced from the Moonshot AI standard endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "moonshotai/kimi-k3.1-pro",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "12.2", cost[:amount_usd]
+    assert_equal "0.2", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "Mercury 3 is priced at Inception's launch rate" do
+    cost = build_interaction(
+      provider: "openrouter", model: "inception/mercury-3",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "0.46", cost[:amount_usd]
+    assert_equal "0.01", cost.dig(:components_usd, :cache_read_input)
+  end
+
+  test "Muse Spark Open is priced from the routed Modal endpoint" do
+    cost = build_interaction(
+      provider: "openrouter", model: "meta/muse-spark-open",
+      uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+    ).estimated_cost
+    assert_equal "estimated", cost[:status]
+    assert_equal "5.65", cost[:amount_usd]
+    assert_equal "0.15", cost.dig(:components_usd, :cache_read_input)
+  end
+
   test "Opus 5.5 supports dotted runtime ID and one hour cache writes" do
     cost = build_interaction(
       provider: "anthropic", model: "claude-opus-5.5", cache_ttl: "1h",

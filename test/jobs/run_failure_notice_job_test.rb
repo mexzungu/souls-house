@@ -49,6 +49,7 @@ class RunFailureNoticeJobTest < ActiveSupport::TestCase
   end
 
   test "a reply that reached the room is never written over: the notice says the run failed after replying" do
+    travel_to Time.zone.parse("2026-10-14 12:00 UTC")
     failed_run(at: 20.minutes.ago)
     run = failed_run(at: 1.minute.ago)
     @chat.messages.create!(role: "assistant", agent: @agent, content: "Here is my answer.", runtime_interaction: run)

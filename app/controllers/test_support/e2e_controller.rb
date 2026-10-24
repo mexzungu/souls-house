@@ -1,12 +1,340 @@
 module TestSupport
   class E2eController < ApplicationController
 
+    include TestSupport::E2e::FieldVoiceSampleFixtures
+
     allow_unauthenticated_access
     skip_forgery_protection
 
     before_action :ensure_test_environment
 
     PASSWORD = "password123"
+
+    # Synthetic persisted names only; no inference or resident wake.
+    def glossary_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "create"
+        create_agent!(account, "Glossary arrival", "teal")
+      when "rename"
+        account.agents.find_by!(name: "Glossary arrival").update!(name: "Glossary renamed")
+      when "health"
+        account.agents.find_by!(name: "Glossary renamed").update!(health_state: "healthy", last_health_check_at: Time.current)
+      when "site_name"
+        previous = Setting.instance.site_name
+        Setting.instance.update!(site_name: params.fetch(:name))
+        RefreshGlossarySettingsJob.perform_now
+        return render json: { previous: previous }
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    # Local records only; no resident runtime or provider is contacted.
+    def account_cost_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "create"
+        agent = create_agent!(account, "Live cost resident", "teal")
+        return render json: { id: agent.to_param }
+      end
+      agent = account.agents.find_by!(name: "Live cost resident")
+      case params.fetch(:operation)
+      when "finish"
+        agent.agent_runtime_interactions.create!(trigger_kind: "wake", started_at: Time.current).record_result!(
+          status: 200, body: { "status" => "ok", "telemetry" => {
+            "schema_version" => 1, "runtime" => { "provider" => "openai", "model" => "gpt-6-astra" },
+            "usage" => { "scope" => "trigger", "complete" => true,
+              "uncached_input_tokens" => 1_000_000, "cache_creation_input_tokens" => 0,
+              "cache_read_input_tokens" => 1_000_000, "output_tokens" => 1_000_000 }
+          } }
+        )
+      when "correct_usage"
+        agent.agent_runtime_interactions.last.update!(uncached_input_tokens: 2_000_000)
+      when "health"
+        agent.update!(last_health_check_at: Time.current, health_state: "healthy")
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    # Real local rows/events only; never contacts Telegram or a connector.
+    def comms_count_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "prepare"
+        account.service_connections.create!(
+          provider: "telegram", status: "connected", label: "Connector counts",
+          connected_by_user: account.memberships.find_by!(role: "owner").user,
+          external_subject_id: "synthetic-comms-counts", management_scope: "personal",
+          credential_kind: "session", credential_metadata: { credential_strategy: "connector" }
+        )
+      else
+        connection = account.service_connections.find_by!(label: "Connector counts", provider: "telegram")
+        now = Time.current
+        event = case params.fetch(:operation)
+        when "arrive", "late"
+          { type: "message.upsert", messages: [
+            { chat: "user:count", provider_message_id: "1", sent_at: now.iso8601, body: "Synthetic arrival" }
+          ] }
+        when "flip"
+          { type: "chat.upsert", chats: [ { provider_chat_id: "user:count", sync_state: { synced: false } } ] }
+        when "checkpoint"
+          { type: "sync.checkpoint", chats: [ { provider_chat_id: "user:count", synced_through: now.iso8601 } ] }
+        when "message"
+          { type: "message.upsert", messages: [
+            { chat: "user:count", provider_message_id: "2", sent_at: now.iso8601, body: "Synthetic ordinary message" }
+          ] }
+        when "remove"
+          chat = connection.comms_chats.find_by!(provider_chat_id: "user:count")
+          chat.comms_messages.each(&:destroy!)
+          chat.comms_messages.reset
+          chat.destroy!
+          nil
+        else
+          return head :unprocessable_entity
+        end
+        CommsEvents.receive!(connection, event.deep_stringify_keys, nonce: SecureRandom.hex(16)) if event
+      end
+      head :ok
+    end
+
+    def guest_directory_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "setup"
+        user = account.memberships.find_by!(role: "owner").user
+        home = Account.create!(name: "#{account.name} Guest home", account_type: :team)
+        home.add_user!(user, role: "owner", skip_confirmation: true)
+        visitor = create_agent!(home, "Live visitor", "teal")
+        spare = create_agent!(home, "Spare visitor", "slate")
+        return render json: { home: home.to_param, visitor: visitor.to_param, spare: spare.to_param }
+      end
+
+      home = Account.find_by!(name: "#{account.name} Guest home")
+      visitor = home.agents.find_by!(name: "Live visitor")
+      case params.fetch(:operation)
+      when "join"
+        account.guest_memberships.create!(agent: visitor, added_by: account.memberships.find_by!(role: "owner").user)
+      when "leave"
+        account.guest_memberships.find_by!(agent: visitor).destroy!
+      when "delete"
+        visitor.destroy!
+      when "candidate_arrive"
+        create_agent!(home, "New candidate", "blue")
+      when "candidate_offline"
+        home.agents.find_by!(name: "New candidate").update!(active: false)
+      when "candidate_return"
+        home.agents.find_by!(name: "New candidate").update!(active: true)
+      when "candidate_bookkeeping"
+        home.agents.find_by!(name: "New candidate").touch
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    # Synthetic persisted state only; never registers a real Telegram webhook.
+    def telegram_presentation_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      agent = account.agents.find(params.fetch(:agent_id))
+      case params.fetch(:operation)
+      when "prepare", "rename"
+        username = params[:operation] == "prepare" ? "synthetic_bot" : "renamed_synthetic_bot"
+        agent.update_columns(telegram_bot_username: username, telegram_bot_token: "SYNTHETIC-TEST-TOKEN")
+        TelegramPresentation.refresh!(agent.id)
+      when "subscribe"
+        user = account.memberships.find_by!(role: "owner").user
+        agent.telegram_subscriptions.create!(user: user, telegram_chat_id: agent.id, blocked: false)
+      when "block"
+        agent.telegram_subscriptions.first!.mark_blocked!
+      when "bookkeeping"
+        agent.telegram_subscriptions.first!.request_runtime_reset!
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    # Persisted presentation only: never starts a runtime or provider sign-in.
+    def provider_presentation_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      agent = account.agents.find(params.fetch(:agent_id))
+      case params.fetch(:operation)
+      when "prepare"
+        agent.update!(runtime: "external", health_state: "healthy",
+          model_id: "anthropic/claude-opus-4.6", provider_auth_modes: {},
+          provider_connections: {})
+      when "connect", "late"
+        email = params[:operation] == "late" ? "late@example.invalid" : "remote@example.invalid"
+        agent.update!(provider_auth_modes: { "anthropic" => "oauth_account" },
+          provider_connections: { "anthropic" => { "status" => "connected", "email" => email, "plan" => "Synthetic" } })
+      when "clear"
+        agent.update!(provider_auth_modes: {}, provider_connections: {})
+      when "bookkeeping"
+        agent.update!(provider_connections: agent.provider_connections.deep_merge(
+          "anthropic" => { "connected_at" => Time.current.iso8601 }))
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    def tweet_stream_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "enable", "enable_unfunded"
+        Setting.instance.update!(field_tweets_enabled: true, field_tweets_site_monthly_usd_ceiling: 10,
+          field_tweets_account_monthly_usd_ceiling: 1, field_tweets_daily_import_cap: 50,
+          field_tweets_poll_minutes: 15)
+        return head :ok if params[:operation] == "enable_unfunded"
+
+        create_synthetic_tweet_funding!(account)
+      when "fund"
+        create_synthetic_tweet_funding!(account)
+      when "unfund"
+        account.service_connections.connected.where(label: "Synthetic tweet funding").last!.update!(status: "revoked")
+      when "funding_bookkeeping"
+        account.service_connections.find_by!(label: "Synthetic tweet funding").update!(comms_event_seq: 7)
+      when "limits", "feature_off", "feature_on"
+        attributes = case params[:operation]
+        when "limits" then { field_tweets_daily_import_cap: 37, field_tweets_poll_minutes: 30 }
+        when "feature_off" then { field_tweets_enabled: false }
+        else { field_tweets_enabled: true }
+        end
+        Setting.instance.update!(attributes)
+        # The isolated browser server has no queue worker. Producer/job enqueue
+        # semantics are covered separately; execute the real fan-out job here.
+        FieldTweets::RefreshSettingsJob.perform_now
+      when "create"
+        account.create_field_tweet_source!(handle: "example", own_monthly_usd_limit: 5)
+      when "advance"
+        account.field_tweet_source.update!(checkpoint_at: Time.current, last_success_at: Time.current)
+      when "bookkeeping"
+        account.field_tweet_source.update!(window_cursor: "hidden-browser-cursor", failure_count: 2)
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
+    end
+
+    def create_synthetic_tweet_funding!(account)
+      connection = account.service_connections.new(provider: "twitterapi_io", management_scope: "account_managed",
+        credential_kind: "api_key", status: "connected", connected_by_user: account.users.first!,
+        label: "Synthetic tweet funding", credential_fingerprint: SecureRandom.hex(16))
+      connection.credential_payload_hash = { "api_key" => "synthetic-no-vendor-access" }
+      connection.save!
+    end
+    private :create_synthetic_tweet_funding!
+
+    def field_activity_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      case params.fetch(:operation)
+      when "arrive"
+        note = account.whiteboards.create!(name: "Live arrival", content: "Live note words")
+        account.field_songs.create!(title: "Live song", instrumental: true,
+          links: [ "https://example.invalid/live-song" ])
+        account.field_tweets.create!(provider_tweet_id: "987654321", author_handle: "example",
+          text: "Live tweet", posted_at: Time.current, fetched_at: Time.current,
+          url: "https://x.com/example/status/987654321")
+        render json: { note: note.to_param }
+      when "delete"
+        account.whiteboards.find(params.fetch(:note)).soft_delete!
+        head :ok
+      when "rename"
+        account.whiteboards.find(params.fetch(:note)).update!(
+          name: "Renamed live note", content: "Changed elsewhere")
+        head :ok
+      when "late"
+        account.whiteboards.create!(name: "Live late arrival", content: "Live late words")
+        head :ok
+      when "chat"
+        chat = account.chats.create!(title: "Unrelated Field test chat", model_id: "openrouter/auto")
+        chat.messages.create!(role: "assistant", agent: account.agents.first!, content: "Unrelated chat activity")
+        head :ok
+      else
+        head :unprocessable_entity
+      end
+    end
+
+    def room_navigation_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      room = if params[:operation] == "create"
+        account.rooms.create!(name: params.fetch(:name))
+      else
+        Room.resolve_for(account, params.fetch(:room))
+      end
+      case params[:operation]
+      when "rename" then room.update!(name: params.fetch(:name))
+      when "move" then room.move!(params.fetch(:direction).to_i)
+      when "delete" then room.destroy!
+      when "create" # The create above is itself the producer.
+      else return head :unprocessable_entity
+      end
+      render json: { id: room.to_param }
+    end
+
+    def expired_subscription_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      if params[:operation] == "setup"
+        user = account.users.find_by!(email_address: params.fetch(:email))
+        other = Account.create!(name: "#{account.name} Other", account_type: :team)
+        other.add_user!(user, role: "member", skip_confirmation: true)
+        private_account = Account.create!(name: "#{account.name} Inaccessible", account_type: :team)
+        [ other, private_account ].each { |target| create_agent!(target, "#{target.name} Resident", "slate") }
+        render json: { other: other.to_param, hidden: private_account.to_param }
+        return
+      end
+
+      agent = account.agents.first!
+      case params.fetch(:operation)
+      when "expire"
+        agent.record_provider_connection!("anthropic", status: "connected")
+        agent.mark_provider_connection_status!("anthropic", "expired")
+      when "reconnect"
+        agent.record_provider_connection!("anthropic", status: "connected")
+      when "api_key"
+        agent.use_provider_auth_mode!("anthropic", "api_key")
+      when "retire"
+        agent.update!(runtime: "deprecated")
+      when "remove"
+        agent.destroy!
+      else
+        return head :unprocessable_entity
+      end
+      render json: { agent_name: agent.name }
+    end
+
+    # What the transcription endpoint returns besides the text: the recording, stored and signed.
+    # Browser tests stub transcription itself (no speech-to-text provider in test) but send a
+    # real signed id, so the composers keep their audio hold until the send has gone through.
+    def audio_blob
+      blob = ActiveStorage::Blob.create_and_upload!(
+        io: Rails.root.join("test/fixtures/files/test_audio.webm").open,
+        filename: "recording.webm",
+        content_type: "audio/webm"
+      )
+      render json: { signed_id: blob.signed_id }
+    end
 
     def song_card_fixture
       account = Account.find(params.fetch(:account_id))
@@ -63,9 +391,52 @@ module TestSupport
 
       audio = ActiveStorage::Blob.create_and_upload!(io: file_fixture_audio, filename: "standup.mp3", content_type: "audio/mpeg")
       recording = account.field_recordings.create!(title: params.fetch(:title, "Failed standup"), notes: params[:notes],
+        transcript_source: params[:speakers_ready] ? "supplied" : "vendor",
         uploaded_by: account.users.first!, audio: audio)
-      recording.update_columns(status: "failed", failure_reason: "The transcriber couldn't read this file.")
+      if params[:speakers_ready]
+        # Synthetic supplied transcript: no transcriber, recognition or remote jobs.
+        recording.store_supplied_transcript!([
+          { "spk" => "speaker_0", "s" => nil, "t" => "A local speaker's first words." },
+          { "spk" => "speaker_1", "s" => nil, "t" => "Another local speaker replies." }
+        ])
+      else
+        recording.update_columns(status: "failed", failure_reason: "The transcriber couldn't read this file.")
+      end
       render json: { recording_param: recording.to_param }
+    end
+
+    # Synthetic stored state only: no voice service, recognition gate
+    # overrides or real embeddings. Normal callbacks provide the hints.
+    def field_voice_lifecycle_fixture
+      account = Account.find(params.fetch(:account_id))
+      raise ActiveRecord::RecordNotFound unless account.name.start_with?("E2E ")
+
+      recording = account.field_recordings.find(params.fetch(:recording_param))
+      speaker = recording.speakers.order(:position).first!
+      if params[:operation] == "setup"
+        voice = account.field_voices.create!(name: "Synthetic lifecycle voice")
+        speaker.name_as!(voice, by: account.users.first!)
+        return head :ok
+      end
+
+      voice = account.field_voices.kept.find_by!(name: "Synthetic lifecycle voice")
+      raise ActiveRecord::RecordNotFound unless speaker.field_voice_id == voice.id
+
+      case params.fetch(:operation)
+      when "remember"
+        voice.with_lock do
+          generation = voice.print_generation + 1
+          voice.update_columns(print_generation: generation)
+          FieldVoiceprint.create!(account:, field_voice: voice, generation:,
+            print: "synthetic-not-a-biometric-print", profile: "ecapa-synthetic", sample_digest: "synthetic",
+            sample_count: 1, recording_count: 1, speech_ms: 12_000)
+        end
+      when "metadata"
+        voice.voiceprint.update!(speech_ms: 21_000, sample_count: 2, recording_count: 2)
+      else
+        return head :unprocessable_entity
+      end
+      head :ok
     end
 
     def stone_fixture

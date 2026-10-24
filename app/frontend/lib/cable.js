@@ -115,6 +115,19 @@ export function subscribeToModel(model, id, props) {
           model === 'Account' ||
           model === 'ReplyAttention' ||
           model === 'RoomActivity' ||
+          model === 'FieldActivity' ||
+          model === 'FieldVoiceActivity' ||
+          model === 'FieldTweetStream' ||
+          model === 'GuestDirectory' ||
+          model === 'GuestDiscovery' ||
+          model === 'RoomNavigation' ||
+          model === 'RhythmActivity' ||
+          model === 'IntegrationStatus' ||
+          model === 'ProviderPresentation' ||
+          model === 'TelegramPresentation' ||
+          model === 'HomeResidentRoster' ||
+          model === 'GlossaryActivity' ||
+          model === 'AccountCostActivity' ||
           model === 'FieldRecording'
         ) {
           // Broadcasts are not replayed. Catch up changes missed before the

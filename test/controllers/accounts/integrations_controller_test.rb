@@ -196,6 +196,37 @@ class Accounts::IntegrationsControllerTest < ActionDispatch::IntegrationTest
     assert props.fetch("services").any? { |service| service.fetch("management_scopes").include?("account_managed") }
   end
 
+  test "count catch-up partials keep personal scope and reject revoked account membership" do
+    account = accounts(:team_account)
+    member = users(:existing_user)
+    own = create_connection(account, member, "personal", "count-catch-up-own")
+    other = create_connection(account, @user, "personal", "count-catch-up-private")
+    [ own, other ].each do |connection|
+      connection.update!(provider: "telegram", credential_kind: "session",
+        credential_metadata: { credential_strategy: "connector" })
+      connection.comms_chats.create!(provider_chat_id: "synthetic-count-chat", sync_state: {})
+    end
+    sign_in member
+    headers = {
+      "X-Inertia" => "true", "X-Inertia-Version" => ViteRuby.digest,
+      "X-Inertia-Partial-Component" => "accounts/integrations",
+      "X-Inertia-Partial-Data" => "connections,can_manage_account,services"
+    }
+    2.times do |index|
+      get account_integrations_path(account), headers: headers
+      assert_response :success
+      connections = response.parsed_body.fetch("props").fetch("connections")
+      assert_equal [ own.public_id ], connections.map { |connection| connection.fetch("id") }
+      assert_equal index + 1, connections.first.fetch("comms").fetch("chats")
+      own.comms_chats.create!(provider_chat_id: "next-count-chat") if own.comms_chats.count == 1
+    end
+    account.memberships.find_by!(user: member).destroy!
+    get account_integrations_path(account), headers: headers
+    assert_response :not_found
+    assert_not response.body.include?(own.public_id)
+    assert_not response.body.include?(other.public_id)
+  end
+
   test "a GitHub card lists its connected repositories and their watches" do
     account = accounts(:team_account)
     github = account.service_connections.create!(

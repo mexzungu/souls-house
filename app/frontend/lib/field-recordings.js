@@ -142,11 +142,12 @@ export function groupSpeakers(speakers = []) {
   });
 }
 
-// Parts of a merged card, other than the one standing for it, that have a
-// voice sample waiting for a decision or being remembered. Those states are
-// per diarized speaker, so the card shows each with its own enrolment.
-export function partsWithOwnEnrolment(parts = [], representative = null) {
-  return (parts || []).filter((part) => part.id !== representative?.id && (part.pending_enrolment || part.remembering));
+// The parts of a card the house named by voice (auto_named), whichever part
+// stands for the card. A merged card may mix a person's naming with an
+// automatic one: the automatic provenance still shows, and "Not them"
+// reaches only these parts, never a person's assignment.
+export function automaticParts(parts = []) {
+  return (parts || []).filter((part) => part.named && part.auto_named);
 }
 
 export function turnSpeakerName(turn, names) {

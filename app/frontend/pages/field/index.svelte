@@ -82,19 +82,19 @@
   );
 
   const LIST_PROPS = ['items', 'current_item', 'selected', 'counts', 'field_empty', 'pagination'];
+  const LIVE_PROPS = [...LIST_PROPS, 'recording_allowance', 'tags'];
   const updateSync = createDynamicSync();
   $effect(() => {
-    const subs = {
-      // An open search refreshes too: a transcript becoming ready, or a note
-      // being edited, can change what matches.
-      [`Account:${account.id}:field_files`]: [...LIST_PROPS, 'search'],
-      [`Account:${account.id}:whiteboards`]: [...LIST_PROPS, 'search'],
-      [`Account:${account.id}:field_recordings`]: [...LIST_PROPS, 'recording_allowance', 'search'],
-      [`Account:${account.id}:field_tweets`]: [...LIST_PROPS, 'search'],
-      [`Account:${account.id}:field_songs`]: [...LIST_PROPS, 'search'],
-    };
-    if (current?.kind === 'note') subs[`Whiteboard:${current.id}`] = [...LIST_PROPS, 'search'];
-    updateSync(subs);
+    // One narrow parent stream catches new arrivals as well as existing items,
+    // without reloading the Field for unrelated chat/account activity.
+    // Search results remain the requested window until explicit navigation;
+    // live counts and the selected item may refresh without re-ranking it.
+    updateSync({
+      [`FieldActivity:${account.id}`]: LIVE_PROPS,
+      // Subscribe even without a source or while the panel is unavailable.
+      // Status never re-ranks search or refreshes the selected item's draft.
+      [`FieldTweetStream:${account.id}`]: ['tweet_stream'],
+    });
   });
 
   // Search, tag filter and page ride along in the URL so a link reopens
@@ -224,11 +224,13 @@
   // Note editing, unchanged from the whiteboards page
   let editing = $state(false);
   let editContent = $state('');
+  let editRevision = $state(null);
   let conflict = $state(null);
   let saving = $state(false);
 
   function startEditing() {
     editContent = current?.content || '';
+    editRevision = current?.revision;
     editing = true;
   }
 
@@ -245,7 +247,7 @@
       const response = await fetch(`/accounts/${account.id}/whiteboards/${current.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken || '' },
-        body: JSON.stringify({ whiteboard: { content: editContent }, expected_revision: current.revision }),
+        body: JSON.stringify({ whiteboard: { content: editContent }, expected_revision: editRevision }),
       });
       saving = false;
       if (response.ok) {
@@ -273,10 +275,12 @@
   function useServerVersion() {
     if (!conflict) return;
     editContent = conflict.serverContent;
+    editRevision = conflict.serverRevision;
     conflict = null;
   }
 
   function keepMyVersion() {
+    editRevision = conflict.serverRevision;
     conflict = null;
     saveNote();
   }
@@ -328,10 +332,6 @@
 
   {#if fieldEmpty}
     <FieldEmpty {accountLabel} />
-    <!-- An empty Field has no tabs, so a stream is set up (or shown waiting) here. -->
-    {#if tweet_stream}
-      <div class="mt-6"><FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} /></div>
-    {/if}
   {:else}
     <!-- On a phone, an open item has the screen to itself. -->
     <div class={current ? 'hidden lg:block' : ''}>
@@ -369,13 +369,17 @@
     {#if tab === 'recordings' && recording_allowance}
       <div class={current ? 'hidden lg:block' : ''}><RecordingAllowance allowance={recording_allowance} /></div>
     {/if}
+  {/if}
 
-    {#if tab === 'tweets' && tweet_stream}
-      <div class={current ? 'hidden lg:block' : ''}>
-        <FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} />
-      </div>
-    {/if}
+  <!-- One stable mount preserves local drafts as the Field gains/loses items
+       and across tab switches. Feature-off intentionally closes/resets forms. -->
+  {#if tweet_stream}
+    <div class={fieldEmpty ? 'mt-6' : tab !== 'tweets' ? 'hidden' : current ? 'hidden lg:block' : ''}>
+      <FieldTweetStreamPanel accountId={account.id} stream={tweet_stream} />
+    </div>
+  {/if}
 
+  {#if !fieldEmpty}
     <div class="grid gap-6 lg:grid-cols-3">
       <div class="min-w-0 space-y-3 {current ? 'hidden lg:block' : ''}">
         {#if search}

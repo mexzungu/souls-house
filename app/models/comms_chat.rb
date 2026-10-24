@@ -23,6 +23,11 @@ class CommsChat < ApplicationRecord
   validates :provider_chat_id, presence: true, uniqueness: { scope: :service_connection_id }
   validates :kind, inclusion: { in: KINDS }, allow_nil: true
 
+  # Capture each count change before a later save/touch replaces saved_changes.
+  # IntegrationStatus delivers only after the outermost transaction commits.
+  after_save :refresh_integration_status, if: :summary_counts_changed?
+  after_destroy :refresh_integration_status
+
   def public_id
     "chat_#{id}"
   end
@@ -36,6 +41,43 @@ class CommsChat < ApplicationRecord
       last_activity_at: last_activity_at&.utc&.iso8601,
       sync_state: (sync_state.presence && sync_state.slice(*SYNC_FIELDS))
     }.compact
+  end
+
+  private
+
+  def summary_counts_changed?
+    previously_new_record? || saved_change_to_service_connection_id? || synced_membership_changed?
+  end
+
+  def synced_membership_changed?
+    return false unless saved_change_to_sync_state?
+
+    states = saved_change_to_sync_state
+    return false if states.map { |state| state.is_a?(Hash) ? state["synced"] : nil }.uniq.size == 1
+
+    # Match ServiceConnection#comms_summary exactly, including missing/null
+    # and PostgreSQL's boolean spellings. Ruby truthiness is not this predicate.
+    # Do not add validation to existing writes: malformed values already have
+    # an undefined summary, so conservatively refresh when they change.
+    # Materialization keeps the planner from casting constants before CASE.
+    sql = <<~SQL
+      WITH states AS MATERIALIZED (
+        SELECT ?::jsonb->>'synced' AS old_value, ?::jsonb->>'synced' AS new_value
+      )
+      SELECT CASE
+        WHEN pg_input_is_valid(old_value, 'boolean') IS FALSE
+          OR pg_input_is_valid(new_value, 'boolean') IS FALSE THEN TRUE
+        ELSE (old_value::boolean IS NOT FALSE) <> (new_value::boolean IS NOT FALSE)
+      END
+      FROM states
+    SQL
+    self.class.connection.select_value(self.class.sanitize_sql_array([ sql, *states.map(&:to_json) ]))
+  end
+
+  def refresh_integration_status
+    connection_ids = [ service_connection_id ]
+    connection_ids.concat(saved_change_to_service_connection_id.to_a) unless destroyed?
+    IntegrationStatus.refresh!(ServiceConnection.where(id: connection_ids.compact).pluck(:account_id))
   end
 
 end

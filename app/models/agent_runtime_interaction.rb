@@ -8,15 +8,29 @@ class AgentRuntimeInteraction < ApplicationRecord
   LOCAL_USAGE_SCOPES = %w[invocation trigger].freeze
   RUNTIME_OUTPUT_CAPTURE_LIMIT = 4_000
   ACTIVE_WINDOW = 12.minutes
+  QUIET_REASON_LIMIT = 500
+  COST_ACTIVITY_FIELDS = %w[
+    finished_at telemetry_schema_version usage_scope input_tokens uncached_input_tokens
+    cache_creation_input_tokens cache_read_input_tokens cached_input_tokens
+    output_tokens reasoning_output_tokens provider_request_count usage_complete
+  ].freeze
 
   belongs_to :agent
   belongs_to :chat, optional: true
   has_one :resident_turn, dependent: :destroy
   # A follow-through nudge points at the run it continues (FollowThroughCheck).
   belongs_to :follow_through_of, class_name: "AgentRuntimeInteraction", optional: true
+  belongs_to :stalled_thread_sweep, optional: true
   has_one :follow_through_nudge, class_name: "AgentRuntimeInteraction", foreign_key: :follow_through_of_id,
     inverse_of: :follow_through_of, dependent: :nullify
   after_commit :broadcast_agent_runtime_interactions_refresh, on: [ :create, :update, :destroy ]
+  after_save :broadcast_rhythm_activity_after_commit, if: -> {
+    saved_changes.keys.intersect?(%w[id execution_state agent_id message_dispatch_id])
+  }
+  after_destroy :broadcast_rhythm_activity_after_commit
+  after_save :refresh_account_cost_activity, if: -> {
+    saved_changes.keys.intersect?(COST_ACTIVITY_FIELDS)
+  }
   after_update_commit :enqueue_follow_through_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
   after_update_commit :enqueue_pending_wake_release, if: -> { saved_change_to_finished_at? && finished_at.present? && trigger_kind == "conversation" }
   after_update_commit :enqueue_oom_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
@@ -30,6 +44,45 @@ class AgentRuntimeInteraction < ApplicationRecord
   validates :started_at, presence: true
   validates :provider_auth_mode, inclusion: { in: Agent::PROVIDER_AUTH_MODES }
 
+  # Why a quiet-reason submission was refused; the message is for the resident.
+  class QuietReasonRefused < StandardError; end
+
+  # The resident's own account of why this run ends without a reply. It is
+  # shown to everyone in the room under the run's activity card, labelled as
+  # the resident's claim; it is never a message, wakes nobody, and is not read
+  # by the stalled-thread sweeper. A later submission replaces an earlier one.
+  def record_quiet_reason!(text)
+    text = text.to_s.strip
+    raise QuietReasonRefused, "reason is empty" if text.empty?
+    raise QuietReasonRefused, "reason must be at most #{QUIET_REASON_LIMIT} characters" if text.length > QUIET_REASON_LIMIT
+    raise QuietReasonRefused, "reason must not contain NUL" if text.include?("\0")
+
+    with_lock do
+      if linked_messages.exists?
+        raise QuietReasonRefused, "this run has already posted a reply here; a quiet reason is only for a run that ends without one"
+      end
+
+      update!(quiet_reason: text, quiet_reason_at: Time.current)
+    end
+  end
+
+  # The stated reason as the room sees it: only on a run that finished cleanly
+  # without a linked reply. A reply posted after the reason hides it.
+  def visible_quiet_reason
+    return if quiet_reason.blank? || finished_at.blank?
+    cleanly_finished = live_activity? ? execution_state == "completed" : chat_activity_status != "failed"
+    return unless cleanly_finished
+    return if linked_messages.exists?
+
+    { text: quiet_reason, at: quiet_reason_at&.iso8601 }
+  end
+
+  def refresh_account_cost_activity
+    # Read the persisted home, not a stale association or a guest conversation.
+    AccountCostActivity.refresh!(Agent.where(id: agent_id).pluck(:account_id))
+  end
+  private :refresh_account_cost_activity
+
   scope :recent, -> { order(created_at: :desc) }
   scope :timeline_order, -> { order(Arel.sql("COALESCE(finished_at, started_at, created_at) ASC"), :id) }
   scope :active, -> { where(finished_at: nil).where("run_id IS NOT NULL OR started_at >= ?", ACTIVE_WINDOW.ago) }
@@ -38,7 +91,7 @@ class AgentRuntimeInteraction < ApplicationRecord
     active.where("agent_runtime_interactions.execution_state IS NULL OR agent_runtime_interactions.execution_state NOT IN (?)", TERMINAL_STATES)
   }
 
-  def self.record_trigger!(agent:, chat:, trigger_kind:, conversation_id:, requested_by:, session_id:, endpoint_url:, request_text:, last_included_message_id: nil, provider_auth_mode: "api_key", provider: nil, model: nil)
+  def self.record_trigger!(agent:, chat:, trigger_kind:, conversation_id:, requested_by:, session_id:, endpoint_url:, request_text:, last_included_message_id: nil, provider_auth_mode: "api_key", provider: nil, model: nil, wake_source_kinds: [])
     interaction = agent.with_lock do
       raise Agent::RuntimeAvailability::Unavailable, "Resident is inactive" unless agent.active?
       if Agents::RemoteRuntime.refresh_pending?(agent)
@@ -51,6 +104,7 @@ class AgentRuntimeInteraction < ApplicationRecord
         trigger_kind: trigger_kind,
         conversation_obfuscated_id: conversation_id,
         requested_by: requested_by,
+        wake_source_kinds: wake_source_kinds,
         session_id: session_id,
         endpoint_url: endpoint_url,
         request_text: request_text,
@@ -409,7 +463,8 @@ class AgentRuntimeInteraction < ApplicationRecord
       duration_ms: duration_ms,
       created_at: created_at&.iso8601,
       model: model,
-      model_label: self.class.model_label_for(model)
+      model_label: self.class.model_label_for(model),
+      quiet_reason: visible_quiet_reason
     }
     live_activity? ? safe.merge(live_activity_json) : safe
   end
@@ -496,6 +551,20 @@ class AgentRuntimeInteraction < ApplicationRecord
 
   private
 
+  def broadcast_rhythm_activity_after_commit
+    # The occurrence renders the dispatch's run list and execution states,
+    # not token usage, transport results, leases or telemetry snapshots.
+    dispatch_ids = [ message_dispatch_id ]
+    dispatch_ids << message_dispatch_id_before_last_save if !destroyed? && saved_change_to_message_dispatch_id?
+    dispatch_ids = dispatch_ids.compact.uniq
+    return if dispatch_ids.empty?
+
+    ActiveRecord.after_all_transactions_commit do
+      accounts = MessageDispatch.where(id: dispatch_ids).filter_map(&:rhythm_activity_account)
+      accounts.uniq(&:id).each { |account| RhythmActivity.broadcast_for(account) }
+    end
+  end
+
   def mid_run_message_json(message)
     author = ExternalAgentResponseRequest.speaker_for(message)
     text = message.content.to_s.strip
@@ -577,7 +646,7 @@ class AgentRuntimeInteraction < ApplicationRecord
   end
 
   def broadcast_agent_runtime_interactions_refresh
-    return if live_activity? && !destroyed? && previous_changes.keys.intersect?(%w[id finished_at execution_state]) == false
+    return if live_activity? && !destroyed? && previous_changes.keys.intersect?(%w[id finished_at execution_state quiet_reason]) == false
 
     ActionCable.server.broadcast(
       "Agent:#{agent.obfuscated_id}",

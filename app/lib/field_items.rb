@@ -34,7 +34,7 @@ module FieldItems
     when "song"
       base.merge(
         artist: record.artist, lyrics_state: record.lyrics_state, added_by: record.added_by_name,
-        shared_for: record.shared_for_name,
+        suggested_by: record.suggested_by_name, shared_for: record.shared_for_name,
         web_path: routes.account_field_path(record.account, tab: "songs", item: "song-#{record.to_param}"),
         api_path: routes.api_v1_field_song_path(record)
       )
@@ -96,6 +96,8 @@ module FieldItems
       note: (content ? song.note : song.note.to_s.truncate(200).presence),
       added_by_name: song.added_by_name,
       added_by_kind: song.added_by_kind,
+      suggested_by_name: song.suggested_by_name,
+      suggested_by_kind: song.suggested_by_kind,
       uploader_name: song.added_by_name,
       shared_for_name: song.shared_for_name,
       shared_for_kind: song.shared_for_kind,
@@ -113,13 +115,14 @@ module FieldItems
 
   # The account's tweet stream for the Field page: nil while the house has
   # streams switched off, so the page shows nothing about them.
-  def tweet_stream_json(account)
+  def tweet_stream_json(account, now: Time.current)
     return nil unless FieldTweets.enabled?
 
     source = account.field_tweet_source
     url_helpers = Rails.application.routes.url_helpers
     {
-      source: source&.status_json,
+      refreshed_at: now.iso8601,
+      source: source&.status_json(now:),
       # Who would pay: "own" (the account's TwitterAPI.io integration),
       # "house" (granted the house key) or nil (nobody yet).
       funding: FieldTweets.funding_for(account),
@@ -252,12 +255,13 @@ module FieldItems
       ignored_as: speaker.ignored? ? speaker.ignored_as : nil,
       voice_id: speaker.field_voice&.kept? ? speaker.field_voice.to_param : nil,
       naming_source: speaker.naming_source,
+      auto_named: (speaker.auto_named? ? { confidence: speaker.auto_named_confidence } : nil),
       talk_ms: speaker.known_talk_ms,
       clip_start_ms: speaker.clip_start_ms,
       clip_end_ms: speaker.clip_end_ms,
       recognition: (if speaker.recognition?
                       { name: speaker.recognised_voice.name, confidence: speaker.recognition_confidence,
-                        token: speaker.recognition_token }
+                        checked: speaker.recognition_checked != false, token: speaker.recognition_token }
                     end),
       suggestion: (if speaker.suggestion?
                      { name: speaker.suggested_name, quote: speaker.suggestion_quote,
@@ -288,37 +292,23 @@ module FieldItems
     }
   end
 
-  # Recognition affordances for one speaker on the transcript page (spec §9).
-  # Only meaningful when both gates are open; the caller passes that in.
-  def speaker_recognition_json(speaker, enabled:)
-    return { can_remember: false, remembered: false, pending_enrolment: nil } unless enabled
-
-    voice = speaker.field_voice&.kept? ? speaker.field_voice : nil
-    pending = voice && speaker.enrolments.find { |e| e.status == "previewing" && !e.expired? && e.sample.attached? }
-    print = voice&.voiceprint
-    {
-      can_remember: voice.present? && (print.nil? || !voice.remembered? ||
-                                       FieldVoiceprints::Sample.clean_ms(speaker) > print.sample_ms),
-      remembered: voice&.remembered? || false,
-      remembering: voice.present? && speaker.enrolments.any? { |e| e.status == "dispatched" },
-      pending_enrolment: (if pending
-                            { id: pending.to_param, sample_ms: pending.sample_ms,
-                              sample_url: Rails.application.routes.url_helpers.rails_blob_path(pending.sample, disposition: :inline, only_path: true) }
-                          end)
-    }
-  end
-
-  def voice_page_json(voice, used_count)
+  # A voice on the Voices page. Never the print or a sample: only what was
+  # learned from (counts) and whether the print may guess yet.
+  # active_ids: the prints that may guess now (Identification.active_prints).
+  def voice_page_json(voice, used_count, active_ids = [])
     print = voice.voiceprint
+    print = nil unless print&.generation == voice.print_generation
     {
       id: voice.to_param,
       name: voice.name,
       member: voice.user_id.present?,
       used_in: used_count,
-      remembered: voice.remembered?,
-      sample_seconds: (print.sample_ms / 1000 if print),
-      remembered_at: print&.consented_at&.iso8601,
-      remembered_by: (print&.consented_by.respond_to?(:full_name) ? print.consented_by.full_name.presence : nil)
+      remember: voice.remember?,
+      remembered: print.present?,
+      recordings: print&.recording_count || 0,
+      sample_seconds: (print.speech_ms / 1000 if print),
+      guessing: print.present? && active_ids.include?(print.id),
+      learned_at: print&.updated_at&.iso8601
     }
   end
 

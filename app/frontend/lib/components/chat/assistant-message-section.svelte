@@ -11,6 +11,8 @@
   import HandoffReceipts from '$lib/components/chat/HandoffReceipts.svelte';
   import SongReferenceParagraph from './SongReferenceParagraph.svelte';
   import { Streamdown } from 'svelte-streamdown';
+  import CommitRef from '$lib/components/chat/CommitRef.svelte';
+  import { commitRefExtensions } from '$lib/commit-refs.js';
   import { formatTime, formatDateTime } from '$lib/utils';
   import { reasoningSkipTooltip } from '$lib/chat-utils';
 
@@ -44,8 +46,14 @@
   <span class="expression-tag">{token.text}</span>
 {/snippet}
 
+{#snippet commitRefs({ token, streamdown })}
+  {#if token.type === 'commitRef'}
+    <CommitRef {token} theme={streamdown.theme} live={message.streaming !== true} />
+  {/if}
+{/snippet}
+
 {#snippet songParagraph({ token, children })}
-  <SongReferenceParagraph {token} {children} {accountId} />
+  <SongReferenceParagraph {token} {children} {accountId} messageId={message.id} />
 {/snippet}
 
 {#if message.status === 'failed'}
@@ -70,6 +78,8 @@
     content={message.content}
     parseIncompleteMarkdown={message.streaming === true}
     inlineCitation={expressionTag}
+    extensions={commitRefExtensions}
+    children={commitRefs}
     paragraph={songParagraph}
     baseTheme="shadcn"
     {shikiTheme}
