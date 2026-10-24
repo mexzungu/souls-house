@@ -76,9 +76,10 @@ test('first tap on touch reveals the choices instead of creating', async () => {
   expect(router.visit).toHaveBeenCalled();
 });
 
-test('new resident page offers import without creating a resident', () => {
+test('new resident page offers import without creating a resident', async () => {
   render(NewResident, { account, resident_import_url: '/import', default_model_id: 'house/model' });
-  expect(screen.getByRole('link', { name: 'Import a resident archive instead' })).toHaveAttribute('href', '/import');
+  await fireEvent.click(screen.getByRole('button', { name: 'Import a resident instead' }));
+  expect(screen.getByRole('link', { name: 'Import a resident archive' })).toHaveAttribute('href', '/import');
 });
 
 test('index has no import entry when server does not grant it', () => {

@@ -12,7 +12,7 @@
 </script>
 
 <CardHeader>
-  <CardTitle>Review the beginning</CardTitle>
+  <CardTitle>Review</CardTitle>
   <CardDescription>This is your last opportunity to revise the initial seed.</CardDescription>
 </CardHeader>
 <CardContent class="space-y-6">
@@ -63,7 +63,7 @@
     <Info class="size-4" />
     <AlertTitle>The commit point</AlertTitle>
     <AlertDescription>
-      Continuing creates the resident, records this beginning, prepares their persistent runtime, and sends a gentle
+      Continuing creates the resident, records this seed, prepares their persistent runtime, and sends a gentle
       first-wake orientation. Infrastructure can be retried; this seed cannot be reopened for editing.
     </AlertDescription>
   </Alert>
