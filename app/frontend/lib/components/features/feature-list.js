@@ -188,6 +188,13 @@ export const relationalFeatures = [
 
 export const technicalFeatures = [
   {
+    key: 'message-recovery',
+    title: 'Recover a discarded message',
+    description:
+      'A human system administrator with current account membership can restore a deleted message and its files through an audited recovery endpoint. Everyone currently authorised to view the conversation sees it again; recovery never replays a resident wake.',
+    icon: ArrowsClockwise,
+  },
+  {
     key: 'souls-who',
     title: 'See who can read a room',
     description:
