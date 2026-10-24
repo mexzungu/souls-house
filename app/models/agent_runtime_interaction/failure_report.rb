@@ -12,7 +12,7 @@ module AgentRuntimeInteraction::FailureReport
   extend ActiveSupport::Concern
 
   FAILURE_STATES = %w[failed timed_out].freeze
-  FAILURE_CATEGORIES = %w[runtime_unavailable runtime_error timed_out unknown].freeze
+  FAILURE_CATEGORIES = %w[runtime_unavailable model_unavailable runtime_error timed_out unknown].freeze
   # The request never reached a runtime that could answer it.
   UNAVAILABLE_ERROR_CLASSES = %w[
     Errno::ECONNREFUSED Errno::EHOSTUNREACH Errno::ENETUNREACH SocketError Net::OpenTimeout
@@ -49,6 +49,9 @@ module AgentRuntimeInteraction::FailureReport
     return "timed_out" if execution_state == "timed_out" || runtime_status == "timeout"
     return "runtime_unavailable" if error_class.in?(UNAVAILABLE_ERROR_CLASSES)
     return "runtime_unavailable" if runtime_status.nil? && transport_status.in?(UNAVAILABLE_TRANSPORT_STATUSES)
+    # The runtime's own structured classification (trigger_shim.py
+    # classify_provider_error): the CLI refused the model before any request.
+    return "model_unavailable" if response_body.is_a?(Hash) && response_body["error_kind"] == "model_unavailable"
     return "runtime_error" if runtime_status == "error" || runtime_returncode.to_i.nonzero?
 
     "unknown"

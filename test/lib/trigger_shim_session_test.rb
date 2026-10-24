@@ -7,6 +7,24 @@ require "tmpdir"
 # script. Mirrors the harness style of trigger_shim_prompt_test.rb.
 class TriggerShimSessionTest < ActiveSupport::TestCase
 
+  test "a model the CLI refuses is classified before quota and auth" do
+    out = run_shim_python(<<~PY)
+      refused = (
+          'antigravity_runtime_failed: Print mode: invalid model selection (--model "gemini-4-argon-medium" --effort ""): '
+          'model gemini-4-argon-medium is not recognized as a known model or custom model in settings\\n'
+          'Available models:\\nGemini 3.8 Flash (High)'
+      )
+      results = [
+          mod.classify_provider_error({"status": "error", "stdout": refused}, "gemini"),
+          mod.classify_provider_error({"status": "error", "stdout": refused + "\\nfailed: 401 unauthorized"}, "gemini"),
+          mod.classify_provider_error({"status": "ok", "stdout": refused}, "gemini"),
+          mod.classify_provider_error({"status": "error", "stdout": "429 too many requests"}, "gemini"),
+      ]
+      print(json.dumps(results))
+    PY
+    assert_equal [ "model_unavailable", "model_unavailable", nil, "subscription_limit" ], JSON.parse(out)
+  end
+
   test "Antigravity inherits the remaining turn budget on fresh and resumed runs only" do
     out = run_shim_python(<<~PY)
       import types

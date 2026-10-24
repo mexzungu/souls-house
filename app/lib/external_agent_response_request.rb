@@ -116,6 +116,8 @@ class ExternalAgentResponseRequest
         surface_subscription_auth_failure!
       when "subscription_limit"
         surface_subscription_limit!(result.dig(:body, "subscription_usage"))
+      when "model_unavailable"
+        surface_model_unavailable!
       end
     end
     result
@@ -174,6 +176,14 @@ class ExternalAgentResponseRequest
       role: "assistant",
       agent: agent,
       content: "_#{usage.user_message(time_zone: requesting_user&.timezone)}_"
+    )
+  end
+
+  def surface_model_unavailable!
+    chat.messages.create!(
+      role: "assistant",
+      agent: agent,
+      content: "_#{ModelUnavailableNotice.text(agent: agent, model: selection.model)}_"
     )
   end
 

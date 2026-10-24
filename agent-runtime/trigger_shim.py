@@ -2432,6 +2432,17 @@ def classify_provider_error(response, provider):
                 re.IGNORECASE,
             )
         )
+    # The provider's CLI refused the model name before any request went out:
+    # the model isn't offered to this subscription (Antigravity withdrew
+    # Gemini 4 Argon from the Pro plan on 2026-10-23). Checked first, so the
+    # CLI's list of available models can't be misread as an auth or quota line.
+    if re.search(
+        r"invalid model selection|is not recognized as a known model|"
+        r"model [^\n]{0,80}? (?:is )?not (?:available|supported) (?:for|on|in) (?:your|this) (?:plan|account|subscription)",
+        diagnostic,
+        re.IGNORECASE,
+    ):
+        return "model_unavailable"
     if re.search(
         r"rate.?limit|quota (?:is )?(?:exhausted|reached)|usage limit|too many requests|\b429\b",
         diagnostic,

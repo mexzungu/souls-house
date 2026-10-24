@@ -7,6 +7,7 @@ class RunFailureNotice
 
   NO_REPLY_CAUSES = {
     "runtime_unavailable" => "its runtime couldn't be reached",
+    "model_unavailable" => "its model isn't available on its subscription",
     "runtime_error" => "the run ended in an error",
     "timed_out" => "the run timed out",
     "unknown" => "the run failed and the cause isn't identified"

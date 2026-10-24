@@ -79,6 +79,8 @@ class ExternalAgentTelegramRequest
     when "subscription_limit"
       usage = AgentSubscriptionUsage.new(result.dig(:body, "subscription_usage"))
       send_notice(usage.user_message(time_zone: subscription.user.timezone))
+    when "model_unavailable"
+      send_notice(ModelUnavailableNotice.text(agent: agent, model: Agents::Sandbox.chaos_model_for(agent), link: false))
     end
   end
 

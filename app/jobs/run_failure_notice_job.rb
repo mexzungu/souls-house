@@ -11,6 +11,9 @@ class RunFailureNoticeJob < ApplicationJob
 
     run.with_lock do
       next if run.failure_notice_message_id || run.streak_outcome != :failure
+      # A subscription run refused its model has already said so in the room
+      # (ModelUnavailableNotice); a second line would only repeat it.
+      next if run.failure_category == "model_unavailable" && run.provider_auth_mode == "oauth_account"
 
       streak = Agents::RunFailureStreak.call(run.agent, through: run)
       next if streak.count < 2
