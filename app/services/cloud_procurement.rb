@@ -149,6 +149,7 @@ class CloudProcurement
       public_id = "cpo-#{SecureRandom.hex(8)}"
       CloudProcurementOperation.create!(
         agent_placement: placement,
+        placement_generation: placement.generation,
         requested_by:,
         public_id:,
         approval_reference:,
