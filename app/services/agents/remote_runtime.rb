@@ -16,6 +16,9 @@ module Agents
     # Resident images are built on the house host and pushed nowhere, so a VM
     # gets one from the house by image ID (RunnerEnrollment#authorize_image!).
     IMAGE_ID = RunnerEnrollment::IMAGE_ID
+    # The runner reports this in its facts when it carries the fixed runtime
+    # trust check (host-runner RUNTIME_TRUST_CHECK_VERSION).
+    RUNTIME_TRUST_CHECK_VERSION = 1
 
     class Unavailable < StandardError; end
 
@@ -125,9 +128,11 @@ module Agents
     # house origin, which is public here: the provider and model the resident
     # runs on (house inference, an account API key, or a subscription login
     # made from inside its runtime), and the account's provider keys unless it
-    # is house-funded. Imported homes are not yet seeded onto a VM.
+    # is house-funded. A GitHub import admitted to its own VM also gets its
+    # imported-home environment, from the same helper the local sandbox uses
+    # (Agents::ImportedHomeEnv). No other imported home runs on a VM.
     def environment(agent)
-      raise Unavailable, "Imported homes cannot run on a VM yet" if agent.imported_home?
+      raise Unavailable, "Imported homes cannot run on a VM yet" if agent.imported_home? && !github_import_on_vm?(agent)
 
       origin = public_origin
       {
@@ -144,6 +149,44 @@ module Agents
       }.tap do |env|
         env["SOULSHOUSE_REQUIRE_HOUSE_TRUST"] = "1" if Agents::Config.require_house_trust?
         env.merge!(provider_keys(agent))
+        env.merge!(Agents::ImportedHomeEnv.for(agent))
+      end
+    end
+
+    def github_import_on_vm?(agent)
+      agent.github_resident_import.present? && placement_for(agent)&.kind == "github_import"
+    end
+
+    # The same check Agents::Sandbox#imported_runtime_trusted? runs locally
+    # (docs/2026-10-10-vm-imports.md, point 5), run by the runner inside the
+    # resident's image against its Chaos volume. The script is the runner's
+    # own fixed copy; the house sends only the image and the values. Only a
+    # runner that says it has the check is sent it.
+    def check_runtime_trust!(agent, image: local_image_id(agent))
+      raise ArgumentError, "image must be a sha256 image ID" unless IMAGE_ID.match?(image.to_s)
+      raise Unavailable, "only a GitHub import on its own server has a runtime trust check" unless github_import_on_vm?(agent)
+
+      enrollment = live_enrollment!(agent)
+      unless enrollment.reload.last_facts.to_h["runtime_trust_check"] == RUNTIME_TRUST_CHECK_VERSION
+        raise Unavailable, "its server's runner can't check runtime trust; it needs a newer runner"
+      end
+      RunnerCommand.enqueue!(enrollment:, kind: "check_runtime_trust", payload: {
+        "container_name" => agent.container_name, "image" => image, "env" => Agents::ImportedHomeEnv.trust_check(agent)
+      })
+    end
+
+    # What a check_runtime_trust command came to: :pending, :trusted,
+    # :untrusted, :unsupported (the image lacks the managed-import runtime) or
+    # :failed. Anything the house can't read is :failed, never :trusted.
+    def runtime_trust_outcome(command)
+      return :pending if %w[queued delivered].include?(command.state)
+      return :failed unless command.state == "done"
+
+      case command.result.to_h.dig("result", "trust")
+      when "trusted" then :trusted
+      when "untrusted" then :untrusted
+      when "unsupported" then :unsupported
+      else :failed
       end
     end
 

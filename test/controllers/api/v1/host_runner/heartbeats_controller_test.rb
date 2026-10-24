@@ -40,6 +40,17 @@ class Api::V1::HostRunner::HeartbeatsControllerTest < ActionDispatch::Integratio
     assert_equal %w[identity repo work], @enrollment.reload.last_facts["seed_roles"]
   end
 
+  test "the runtime trust check version is kept only as a small integer" do
+    enroll!
+    [ [ 1, 1 ], [ "1", nil ], [ true, nil ], [ 0, nil ], [ { "v" => 1 }, nil ] ].each do |sent, kept|
+      body = JSON.generate(facts: { provider_server_id: 4242, runtime_trust_check: sent })
+      post PATH, params: body, headers: signed_runner_headers(@key, path: PATH, body:, runner_id: @enrollment.public_id)
+      assert_response :ok
+      stored = @enrollment.reload.last_facts["runtime_trust_check"]
+      kept ? assert_equal(kept, stored, sent.inspect) : assert_nil(stored, sent.inspect)
+    end
+  end
+
   test "before enrollment the runner is indistinguishable from an unknown one" do
     beat
     assert_response :unauthorized

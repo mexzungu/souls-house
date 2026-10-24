@@ -282,38 +282,14 @@ module Agents
           raise(SandboxError, "failed to create Chaos home")
         return false
       end
-      check = <<~PYTHON
-        from pathlib import Path
-        import sys
-        try:
-            import github_import_approval
-            import imported_home
-            import os
-            if os.environ.get('SOULSHOUSE_HOME_SYNC_STRATEGY') == 'standard':
-                import standard_home_sync
-                assert callable(imported_home.standard_sync_configuration)
-            entrypoint = Path('/usr/local/bin/entrypoint.sh').read_text()
-            assert entrypoint.index('github_import_approval.py') < entrypoint.index('runtime_hooks.py')
-            assert entrypoint.index('--runtime-trust-check') < entrypoint.index('home_sync_loop.py')
-        except (ImportError, OSError, ValueError, AssertionError):
-            print('unsupported-managed-import-runtime')
-            sys.exit(79)
-        try:
-            imported_home.main(['imported_home.py', '--runtime-trust-check'])
-        except (ValueError, KeyError, OSError):
-            sys.exit(78)
-      PYTHON
       result = docker_capture("run", "--rm",
         "-v", "#{Agents::Volume.new(agent).volume_name}:#{IDENTITY_PATH}:ro",
         "-v", "#{chaos_volume}:/home/agent/.chaos:ro",
         "-e", "SOULSHOUSE_HOME_PROFILE=portable_v1",
         "-e", "SOULSHOUSE_HOME_ROOT=#{IDENTITY_PATH}",
-        "-e", "SOULSHOUSE_PORTABLE_HOME_ID=#{agent.portable_home_id}",
-        "-e", "SOULSHOUSE_HOME_SYNC_STRATEGY=#{agent.github_resident_import.sync_strategy}",
-        "-e", "SOULSHOUSE_HOME_SYNC_CONFIGURATION=#{agent.github_resident_import.sync_configuration.to_json}",
-        "-e", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST=#{managed_import_oauth_trust_required? ? '1' : '0'}",
+        *Agents::ImportedHomeEnv.trust_check(agent).flat_map { |name, value| [ "-e", "#{name}=#{value}" ] },
         "--entrypoint", "python3", agent.container_image,
-        "-c", check)
+        "-c", Agents::ImportedHomeEnv::RUNTIME_TRUST_CHECK)
       raise SandboxError, "Runtime image does not support managed GitHub imports" if result[:stdout].to_s.include?("unsupported-managed-import-runtime")
       result[:ok]
     end
@@ -751,27 +727,9 @@ module Agents
       unless Agent::HOME_PROFILES.include?(agent.home_profile)
         raise SandboxError, "unknown resident home profile #{agent.home_profile.inspect}"
       end
-      return [] unless agent.imported_home?
-
-      args = [ "-e", "SOULSHOUSE_HOME_PROFILE=#{agent.home_profile}",
-               "-e", "SOULSHOUSE_PORTABLE_HOME_ID=#{agent.portable_home_id}",
-               "-e", "#{agent.imported_home_root_env}=#{IDENTITY_PATH}",
-               "-e", "AGENT_REPO_PATH=#{IDENTITY_PATH}",
-               "-e", "TZ=Europe/Madrid" ]
-      # Default off. Only the Anthropic-subscription clamp combination reads it.
-      args += [ "-e", "SOULSHOUSE_IMPORTED_CLAMP_OMIT_FORCED_LOGIN=1" ] if Agents::Config.imported_clamp_omit_forced_login?
-      if (request = agent.github_resident_import)
-        request.require_approval!
-        args += [ "-e", "SOULSHOUSE_GITHUB_IMPORT_ID=#{request.id}",
-          "-e", "SOULSHOUSE_GITHUB_IMPORT_FINGERPRINT=#{request.approved_credential_fingerprint}",
-          "-e", "SOULSHOUSE_GITHUB_IMPORT_REPOSITORY=#{request.repository}",
-          "-e", "SOULSHOUSE_GITHUB_IMPORT_BRANCH=#{request.branch}",
-          "-e", "SOULSHOUSE_HOME_SYNC_STRATEGY=#{request.sync_strategy}",
-          "-e", "SOULSHOUSE_HOME_SYNC_CONFIGURATION=#{request.sync_configuration.to_json}",
-          "-e", "SOULSHOUSE_GITHUB_IMPORT_CONNECTION=#{request.service_connection.public_id}" ]
-        args += [ "-e", "SOULSHOUSE_GITHUB_IMPORT_REQUIRE_OAUTH_TRUST=1" ] if managed_import_oauth_trust_required?
-      end
-      args
+      # Shared with a VM (Agents::RemoteRuntime.environment), so the two
+      # can't drift.
+      Agents::ImportedHomeEnv.for(agent).flat_map { |name, value| [ "-e", "#{name}=#{value}" ] }
     end
 
     # Default off; adds nothing to docker create unless the host enables it.
@@ -787,11 +745,6 @@ module Agents
       agent.account.ai_provider_keys.filter_map do |name, value|
         value.present? ? [ "-e", "#{name}=#{value}" ] : nil
       end.flatten
-    end
-
-    def managed_import_oauth_trust_required?
-      provider = self.class.subscription_provider_for(agent)
-      provider.in?(%w[openai xai]) && agent.provider_auth_mode(provider) == "oauth_account"
     end
 
   end

@@ -55,6 +55,8 @@ module Api
           end
           roles = value["seed_roles"]
           result["seed_roles"] = roles & AgentImportStage::ROLES if roles.is_a?(Array)
+          trust_check = value["runtime_trust_check"]
+          result["runtime_trust_check"] = trust_check if trust_check.is_a?(Integer) && trust_check.between?(1, 1000)
           result
         end
 
