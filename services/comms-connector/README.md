@@ -124,17 +124,25 @@ Answers:
 |---|---|
 | 200 `{"status":"sent","message_id":…,"sent_at":…}` | WhatsApp accepted it (not delivered, not read). `sent_at` is WhatsApp's server timestamp, RFC 3339 UTC. |
 | 200, the same body | This `send_id` was sent before: answered from the record, nothing sent. |
-| 409 `not_connected` | No live paired session for the connection. Nothing recorded or sent. |
-| 409 `stale_attempt` | `attempt` is not the connection's. Nothing recorded or sent. |
+| 409 `not_connected` | A `send_id` with no record, and no live paired session for the connection. Nothing recorded or sent. |
+| 409 `stale_attempt` | A `send_id` with no record, and `attempt` is not the connection's. Nothing recorded or sent. |
 | 409 `outcome_unknown` | This `send_id` was attempted and its outcome never recorded (a crash, a timeout, or a duplicate request while the first is still in flight). Never sent again. |
 | 422 `send_mismatch` | This `send_id` was seen with another `message_id`, chat or text, or this `message_id` with another `send_id`. |
 | 422 `refused` + `reason` | Certainly not sent: `not_on_whatsapp`, `recipient_lookup_failed`, `group_lookup_failed`, `not_connected`, `bad_chat`. Answered the same on a replay. |
 | 422 `bad_attempt`, `bad_send_id`, `bad_message_id`, `bad_chat`, `unsupported_chat`, `bad_text` | A field is wrong. Nothing recorded or sent. `unsupported_chat`: status updates, broadcast lists, newsletters, bots and other servers. (`attempt` that is not a positive JSON integer is refused by the verifier, 401 `bad_attempt`, as for `pair_phone`.) |
 | 502 `send_unknown` | The send may or may not have gone out (a timeout, a lost connection, a server error after sending). Recorded as attempted, so never sent again. |
-| 500 `send_failed` | The store failed before anything was sent. |
+| 500 `send_failed` | The store failed. This can only happen before WhatsApp is asked: after the call, a failure to record the outcome is logged and the answer is still the outcome (and the row stays `attempted`, so a replay answers `outcome_unknown`). Rails treats it as unknown anyway. |
 
 Rails treats anything else (no answer, a timeout, another status) as
 unknown, and never retries a send.
+
+**A recorded `send_id` is answered from its record first**, before the
+attempt or the session is looked at: a replay of a sent, refused or
+attempted `send_id` answers the identical 200, the same 422 `refused` or
+409 `outcome_unknown` whether or not the connection is connected or the
+attempt is current (and 422 `send_mismatch` if anything differs). Only a
+`send_id` with no record goes on to `stale_attempt` / `not_connected` and
+then to the attempted write.
 
 **Durability: at most once per `send_id`.** Before WhatsApp is asked, the
 connector writes `sends(send_id, message_id, chat_digest, text_digest,
