@@ -299,3 +299,81 @@ func TestCrashBetweenAttemptAndResultNeverResends(t *testing.T) {
 		t.Fatalf("the provider was called again after the crash: %d", syn.Sends())
 	}
 }
+
+// A recorded send_id is answered from its record whatever the connection's
+// state or attempt: sent → the identical result, refused → the same
+// refusal, attempted → outcome_unknown; the provider is not called. Only
+// an unrecorded send_id meets stale_attempt / not_connected.
+func TestReplayIsAnsweredFromTheRecordWhateverTheConnection(t *testing.T) {
+	syn := syntheticSender()
+	syn.SendHook = func(_ context.Context, _, messageID, _ string) (time.Time, error) {
+		switch messageID {
+		case "3EB0000000000000BBBB":
+			return time.Time{}, &provider.RefusedError{Reason: provider.RefusedNotOnWhatsApp}
+		case "3EB0000000000000CCCC":
+			return time.Time{}, provider.ErrSendUnknown
+		}
+		return time.Date(2026, 10, 24, 10, 0, 7, 0, time.UTC), nil
+	}
+	w := startSending(t, t.TempDir(), syn)
+	defer w.Close()
+	ctx := context.Background()
+	sent := sendReq()
+	refusedReq := SendRequest{Attempt: 1, SendID: "snd_r", MessageID: "3EB0000000000000BBBB", Chat: sendChat, Text: sendText}
+	unsure := SendRequest{Attempt: 1, SendID: "snd_u", MessageID: "3EB0000000000000CCCC", Chat: sendChat, Text: sendText}
+	first, err := w.SendText(ctx, sent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.SendText(ctx, refusedReq)
+	w.SendText(ctx, unsure)
+
+	staleReq := func(r SendRequest) SendRequest { r.Attempt = 7; return r }
+	check := func(when string) {
+		t.Helper()
+		for _, r := range []SendRequest{sent, staleReq(sent)} {
+			if again, err := w.SendText(ctx, r); err != nil || again != first {
+				t.Errorf("%s: sent replay (attempt %d): %+v %v", when, r.Attempt, again, err)
+			}
+		}
+		for _, r := range []SendRequest{refusedReq, staleReq(refusedReq)} {
+			var refused *SendRefused
+			if _, err := w.SendText(ctx, r); !errors.As(err, &refused) || refused.Reason != "not_on_whatsapp" {
+				t.Errorf("%s: refused replay (attempt %d): %v", when, r.Attempt, err)
+			}
+		}
+		for _, r := range []SendRequest{unsure, staleReq(unsure)} {
+			if _, err := w.SendText(ctx, r); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Errorf("%s: attempted replay (attempt %d): %v", when, r.Attempt, err)
+			}
+		}
+		// A changed text is still a mismatch, connected or not.
+		changed := sent
+		changed.Text += "!"
+		if _, err := w.SendText(ctx, changed); !errors.Is(err, ErrSendMismatch) {
+			t.Errorf("%s: mismatch: %v", when, err)
+		}
+	}
+	check("connected")
+	w.Stop() // disconnected: no session at all
+	check("disconnected")
+	if syn.Sends() != 3 {
+		t.Fatalf("provider called %d times, want 3", syn.Sends())
+	}
+	// An unrecorded send_id, disconnected or stale, records nothing.
+	fresh := SendRequest{Attempt: 1, SendID: "snd_new", MessageID: "3EB0000000000000DDDD", Chat: sendChat, Text: sendText}
+	if _, err := w.SendText(ctx, fresh); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("new send, disconnected: %v", err)
+	}
+	if _, err := w.SendText(ctx, staleReq(fresh)); !errors.Is(err, ErrStaleAttempt) {
+		t.Fatalf("new send, stale: %v", err)
+	}
+	if _, ok, _ := w.st.GetSend(ctx, "snd_new"); ok {
+		t.Fatal("a refused new send was recorded")
+	}
+	// A closed worker answers not_connected, never a store error.
+	w.Close()
+	if _, err := w.SendText(ctx, sent); !errors.Is(err, ErrNotConnected) {
+		t.Fatalf("closed worker: %v", err)
+	}
+}

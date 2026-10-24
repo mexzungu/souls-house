@@ -54,20 +54,45 @@ func digest(s string) []byte { d := sha256.Sum256([]byte(s)); return d[:] }
 // SendText runs one send_text, at most once per send_id for the life of
 // the store:
 //
-//  1. the attempt must be this worker's pairing attempt (ErrStaleAttempt)
-//     and its session live (ErrNotConnected); otherwise nothing is
-//     recorded or sent;
-//  2. the send is recorded as attempted (send_id, message id, SHA-256 of
-//     the chat and of the text, never the text) and committed. If the
-//     send_id is already recorded, the provider is not called: a sent
-//     one answers its first result again, a refused one its refusal, an
-//     attempted one ErrOutcomeUnknown, and one with another message id,
-//     chat or text ErrSendMismatch;
-//  3. only then is the provider called, and the record moved to sent or
+//  1. a send_id already recorded is answered from its record, whatever
+//     the attempt or the session's state, and the provider is not
+//     called: a sent one answers its first result again, a refused one
+//     its refusal, an attempted one ErrOutcomeUnknown, and one with
+//     another message id, chat or text ErrSendMismatch;
+//  2. otherwise the attempt must be this worker's pairing attempt
+//     (ErrStaleAttempt) and its session live (ErrNotConnected), or
+//     nothing is recorded or sent;
+//  3. the send is recorded as attempted (send_id, message id, SHA-256 of
+//     the chat and of the text, never the text) and committed, in one
+//     transaction with the check that the send_id is still unrecorded
+//     (a concurrent duplicate that got there first is answered as in 1);
+//  4. only then is the provider called, and the record moved to sent or
 //     refused. An unknown outcome leaves it attempted for ever.
+//
+// Every store failure returned as an error (ErrStore) happens before the
+// provider is called; after the call a failed record is only logged.
 //
 // Nothing here logs the chat, the text, the message id or the send id.
 func (w *Worker) SendText(ctx context.Context, req SendRequest) (SendResult, error) {
+	rec := store.Send{SendID: req.SendID, MessageID: req.MessageID,
+		ChatDigest: digest(req.Chat), TextDigest: digest(req.Text), State: store.SendAttempted}
+
+	// The store stays open while it is read here, even if the worker is
+	// stopped (a replay needs no session).
+	w.storeMu.RLock()
+	defer w.storeMu.RUnlock()
+	if w.closed {
+		return SendResult{}, ErrNotConnected
+	}
+	existing, found, err := w.st.GetSend(ctx, req.SendID)
+	if err != nil {
+		w.cfg.Log.Error("send", slog.String("reason", "record_failed"))
+		return SendResult{}, err
+	}
+	if found {
+		return w.replay(existing, rec)
+	}
+
 	w.mu.Lock()
 	if req.Attempt != w.attempt {
 		w.mu.Unlock()
@@ -84,8 +109,6 @@ func (w *Worker) SendText(ctx context.Context, req SendRequest) (SendResult, err
 	w.mu.Unlock()
 	defer w.bg.Done()
 
-	rec := store.Send{SendID: req.SendID, MessageID: req.MessageID,
-		ChatDigest: digest(req.Chat), TextDigest: digest(req.Text), State: store.SendAttempted}
 	existing, claimed, err := w.st.ClaimSend(ctx, rec)
 	if errors.Is(err, store.ErrMessageIDTaken) {
 		w.cfg.Log.Info("send", slog.String("refused", "send_mismatch"))

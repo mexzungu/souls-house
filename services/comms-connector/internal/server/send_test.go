@@ -147,3 +147,34 @@ func TestSendTextEndToEndAndTheEcho(t *testing.T) {
 		t.Fatal("an unsent message was echoed")
 	}
 }
+
+// Over the handler: after the phone logs the device out (the worker stays,
+// not connected), a replay of a sent send_id still answers the identical
+// 200 and a new send_id answers not_connected.
+func TestReplayAfterLogoutAnswersFromTheRecord(t *testing.T) {
+	r := newRig(t)
+	r.syn.SendHook = outcomeByMessageID
+	signal := make(chan struct{})
+	r.syn.LogoutSignal = signal
+	r.rails.expect(ref, secret)
+	m := r.manager()
+	srv := r.commandServer(m)
+	m.StartPairing(context.Background(), ref, secret, 1)
+	r.wantAllDelivered(15)
+	status, first := post(t, srv, ref, "send_text", sendTo("snd_1", okMsgID, "hi"))
+	if status != 200 {
+		t.Fatalf("send: %d %v", status, first)
+	}
+	close(signal)
+	eventually(t, "logged out", func() bool { return m.State(ref) == "logged_out" })
+	status, again := post(t, srv, ref, "send_text", sendTo("snd_1", okMsgID, "hi"))
+	if status != 200 || len(again) != 3 || again["sent_at"] != first["sent_at"] || again["message_id"] != first["message_id"] {
+		t.Fatalf("replay after logout: %d %v", status, again)
+	}
+	if status, out := post(t, srv, ref, "send_text", sendTo("snd_2", refuseMsgID, "hi")); status != 409 || out["error"] != "not_connected" {
+		t.Fatalf("new send after logout: %d %v", status, out)
+	}
+	if r.syn.Sends() != 1 {
+		t.Fatalf("provider called %d times", r.syn.Sends())
+	}
+}
