@@ -162,4 +162,23 @@ describe('next deploy row', () => {
     expect(applyPollResult(state, { kind: 'transient' }).next).toEqual(waiting);
     expect(applyPollResult(state, { kind: 'ok', status: { runs: [done] } }).next).toBeNull();
   });
+
+  it('an unreadable CI result keeps polling until GitHub answers', () => {
+    const unknown = { ...waiting, state: 'ci_unknown' };
+    expect(nextLabel(unknown)).toMatch(/retrying/);
+    expect(nextPending(unknown)).toBe(true);
+    let state = applyPollResult(fresh([done]), { kind: 'ok', status: { runs: [done], next: unknown } });
+    expect(shouldPoll(state, 0, 1000)).toBe(true);
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: waiting } });
+    expect(state.next).toEqual(waiting);
+  });
+
+  it('a failed master lookup keeps the row it had and keeps polling', () => {
+    let state = applyPollResult(fresh([done]), { kind: 'ok', status: { runs: [done], next: waiting } });
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: null, next_unknown: true } });
+    expect(state.next).toEqual(waiting);
+    expect(shouldPoll(state, 0, 1000)).toBe(true);
+    state = applyPollResult(state, { kind: 'ok', status: { runs: [done], next: { ...waiting, state: 'starting' } } });
+    expect(state.next.state).toBe('starting');
+  });
 });

@@ -98,25 +98,30 @@ class HouseDeploy
     automatic, partial_error = automatic_runs
     runs = (deploy_runs(body) + automatic).sort_by { |run| run[:created_at].to_s }.reverse.first(limit)
     upcoming = partial_error ? nil : next_deploy(automatic)
+    # Couldn't read master: say so, so the page keeps the row it already has
+    # instead of clearing it on a GitHub blip.
+    next_unknown = partial_error.present? || upcoming == :unknown
+    upcoming = nil if upcoming == :unknown
 
-    { configured: true, runs: runs, next: upcoming, token_expires_at: expires_at, error: nil, partial_error: partial_error }
+    { configured: true, runs: runs, next: upcoming, next_unknown: next_unknown,
+      token_expires_at: expires_at, error: nil, partial_error: partial_error }
   end
 
   # What happens next when master is ahead of the running build and no
   # automatic run for master's head is listed yet. A superseded run reads like
   # the end of the story; the next deploy is the newer commit's own green CI,
   # and this says where that stands. nil when live is master, when an
-  # automatic run for master's head is already on the list, or when it can't
-  # tell (no deployed sha, GitHub didn't answer).
+  # automatic run for master's head is already on the list, or when there is
+  # no deployed sha. :unknown when GitHub didn't say what master is.
   #
   # state: waiting_ci / starting (CI green, deploy run not listed yet) /
-  # ci_failed / ci_cancelled / ci_unknown.
+  # ci_failed / ci_cancelled / ci_unknown (CI lookup failed; worth retrying).
   def self.next_deploy(automatic)
     deployed = deployed_version_source.call.to_s[DeployInfo::SHA, 1]
     return nil if deployed.blank?
 
     status, _headers, commit = transport.call(:get, "/repos/#{repo}/commits/#{REF}", nil)
-    return nil unless status == 200 && commit.is_a?(Hash) && commit["sha"].is_a?(String)
+    return :unknown unless status == 200 && commit.is_a?(Hash) && commit["sha"].is_a?(String)
 
     sha = commit["sha"]
     return nil if sha.start_with?(deployed)

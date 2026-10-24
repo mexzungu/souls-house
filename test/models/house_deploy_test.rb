@@ -290,11 +290,13 @@ class HouseDeployTest < ActiveSupport::TestCase
   end
 
   # Master is 7591bb2..., live is 8d7edfc..., CI on master is in the given state.
-  def next_deploy_with(ci_runs:, automatic: [], ci_status: 200, live: "8d7edfc" + "0" * 33)
+  def next_deploy_with(ci_runs:, automatic: [], ci_status: 200, master_status: 200, live: "8d7edfc" + "0" * 33, whole: false)
     master = "7591bb2" + "1" * 33
     HouseDeploy.deployed_version_source = -> { live }
     HouseDeploy.transport = ->(_method, path, _body) {
       if path.end_with?("/commits/master")
+        next [ master_status, {}, { "message" => "Server Error" } ] unless master_status == 200
+
         [ 200, {}, { "sha" => master, "html_url" => "https://github.com/c/#{master}",
                      "commit" => { "message" => "Added stripe credentials\n\nmore" } } ]
       elsif path.include?("ci.yml/runs")
@@ -306,7 +308,7 @@ class HouseDeployTest < ActiveSupport::TestCase
         [ 200, {}, { "workflow_runs" => [] } ]
       end
     }
-    HouseDeploy.status[:next]
+    whole ? HouseDeploy.status : HouseDeploy.status[:next]
   end
 
   test "next deploy: master ahead of live and CI still running says it deploys when green" do
@@ -332,6 +334,20 @@ class HouseDeployTest < ActiveSupport::TestCase
     listed = { "id" => 30, "path" => ".github/workflows/deploy-rails-on-green.yml", "status" => "in_progress",
                "display_title" => "Deploy Rails #{"7591bb2" + "1" * 33}", "created_at" => "2026-10-23T19:30:00Z" }
     assert_nil next_deploy_with(ci_runs: [], automatic: [ listed ])
+  end
+
+  test "next deploy: a failed master lookup says it is unknown rather than that nothing is coming" do
+    status = next_deploy_with(ci_runs: [], master_status: 502, whole: true)
+    assert_nil status[:next]
+    assert_equal true, status[:next_unknown]
+
+    status = next_deploy_with(ci_runs: [], whole: true)
+    assert_equal "waiting_ci", status[:next][:state]
+    assert_equal false, status[:next_unknown]
+
+    status = next_deploy_with(ci_runs: [], live: "7591bb2" + "1" * 33, whole: true)
+    assert_nil status[:next]
+    assert_equal false, status[:next_unknown]
   end
 
 end

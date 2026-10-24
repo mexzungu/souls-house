@@ -43,7 +43,7 @@ const NEXT_LABELS = {
   starting: '… CI green, deploy starting',
   ci_failed: '✗ CI failed, will not deploy automatically',
   ci_cancelled: '– CI cancelled, will not deploy automatically',
-  ci_unknown: '? could not read CI',
+  ci_unknown: '? could not read CI, retrying',
 };
 
 export function nextLabel(next) {
@@ -51,9 +51,10 @@ export function nextLabel(next) {
   return NEXT_LABELS[next.state] || next.state || '';
 }
 
-// Still heading for a deploy on its own, so worth polling for.
+// Still heading for a deploy on its own, or not known yet because GitHub
+// didn't answer, so worth polling for.
 export function nextPending(next) {
-  return !!next && (next.state === 'waiting_ci' || next.state === 'starting');
+  return !!next && ['waiting_ci', 'starting', 'ci_unknown'].includes(next.state);
 }
 
 // The polling state machine. `state` is { runs, next, error, failures, stopped }.
@@ -93,7 +94,9 @@ export function applyPollResult(state, result) {
     const runs = [...fresh, ...kept].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
     return { runs, next: state.next ?? null, error: status.partial_error, failures: 0, stopped: false };
   }
-  return { runs: status.runs || [], next: status.next ?? null, error: null, failures: 0, stopped: false };
+  // next_unknown: the server couldn't read master this time; keep the row we had.
+  const next = status.next_unknown ? (state.next ?? null) : (status.next ?? null);
+  return { runs: status.runs || [], next, error: null, failures: 0, stopped: false };
 }
 
 export function shouldPoll(state, requestedAt, now) {
