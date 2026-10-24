@@ -377,3 +377,19 @@ func TestReplayIsAnsweredFromTheRecordWhateverTheConnection(t *testing.T) {
 		t.Fatalf("closed worker: %v", err)
 	}
 }
+
+// A store failure is returned only before the provider is called (500
+// send_failed at the handler): with the database gone, nothing is sent.
+func TestStoreFailureIsBeforeTheProvider(t *testing.T) {
+	syn := syntheticSender()
+	w := startSending(t, t.TempDir(), syn)
+	defer w.Close()
+	w.st.Close() // the database fails under a running worker
+	_, err := w.SendText(context.Background(), sendReq())
+	if !errors.Is(err, store.ErrStore) {
+		t.Fatalf("got %v", err)
+	}
+	if syn.Sends() != 0 {
+		t.Fatalf("provider called %d times", syn.Sends())
+	}
+}
