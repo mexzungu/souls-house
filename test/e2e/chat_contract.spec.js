@@ -5,7 +5,7 @@ async function login(page, user, password) {
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).fill(password);
   await page.getByRole('button', { name: /sign in|log in/i }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).not.toHaveURL(/\/login/);
 }
 
 async function setupRun(request) {

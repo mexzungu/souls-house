@@ -90,6 +90,7 @@ class IdentityLeakTest < ActiveSupport::TestCase
     "app/frontend/lib/components/home/self-host-helper-guide.svelte" => "extracted self-host guide copy",
     "app/frontend/pages/self-host-technical.svelte" => "self-host page copy",
     "app/frontend/pages/home.svelte" => "marketing page copy",
+    "app/views/layouts/_share_video.html.erb" => "homepage link-preview copy (og/twitter meta)",
     "app/frontend/pages/features.svelte" => "public features page copy: the product describing itself",
     "app/frontend/pages/pricing.svelte" => "public pricing page copy: the product describing its plans",
     "app/frontend/pages/changelog.svelte" => "public changelog page copy",

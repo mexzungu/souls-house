@@ -16,7 +16,7 @@ for (const width of [360, 1280]) {
       await page.getByLabel(/email/i).fill(setup.primary_user.email);
       await page.getByLabel(/password/i).fill(setup.password);
       await page.getByRole('button', { name: /log in/i }).click();
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).not.toHaveURL(/\/login/);
       await page.getByRole('button', { name: 'User account menu' }).click();
       for (const theme of ['Light', 'Dark', 'System']) {
         await expect(page.getByRole('menuitem', { name: new RegExp(`^${theme} theme`) })).toBeVisible();

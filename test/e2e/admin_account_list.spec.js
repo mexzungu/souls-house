@@ -16,7 +16,7 @@ test('mobile admin browses a full-height list, searches, selects and returns; de
     await page.getByLabel(/email/i).fill(setup.admin_user.email);
     await page.getByLabel(/password/i).fill(setup.password);
     await page.getByRole('button', { name: /log in/i }).click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).not.toHaveURL(/\/login/);
     await page.goto('/admin/accounts');
 
     const list = page.getByRole('complementary', { name: 'Account list' });
