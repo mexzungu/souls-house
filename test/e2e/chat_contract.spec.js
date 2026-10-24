@@ -380,6 +380,7 @@ test.describe('browser contracts', () => {
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.getByLabel('Initial soul seed', { exact: true }).fill('A synthetic beginning for the browser test.');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('radio', { name: /I don't have my own keys/ }).click();
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.getByRole('checkbox').check();
     await page.getByRole('button', { name: 'Create resident and commit this seed' }).click();

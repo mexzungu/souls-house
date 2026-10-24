@@ -27,6 +27,13 @@ test('new residents default to house funding and missing credentials never stran
     await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
     await page.getByRole('radio', { name: /I have my own keys/ }).click();
     await expect(page.getByTestId('own-keys-path')).toBeVisible();
+    const providerKey = page.locator('#provider_key');
+    if (await providerKey.count()) {
+      await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeDisabled();
+      await providerKey.fill('sk-e2e-not-a-real-key');
+      await expect(page.getByRole('button', { name: 'Continue', exact: true })).toBeEnabled();
+      await providerKey.fill('');
+    }
     await expect(page.getByText('On the house · $10 per month.')).toHaveCount(0);
     await page.getByRole('radio', { name: /I don't have my own keys/ }).click();
     await expect(page.getByRole('radio', { name: /Claude Haiku 5.5/ })).toBeChecked();
