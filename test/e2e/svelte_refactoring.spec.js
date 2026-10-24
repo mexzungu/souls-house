@@ -30,6 +30,7 @@ test('creation steps preserve the browser draft and require final acknowledgemen
   await expect(page.getByLabel('Display name', { exact: true })).toHaveValue('Synthetic draft');
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
+  await page.getByRole('radio', { name: /I don't have my own keys/ }).click();
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   const create = page.getByRole('button', { name: 'Create resident and commit this seed' });
   await expect(create).toBeDisabled();

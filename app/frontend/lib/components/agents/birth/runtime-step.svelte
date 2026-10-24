@@ -134,13 +134,12 @@
               placeholder="Paste your key"
               bind:value={providerKey} />
             <p class="text-sm text-muted-foreground">
-              Saved to this account's model keys when you create the resident. Without a key (or a subscription
-              connected later) they can't reply.
+              Needed to continue. Saved to this account's model keys when you create the resident.
             </p>
           {:else}
             <p class="text-sm text-muted-foreground">
-              This model needs a {providerNames[keyProvider] || keyProvider} key. Ask an owner of this account to add one
-              under Model API keys.
+              This model needs a {providerNames[keyProvider] || keyProvider} key before you can continue. Ask an owner of
+              this account to add one under Model API keys, or choose another model.
             </p>
           {/if}
         </div>

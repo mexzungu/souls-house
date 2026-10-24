@@ -64,16 +64,30 @@
     },
   });
 
+  // On the own-keys path the chosen model's key must be there: already on the account, or pasted here.
+  let keyProvider = $derived(
+    Object.values(grouped_models)
+      .flat()
+      .find((model) => model.model_id === selectedModel)?.key_provider || null
+  );
+  let ownKeyReady = $derived(
+    (houseOffered && keyPath !== 'own') ||
+      !keyProvider ||
+      Boolean(keysConfigured[keyProvider]) ||
+      providerKey.trim().length > 0
+  );
+
   let formComplete = $derived(
     $form.agent.name.trim().length > 0 &&
       ($form.agent.system_prompt.trim().length > 0 || openBeginning) &&
-      selectedModel
+      selectedModel &&
+      ownKeyReady
   );
   let canContinue = $derived(
     step === 0 ||
       (step === 1 && $form.agent.name.trim().length > 0) ||
       (step === 2 && ($form.agent.system_prompt.trim().length > 0 || openBeginning)) ||
-      (step === 3 && Boolean(selectedModel) && (!houseOffered || keyPath !== null))
+      (step === 3 && Boolean(selectedModel) && (!houseOffered || keyPath !== null) && ownKeyReady)
   );
   let canCreate = $derived(step === steps.length - 1 && formComplete && acknowledged && !$form.processing);
 
@@ -133,9 +147,6 @@
     // The heartbeat is on for every new resident; it can be tuned with them later.
     $form.agent.scheduled_wakes_enabled = true;
     const key = keyPath !== 'house' ? providerKey.trim() : '';
-    const keyProvider = Object.values(grouped_models)
-      .flat()
-      .find((model) => model.model_id === selectedModel)?.key_provider;
     $form.transform((data) =>
       key && keyProvider ? { ...data, provider_key: { provider: keyProvider, value: key } } : data
     );
