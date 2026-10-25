@@ -219,6 +219,9 @@ COPY docs/runtime-instructions.md /usr/local/share/helixkit-agent/runtime-instru
 COPY docs/soulshouse-api.md /usr/local/share/helixkit-agent/soulshouse-api.md
 COPY docs/capability-discovery.md /usr/local/share/helixkit-agent/capability-discovery.md
 COPY docs/message-helper-input.md /usr/local/share/helixkit-agent/message-helper-input.md
+# The sheet about souls.house as of this image (#566). The runtime fetches a
+# current one from the house each fresh session; this is the fallback.
+COPY docs/about-souls-house.md /usr/local/share/helixkit-agent/about-souls-house.md
 # Permanent legacy stub. Residents' own memories and notes cite the old manual
 # path; it stays installed forever and points at the current manual.
 COPY docs/helixkit-api.md /usr/local/share/helixkit-agent/helixkit-api.md
@@ -245,7 +248,7 @@ COPY soulshouse-integrations /usr/local/bin/soulshouse-integrations
 COPY antigravity-browser-open /usr/local/libexec/helixkit-antigravity-login/xdg-open
 # Imported Git homes use repo-scoped SSH deploy keys.
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
-COPY imported_home.py home_sync_loop.py standard_home_sync.py /home/agent/
+COPY imported_home.py home_sync_loop.py standard_home_sync.py about_sheet.py /home/agent/
 COPY github_import_approval.py github_import_credential.py /home/agent/
 COPY --chmod=0755 github-import-trust-setup /usr/local/bin/github-import-trust-setup
 COPY runtime_settings.py runtime_hooks.py /usr/local/share/helixkit-agent/

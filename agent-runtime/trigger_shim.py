@@ -110,6 +110,7 @@ AGENT_DEFAULT_MODEL = os.environ.get("AGENT_DEFAULT_MODEL", "claude-haiku-4-5")
 AGENT_PROVIDER = os.environ.get("AGENT_PROVIDER", "anthropic")
 import imported_home
 import home_sync_loop
+import about_sheet
 
 AGENT_REPO_PATH = Path(os.environ.get("AGENT_REPO_PATH", "/home/agent/repo"))
 AGENT_IDENTITY_PATH = Path(os.environ.get("AGENT_IDENTITY_PATH", "/home/agent/identity"))
@@ -1786,10 +1787,12 @@ def build_prompt_with_components(request_text, runtime_notice=None, memory_notic
         identity = identity_context()
         journals = memory_context()
         reference = memory_command_reference()
-    parts = [part for part in (identity, request_text, runtime_notice, memory_notice, journals, reference) if part]
+    about = about_house_note()
+    parts = [part for part in (identity, about, request_text, runtime_notice, memory_notice, journals, reference) if part]
     prompt = "\n\n".join(parts)
     return prompt, {
         "identity": _byte_length(identity),
+        "about_house": _byte_length(about),
         "request": _byte_length(request_text),
         "runtime_notice": _byte_length(runtime_notice),
         "journal": _byte_length(journals),
@@ -1797,6 +1800,21 @@ def build_prompt_with_components(request_text, runtime_notice=None, memory_notic
         **({"graph_memory": _byte_length(memory_notice)} if memory_notice else {}),
         "graph_memory_status": getattr(memory_notice, "status", "ok" if memory_notice else "not_attempted"),
     }
+
+def about_house_note():
+    """Hosting context pointing at the sheet about souls.house (#566).
+
+    Refreshed at most once per burst of fresh sessions; a failure keeps the
+    last good copy and the note says how old it is. Never fails a turn.
+    """
+    try:
+        note = about_sheet.session_note()
+        log.info("about_house=%s", note.splitlines()[1][:80] if "\n" in note else "none")
+        return note
+    except Exception as error:
+        log.warning(f"about_house unavailable: {error}")
+        return ""
+
 
 def memory_command_reference():
     if imported_home.enabled():

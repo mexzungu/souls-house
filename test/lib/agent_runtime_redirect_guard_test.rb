@@ -55,7 +55,11 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
     "soulshouse-reflex" => { args: %w[list] },
     "soulshouse-gws" => { args: %w[drive files list], manifest: :google_workspace },
     "soulshouse-comms" => { args: %w[chats], manifest: :whatsapp },
-    "github_import_approval.py" => { python: "import github_import_approval as g; g.fetch_approval()" }
+    "github_import_approval.py" => { python: "import github_import_approval as g; g.fetch_approval()" },
+    # A fresh path each run, so a copy fetched moments ago can't skip the request.
+    "about_sheet.py" => { python: "import about_sheet as a, os, sys, tempfile; " \
+      "os.environ['SOULSHOUSE_ABOUT_SHEET_PATH'] = os.path.join(tempfile.mkdtemp(), 'about.md'); " \
+      "s = a.refresh(); print(s, file=sys.stderr); sys.exit(0 if s == 'fetched' else 1)" }
   }.freeze
 
   # Guarded before #502 and covered by their own tests; the static check
