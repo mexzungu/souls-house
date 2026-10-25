@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { formatBytes, formatUsd, periodChange, stackTotals, linePoints, lastValue, weeklyDelta } from './format.js';
+import {
+  formatBytes,
+  formatUsd,
+  periodChange,
+  stackTotals,
+  linePoints,
+  lastValue,
+  weeklyDelta,
+  timeAgo,
+} from './format.js';
 
 describe('dashboard formatting', () => {
   it('formats bytes in binary units', () => {
@@ -37,5 +46,14 @@ describe('dashboard formatting', () => {
   it('finds the last present value', () => {
     expect(lastValue([1, 2, null])).toBe(2);
     expect(lastValue([null])).toBeNull();
+  });
+
+  it('ages a timestamp against the dashboard clock', () => {
+    const now = '2026-10-25T12:00:00Z';
+    expect(timeAgo(null, now)).toBeNull();
+    expect(timeAgo('2026-10-25T11:59:50Z', now)).toBe('just now');
+    expect(timeAgo('2026-10-25T11:15:00Z', now)).toBe('45m ago');
+    expect(timeAgo('2026-10-24T12:00:00Z', now)).toBe('24h ago');
+    expect(timeAgo('2026-10-20T12:00:00Z', now)).toBe('5d ago');
   });
 });
