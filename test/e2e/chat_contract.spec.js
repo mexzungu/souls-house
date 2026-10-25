@@ -517,7 +517,7 @@ test.describe('browser contracts', () => {
       await page.getByRole('button', { name: currentModel, exact: true }).click();
       await page.getByRole('option', { name: label, exact: true }).first().click();
       await expect(page.getByRole('button', { name: label, exact: true })).toBeVisible();
-      await expect(page.getByRole('heading', { name: control, exact: true })).toBeVisible();
+      await expect(page.getByTestId('model-effort').getByText(control, { exact: true })).toBeVisible();
       currentModel = label;
     }
 
@@ -555,6 +555,7 @@ test.describe('browser contracts', () => {
     await page.getByRole('button', { name: 'Settings' }).click();
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
     await page.getByLabel('Heartbeat wakes per day').fill('4');
+    await page.getByRole('button', { name: 'Advanced settings', exact: true }).click();
     await page.locator('label[for="paused"]').click();
     await page.getByRole('button', { name: 'Update Resident' }).click();
 

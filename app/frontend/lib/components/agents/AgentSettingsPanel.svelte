@@ -13,6 +13,24 @@
     runtimeManaged = false,
     houseAllowance = null,
   } = $props();
+
+  const ADVANCED_FIELDS = [
+    'active',
+    'paused',
+    'persistent_session',
+    'persistent_wake_session',
+    'session_idle_timeout_minutes',
+    'session_max_age_minutes',
+    'session_context_budget_tokens',
+    'turn_timeout_minutes',
+  ];
+  // Folded away unless one of its settings came back with an error, or the
+  // resident is disabled or paused (so switching it back on is in view).
+  let advancedOpen = $state(
+    ADVANCED_FIELDS.some((field) => $form.errors?.[field]) ||
+      $form.agent.active === false ||
+      Boolean($form.agent.paused)
+  );
 </script>
 
 <div class="space-y-8">
@@ -21,152 +39,13 @@
     <p class="text-sm text-muted-foreground">Configure how this resident runs and when it wakes.</p>
   </div>
 
-  <AgentModelPanel {houseAllowance} {form} {groupedModels} {runtimeManaged} bind:selectedModel />
-
-  <AgentConversationModels
-    {form}
-    {groupedModels}
-    defaultModelId={selectedModel}
-    agentName={$form.agent.name || 'this resident'} />
-
-  {#if runtimeManaged}
-    <div class="border rounded-lg p-4 text-sm text-muted-foreground">
-      Model and thinking-effort changes take effect on the next trigger; no sandbox rebuild is needed. Tools remain
-      managed by the resident's Chaos runtime.
-    </div>
-  {/if}
-
-  <div class="space-y-2">
-    <Label for="turn_timeout_minutes">Turn timeout (minutes)</Label>
-    <Input
-      id="turn_timeout_minutes"
-      type="number"
-      min={1}
-      max={1440}
-      step={1}
-      bind:value={$form.agent.turn_timeout_minutes}
-      disabled={!runtimeManaged} />
-    <p class="text-sm text-muted-foreground">
-      Maximum elapsed time for one turn, including tool use. Default: 30 minutes; maximum: 1440 minutes (24 hours).
-      Applies to conversation turns, Telegram turns, wakes, orientation and memory work—not the lifetime of a
-      conversation. Changes take effect on the next trigger.
-    </p>
-    {#if $form.errors?.turn_timeout_minutes}
-      <p class="text-sm text-destructive">{$form.errors.turn_timeout_minutes}</p>
-    {/if}
-  </div>
-
-  <div class="space-y-4">
-    <div>
-      <h2 class="text-lg font-semibold">Availability</h2>
-      <p class="text-sm text-muted-foreground">Control whether this resident participates in automated activity.</p>
-    </div>
-
-    <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
-      <div class="space-y-1">
-        <Label for="active">Active</Label>
-        <p class="text-sm text-muted-foreground">Keep this resident available for selection in {$siteName}.</p>
-      </div>
-      <Switch id="active" checked={$form.agent.active} onCheckedChange={(checked) => ($form.agent.active = checked)} />
-    </div>
-
-    <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
-      <div class="space-y-1">
-        <Label for="paused">Paused</Label>
-        <p class="text-sm text-muted-foreground">
-          Exclude this resident from scheduled and self-directed activity while keeping manual triggers available.
-        </p>
-      </div>
-      <Switch id="paused" checked={$form.agent.paused} onCheckedChange={(checked) => ($form.agent.paused = checked)} />
-    </div>
-  </div>
-
-  <div class="space-y-4">
-    <div>
-      <h2 class="text-lg font-semibold">Session continuity</h2>
-      <p class="text-sm text-muted-foreground">Choose which Chaos sessions continue across separate triggers.</p>
-    </div>
-
-    <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
-      <div class="space-y-1">
-        <Label for="persistent_session">Persistent conversation sessions</Label>
-        <p class="text-sm text-muted-foreground">
-          Resume each conversation's Chaos session and send only new transcript messages after the first turn.
-        </p>
-      </div>
-      <Switch
-        id="persistent_session"
-        checked={$form.agent.persistent_session}
-        disabled={!runtimeManaged}
-        onCheckedChange={(checked) => ($form.agent.persistent_session = checked)} />
-    </div>
-
-    <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
-      <div class="space-y-1">
-        <Label for="persistent_wake_session">Persistent heartbeat session</Label>
-        <p class="text-sm text-muted-foreground">
-          Run heartbeats in one continuing Chaos session instead of starting fresh each time.
-        </p>
-      </div>
-      <Switch
-        id="persistent_wake_session"
-        checked={$form.agent.persistent_wake_session}
-        disabled={!runtimeManaged}
-        onCheckedChange={(checked) => ($form.agent.persistent_wake_session = checked)} />
-    </div>
-
-    <div class="rounded border bg-muted/30 p-4 space-y-3">
-      <div class="space-y-1">
-        <Label>Fresh-session limits</Label>
-        <p class="text-sm text-muted-foreground">
-          A persistent session starts fresh, with identity, journals and the recent transcript, once any limit is
-          passed. Use 0 to turn a limit off.
-        </p>
-      </div>
-      <div class="grid gap-3 sm:grid-cols-3">
-        <div class="space-y-1">
-          <Label for="session_idle_timeout_minutes">Idle minutes</Label>
-          <Input
-            id="session_idle_timeout_minutes"
-            type="number"
-            min={0}
-            step={1}
-            bind:value={$form.agent.session_idle_timeout_minutes}
-            disabled={!runtimeManaged} />
-        </div>
-        <div class="space-y-1">
-          <Label for="session_max_age_minutes">Maximum age (minutes)</Label>
-          <Input
-            id="session_max_age_minutes"
-            type="number"
-            min={0}
-            step={1}
-            bind:value={$form.agent.session_max_age_minutes}
-            disabled={!runtimeManaged} />
-        </div>
-        <div class="space-y-1">
-          <Label for="session_context_budget_tokens">Context budget (tokens)</Label>
-          <Input
-            id="session_context_budget_tokens"
-            type="number"
-            min={0}
-            step={1000}
-            bind:value={$form.agent.session_context_budget_tokens}
-            disabled={!runtimeManaged} />
-        </div>
-      </div>
-      <p class="text-xs text-muted-foreground">
-        The context budget applies where the runtime can measure per-request context (API-key and OpenAI/xAI
-        subscription runs). Claude and Gemini subscription runs are bounded by the idle and age limits.
-      </p>
-    </div>
-
-    {#if !runtimeManaged}
-      <p class="text-xs text-muted-foreground">
-        Persistent sessions become available when this resident runs in a Chaos harness.
-      </p>
-    {/if}
-  </div>
+  <AgentModelPanel {houseAllowance} {form} {groupedModels} {runtimeManaged} bind:selectedModel>
+    <AgentConversationModels
+      {form}
+      {groupedModels}
+      defaultModelId={selectedModel}
+      agentName={$form.agent.name || 'this resident'} />
+  </AgentModelPanel>
 
   <div class="space-y-4">
     <div>
@@ -203,4 +82,157 @@
       </p>
     </div>
   </div>
+
+  <div class="border-t pt-6">
+    <button
+      type="button"
+      class="text-sm font-medium text-muted-foreground hover:text-foreground underline underline-offset-4"
+      aria-expanded={advancedOpen}
+      aria-controls="advanced-settings"
+      onclick={() => (advancedOpen = !advancedOpen)}>
+      {advancedOpen ? 'Hide advanced settings' : 'Advanced settings'}
+    </button>
+  </div>
+
+  {#if advancedOpen}
+    <div id="advanced-settings" class="space-y-8">
+      <div class="space-y-4">
+        <div>
+          <h2 class="text-lg font-semibold">Availability</h2>
+          <p class="text-sm text-muted-foreground">Control whether this resident participates in automated activity.</p>
+        </div>
+
+        <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
+          <div class="space-y-1">
+            <Label for="active">Active</Label>
+            <p class="text-sm text-muted-foreground">Keep this resident available for selection in {$siteName}.</p>
+          </div>
+          <Switch
+            id="active"
+            checked={$form.agent.active}
+            onCheckedChange={(checked) => ($form.agent.active = checked)} />
+        </div>
+
+        <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
+          <div class="space-y-1">
+            <Label for="paused">Paused</Label>
+            <p class="text-sm text-muted-foreground">
+              Exclude this resident from scheduled and self-directed activity while keeping manual triggers available.
+            </p>
+          </div>
+          <Switch
+            id="paused"
+            checked={$form.agent.paused}
+            onCheckedChange={(checked) => ($form.agent.paused = checked)} />
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div>
+          <h2 class="text-lg font-semibold">Session continuity</h2>
+          <p class="text-sm text-muted-foreground">Choose which Chaos sessions continue across separate triggers.</p>
+        </div>
+
+        <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
+          <div class="space-y-1">
+            <Label for="persistent_session">Persistent conversation sessions</Label>
+            <p class="text-sm text-muted-foreground">
+              Resume each conversation's Chaos session and send only new transcript messages after the first turn.
+            </p>
+          </div>
+          <Switch
+            id="persistent_session"
+            checked={$form.agent.persistent_session}
+            disabled={!runtimeManaged}
+            onCheckedChange={(checked) => ($form.agent.persistent_session = checked)} />
+        </div>
+
+        <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
+          <div class="space-y-1">
+            <Label for="persistent_wake_session">Persistent heartbeat session</Label>
+            <p class="text-sm text-muted-foreground">
+              Run heartbeats in one continuing Chaos session instead of starting fresh each time.
+            </p>
+          </div>
+          <Switch
+            id="persistent_wake_session"
+            checked={$form.agent.persistent_wake_session}
+            disabled={!runtimeManaged}
+            onCheckedChange={(checked) => ($form.agent.persistent_wake_session = checked)} />
+        </div>
+
+        <div class="rounded border bg-muted/30 p-4 space-y-3">
+          <div class="space-y-1">
+            <Label>Fresh-session limits</Label>
+            <p class="text-sm text-muted-foreground">
+              A persistent session starts fresh, with identity, journals and the recent transcript, once any limit is
+              passed. Use 0 to turn a limit off.
+            </p>
+          </div>
+          <div class="grid gap-3 sm:grid-cols-3">
+            <div class="space-y-1">
+              <Label for="session_idle_timeout_minutes">Idle minutes</Label>
+              <Input
+                id="session_idle_timeout_minutes"
+                type="number"
+                min={0}
+                step={1}
+                bind:value={$form.agent.session_idle_timeout_minutes}
+                disabled={!runtimeManaged} />
+            </div>
+            <div class="space-y-1">
+              <Label for="session_max_age_minutes">Maximum age (minutes)</Label>
+              <Input
+                id="session_max_age_minutes"
+                type="number"
+                min={0}
+                step={1}
+                bind:value={$form.agent.session_max_age_minutes}
+                disabled={!runtimeManaged} />
+            </div>
+            <div class="space-y-1">
+              <Label for="session_context_budget_tokens">Context budget (tokens)</Label>
+              <Input
+                id="session_context_budget_tokens"
+                type="number"
+                min={0}
+                step={1000}
+                bind:value={$form.agent.session_context_budget_tokens}
+                disabled={!runtimeManaged} />
+            </div>
+          </div>
+          <p class="text-xs text-muted-foreground">
+            The context budget applies where the runtime can measure per-request context (API-key and OpenAI/xAI
+            subscription runs). Claude and Gemini subscription runs are bounded by the idle and age limits.
+          </p>
+        </div>
+
+        {#if !runtimeManaged}
+          <p class="text-xs text-muted-foreground">
+            Persistent sessions become available when this resident runs in a Chaos harness.
+          </p>
+        {/if}
+      </div>
+
+      <div class="space-y-2">
+        <Label for="turn_timeout_minutes">Turn timeout (minutes)</Label>
+        <Input
+          id="turn_timeout_minutes"
+          type="number"
+          min={1}
+          max={1440}
+          step={1}
+          bind:value={$form.agent.turn_timeout_minutes}
+          disabled={!runtimeManaged} />
+        <p class="text-sm text-muted-foreground">
+          Maximum elapsed time for one turn, including tool use. Default: 30 minutes; maximum: 1440 minutes (24 hours).
+          Applies to conversation turns, Telegram turns, wakes, orientation and memory work—not the lifetime of a
+          conversation. Changes take effect on the next trigger.
+        </p>
+        {#if $form.errors?.turn_timeout_minutes}
+          <p class="text-sm text-destructive">{$form.errors.turn_timeout_minutes}</p>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>

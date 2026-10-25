@@ -25,7 +25,15 @@ const editProps = { account, agent: { id: 'resident', name: 'Resident' }, portab
 test('owner can select the export/import tab with no settings submit action', async () => {
   render(EditResident, editProps);
   expect(useSync).toHaveBeenCalledWith({
-    'Agent:resident': ['agent', 'memories', 'interactions', 'interactions_pagination', 'cost_report'],
+    'Agent:resident': [
+      'agent',
+      'memories',
+      'interactions',
+      'interactions_pagination',
+      'cost_report',
+      'reflexes',
+      'subagents_available',
+    ],
   });
   await fireEvent.click(screen.getByRole('button', { name: 'Export / Import' }));
   expect(screen.getByRole('link', { name: 'Download resident archive' })).toHaveAttribute('href', '/export');
@@ -284,4 +292,26 @@ describe('explicit portability lifecycle actions', () => {
       await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh export status' })).toBeEnabled());
     }
   );
+});
+
+test('reflexes sit below Sessions, read-only, and sub-agents show only when the plan includes them', async () => {
+  const reflexes = {
+    enabled: true,
+    max_kept: 10,
+    items: [
+      { id: 'r1', name: 'Check the clock', shape: 'Does the post state a time?', reminder: 'Read the hook time.' },
+    ],
+  };
+  render(EditResident, { ...editProps, reflexes, subagents_available: false });
+  const labels = screen.getAllByRole('button').map((button) => button.textContent.trim());
+  expect(labels.indexOf('Reflexes')).toBe(labels.indexOf('Sessions') + 1);
+  expect(labels).not.toContain('Sub-agents');
+  await fireEvent.click(screen.getByRole('button', { name: 'Reflexes' }));
+  expect(screen.getByText('Check the clock')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Update Resident' })).not.toBeInTheDocument();
+});
+
+test('a Work or on-the-house resident keeps the Sub-agents tab', () => {
+  render(EditResident, { ...editProps, subagents_available: true });
+  expect(screen.getByRole('button', { name: 'Sub-agents' })).toBeInTheDocument();
 });

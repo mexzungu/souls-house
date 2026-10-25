@@ -19,13 +19,18 @@ const groupedModels = {
 
 const formFor = (agent) => writable({ agent, errors: {} });
 
-test('offers same-provider models once each, without the default or house models', () => {
+test('folds away, then offers same-provider models once each, without the default or house models', async () => {
   const form = formFor({
     name: 'Lume',
     switchable_model_ids: ['openai/gpt-6-astra'],
     resident_may_switch_model: false,
   });
   render(AgentConversationModels, { form, groupedModels, defaultModelId: 'openai/gpt-6.1-sol', agentName: 'Lume' });
+  const toggle = screen.getByRole('button', { name: /Additional available models/ });
+  expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(toggle).toHaveTextContent('1 more model people can switch to in a conversation.');
+  expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
+  await fireEvent.click(toggle);
   const boxes = screen.getAllByRole('checkbox');
   expect(boxes.map((box) => box.closest('label').textContent.trim())).toEqual(['GPT-6 Astra', 'GPT-6 Luna']);
   expect(screen.getByRole('checkbox', { name: 'GPT-6 Astra' })).toBeChecked();
@@ -36,13 +41,14 @@ test('offers same-provider models once each, without the default or house models
 test('checking and unchecking updates switchable_model_ids', async () => {
   const form = formFor({ name: 'Lume', switchable_model_ids: [], resident_may_switch_model: false });
   render(AgentConversationModels, { form, groupedModels, defaultModelId: 'openai/gpt-6.1-sol', agentName: 'Lume' });
+  await fireEvent.click(screen.getByRole('button', { name: /Additional available models/ }));
   await fireEvent.click(screen.getByRole('checkbox', { name: 'GPT-6 Luna' }));
   expect(get(form).agent.switchable_model_ids).toEqual(['openai/gpt-6-luna']);
   await fireEvent.click(screen.getByRole('checkbox', { name: 'GPT-6 Luna' }));
   expect(get(form).agent.switchable_model_ids).toEqual([]);
 });
 
-test('a house default offers no conversation models', () => {
+test('a house default offers no conversation models', async () => {
   const form = formFor({ name: 'Lume', switchable_model_ids: [], resident_may_switch_model: false });
   render(AgentConversationModels, {
     form,
@@ -50,6 +56,7 @@ test('a house default offers no conversation models', () => {
     defaultModelId: 'house/deepseek-v4.1-flash',
     agentName: 'Lume',
   });
+  await fireEvent.click(screen.getByRole('button', { name: /Additional available models/ }));
   expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
   expect(screen.getByText(/not available while the default is a house model/)).toBeInTheDocument();
 });

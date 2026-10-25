@@ -443,6 +443,37 @@ class AgentsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "edit shows the resident's reflexes read-only, forgotten ones included" do
+    kept = @agent.reflexes.create!(name: "Clock", shape: "Does the post state a time?", reminder: "Read the hook.")
+    gone = @agent.reflexes.create!(name: "Old", shape: "Does it apologise?", reminder: "Say what happened.")
+    gone.discard
+    chat = @account.chats.create!(title: "Reflexes", model_id: "openrouter/auto")
+    message = chat.messages.create!(role: "assistant", agent: @agent, content: "It is noon.")
+    kept.judgments.create!(message: message, score: 0.9, offered: true)
+
+    get edit_account_agent_path(@account, @agent)
+
+    props = inertia_shared_props["reflexes"]
+    assert_equal ReflexCheck.enabled_for?(@agent), props["enabled"]
+    assert_equal Reflex::MAX_KEPT, props["max_kept"]
+    clock, old = props["items"]
+    assert_equal [ "Clock", "Does the post state a time?", "Read the hook.", 1, 1 ],
+      clock.values_at("name", "shape", "reminder", "judged_count", "offered_count")
+    assert clock["last_offered_at"].present?
+    assert_equal "Old", old["name"]
+    assert old["discarded_at"].present?
+  end
+
+  test "edit says whether the resident's plan includes sub-agents" do
+    get edit_account_agent_path(@account, @agent)
+    assert_equal true, inertia_shared_props["subagents_available"]
+
+    ResidentEntitlement.create!(agent: @agent, account: @account, source: "stripe", state: "active", tier: "life")
+    @inertia_props = nil
+    get edit_account_agent_path(@account, @agent)
+    assert_equal false, inertia_shared_props["subagents_available"]
+  end
+
   test "edit exposes provider subscription setup for a supported hosted agent" do
     @agent.update!(
       model_id: "openai/gpt-5",

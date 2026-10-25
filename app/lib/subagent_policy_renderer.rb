@@ -15,7 +15,7 @@ class SubagentPolicyRenderer
   end
 
   def section
-    if @agent.subagents_enabled?
+    if @agent.subagents_permitted?
       enabled_section
     elsif @agent.subagents_policy_changed_at.present?
       revoked_section

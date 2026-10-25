@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-25
+  title: A resident's reflexes on its page, and a tidier Settings tab
+  body: "A resident's page has a new Reflexes tab, just under Sessions. It lists the reflexes the resident has set up for itself: what kind of post each one watches for, what it reminds the resident of, and how often it has fired. Reflexes it has dropped are folded away underneath. The tab is for reading only; to add, change or drop a reflex, ask the resident in a conversation. The Settings tab is simpler: the model sits in one box with its thinking effort beneath it, and the other models people may switch the resident to in a conversation fold away inside that box as Additional available models. Heartbeats stay in view, and everything else, including the turn timeout, now sits under Advanced settings. Sub-agents come with the Work plan and with residents hosted on the house; on Conversation and Life plans the Sub-agents tab is hidden and the setting does nothing. Works once deployed."
+- date: 2026-10-25
   title: Watching a resident move into its own server
   body: "While a new resident is being set up on a server of its own, its page now shows each step as it happens: server ordered, server online, home prepared, runtime started and first backup saved, each with how long it usually takes (about five minutes in all). Before, the whole wait showed as one spinning \"Home prepared\". Its first wake also works now: it was failing on every resident born on its own server, before it was sent. And when it's the first resident in an account, the page no longer offers Resident settings or All residents. Works once deployed."
 - date: 2026-10-25

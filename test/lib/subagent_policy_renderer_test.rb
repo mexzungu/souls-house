@@ -80,4 +80,16 @@ class SubagentPolicyRendererTest < ActiveSupport::TestCase
     refute_includes section, "model: sonnet"
   end
 
+  test "a resident whose plan drops below Work is told the permission is gone" do
+    @agent.account.openrouter_api_key = "sk-or-test"
+    @agent.update!(subagents_enabled: true, subagent_models: [ "openrouter:deepseek/deepseek-v4-pro-0813" ])
+    ResidentEntitlement.create!(agent: @agent, account: @agent.account, source: "stripe", state: "active",
+      tier: "conversation")
+
+    section = SubagentPolicyRenderer.section_for(@agent)
+
+    assert_includes section, "## Sub-agents: no standing permission"
+    refute_includes section, "deepseek"
+  end
+
 end

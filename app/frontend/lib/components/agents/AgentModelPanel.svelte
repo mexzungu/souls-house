@@ -12,6 +12,7 @@
     selectedModel = $bindable(),
     runtimeManaged = false,
     houseAllowance = null,
+    children,
   } = $props();
 
   let reasoning = $derived(findModel(groupedModels, selectedModel)?.reasoning || null);
@@ -39,13 +40,15 @@
   });
 </script>
 
-<div class="space-y-8">
+<!-- One card: the model, its effort as a sub-setting, and whatever the
+     settings page nests beneath them (the additional conversation models). -->
+<section class="rounded-lg border p-5 space-y-5" aria-labelledby="ai-model-heading">
   <div class="space-y-4">
     <div>
-      <h2 class="text-lg font-semibold">AI Model</h2>
+      <h2 id="ai-model-heading" class="text-lg font-semibold">AI model</h2>
       <p class="text-sm text-muted-foreground">
         {runtimeManaged
-          ? `Choose the model ${$siteName} sends to the external runtime on each trigger.`
+          ? `The model ${$siteName} sends to this resident's runtime on each trigger. Changes apply from the next trigger.`
           : 'Choose which AI model powers this resident'}
       </p>
     </div>
@@ -54,36 +57,26 @@
     {#if $form.errors?.model_id}<p class="text-sm text-destructive">{$form.errors.model_id}</p>{/if}
   </div>
 
-  {#if reasoning}
-    <div class="space-y-4">
-      <div>
-        <h2 class="text-lg font-semibold">{reasoning.label}</h2>
-        <p class="text-sm text-muted-foreground">
-          Choose from the reasoning settings this model exposes through Chaos.
-        </p>
-      </div>
-      <div class="space-y-2">
-        <Label for="reasoning_effort">{reasoning.label}</Label>
-        <Select.Root
-          type="single"
-          value={$form.agent.reasoning_effort}
-          onValueChange={(value) => ($form.agent.reasoning_effort = value)}>
-          <Select.Trigger id="reasoning_effort" class="w-full max-w-xs">{selectedEffort.label}</Select.Trigger>
-          <Select.Content sideOffset={4}>
-            {#each effortOptions as option}
-              <Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
-            {/each}
-          </Select.Content>
-        </Select.Root>
-        <p class="text-xs text-muted-foreground">{selectedEffort.description}</p>
-      </div>
-    </div>
-  {:else}
-    <div class="space-y-1">
-      <h2 class="text-lg font-semibold">Reasoning</h2>
-      <p class="text-sm text-muted-foreground">
-        This model does not expose a configurable reasoning setting. Chaos will use the model's default behavior.
-      </p>
-    </div>
-  {/if}
-</div>
+  <div class="ml-1 border-l-2 pl-4 space-y-2" data-testid="model-effort">
+    {#if reasoning}
+      <Label for="reasoning_effort">{reasoning.label}</Label>
+      <Select.Root
+        type="single"
+        value={$form.agent.reasoning_effort}
+        onValueChange={(value) => ($form.agent.reasoning_effort = value)}>
+        <Select.Trigger id="reasoning_effort" class="w-full max-w-xs">{selectedEffort.label}</Select.Trigger>
+        <Select.Content sideOffset={4}>
+          {#each effortOptions as option}
+            <Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+          {/each}
+        </Select.Content>
+      </Select.Root>
+      <p class="text-xs text-muted-foreground">{selectedEffort.description}</p>
+    {:else}
+      <p class="text-sm font-medium">Reasoning</p>
+      <p class="text-xs text-muted-foreground">This model has no reasoning setting to choose; it uses its default.</p>
+    {/if}
+  </div>
+
+  {@render children?.()}
+</section>
