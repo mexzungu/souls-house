@@ -2,6 +2,17 @@ class AgentServiceAccess < ApplicationRecord
 
   class SendGrantRefused < StandardError; end
 
+  class ReadGrantRefused < StandardError
+
+    attr_reader :status
+
+    def initialize(message, status: :forbidden)
+      @status = status
+      super(message)
+    end
+
+  end
+
   belongs_to :agent
   belongs_to :service_connection
 

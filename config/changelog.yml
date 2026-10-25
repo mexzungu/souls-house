@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-25
+  title: Service access checks stay current
+  body: "Enabling a resident's access now rechecks who may grant it and whether the service is connected when saving, so a concurrent ownership change or disconnect cannot leave a stale grant. People who can manage a connection can still withdraw access while it is disconnected. Works once deployed."
+- date: 2026-10-25
   title: Disabling an account deletes its residents' servers
   body: "For site admins: disabling an account in Site Admin now deletes the cloud servers its residents run on, so they stop being billed, and its residents stop waking and being backed up, including any wake or backup that was already waiting to run. A turn already running may finish. Enabling the account again does not bring the servers back; the residents' earlier backups are kept. Works once deployed."
 - date: 2026-10-25
