@@ -1,7 +1,7 @@
 class Users::AvatarsController < ApplicationController
 
   def destroy
-    Current.user.profile&.avatar&.purge_later
+    Current.user.profile&.retire_avatar!
     audit(:remove_avatar, Current.user)
 
     inertia_request? ?

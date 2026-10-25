@@ -69,6 +69,8 @@ module Api
         assert_response :success
         assert_equal({ "success" => true }, response.parsed_body)
         assert_not @user.reload.avatar.attached?
+        retained = @user.profile.retired_avatars.blobs.sole
+        assert retained.service.exist?(retained.key), "removal retains the bytes (#93)"
       end
 
       test "delete with no avatar still succeeds" do

@@ -426,7 +426,9 @@ another account of the same person, is 404.
 - `PUT /api/v1/me/avatar` takes a multipart `avatar` (PNG, JPEG, GIF or WebP
   under 5 MB) and returns `{ "user": ... }`; 422 if missing, not a file
   upload (`"Avatar must be an uploaded image file"`) or invalid.
-  `DELETE /api/v1/me/avatar` returns `{ "success": true }`.
+  `DELETE /api/v1/me/avatar` returns `{ "success": true }`. Removing or
+  replacing an avatar keeps the earlier image privately for administrator
+  recovery; its old URLs stop serving ([image recovery](operations/image-recovery.md)).
 
   ```sh
   curl -X PUT -H "Authorization: Bearer $KEY" -F avatar=@me.png https://souls.house/api/v1/me/avatar

@@ -1,6 +1,7 @@
 class Profile < ApplicationRecord
 
   include JsonAttributes
+  include RetainsReplacedAttachment
 
   belongs_to :user
 
@@ -9,6 +10,8 @@ class Profile < ApplicationRecord
     attachable.variant :thumb, resize_to_fill: [ 100, 100 ]
     attachable.variant :medium, resize_to_fill: [ 300, 300 ]
   end
+  # Removed and replaced avatars keep their bytes, hidden (#93).
+  retains_replaced_attachment :avatar, history: :retired_avatars
 
   # Normalization
   normalizes :first_name, with: ->(name) { name&.strip }

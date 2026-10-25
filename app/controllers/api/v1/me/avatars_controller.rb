@@ -24,7 +24,7 @@ module Api
         end
 
         def destroy
-          current_api_user.profile&.avatar&.purge_later
+          current_api_user.profile&.retire_avatar!
           audit_human_action(:remove_avatar, current_api_user, account: self_audit_account)
 
           render json: { success: true }

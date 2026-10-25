@@ -20,7 +20,7 @@ class Admin::SettingsController < ApplicationController
   def update
     setting = Setting.instance
 
-    setting.logo.purge if params[:setting]&.[](:remove_logo)
+    setting.retire_logo! if params[:setting]&.[](:remove_logo)
 
     if params[:setting]&.[](:field_tweets_resume_house).to_s == "true"
       setting.assign_attributes(field_tweets_house_halted_at: nil, field_tweets_house_halt_reason: nil)
