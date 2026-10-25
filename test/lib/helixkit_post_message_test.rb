@@ -18,6 +18,30 @@ class HelixkitPostMessageTest < ActiveSupport::TestCase
     @runtime_environment.each { |key, value| value.nil? ? ENV.delete(key) : ENV[key] = value }
   end
 
+  test "reflex reminders reach stderr while stdout keeps the response" do
+    payload = { ok: true, reflexes: [ { id: "WvNwjB", name: "pr-review-ask", reminder: "Ask Mira for review." } ] }.to_json
+    capture_request(payload:) do |url|
+      stdout, stderr, status = post_with(url, "Opened PR #1")
+
+      assert status.success?, stderr
+      assert_equal payload, stdout.strip
+      assert_equal "reflex pr-review-ask: Ask Mira for review.\n", stderr
+    end
+  end
+
+  test "a post with no cue, or a response it cannot read, still succeeds quietly" do
+    [ '{"ok":true,"reflexes":[]}', '{"ok":true}', "not json", '["ok"]', '{"reflexes":"odd"}',
+      '{"reflexes":[{"name":"no reminder"}, 3]}' ].each do |payload|
+      capture_request(payload:) do |url|
+        stdout, stderr, status = post_with(url, "hello")
+
+        assert status.success?, "#{payload}: #{stderr}"
+        assert_equal payload, stdout.strip
+        assert_equal "", stderr, payload
+      end
+    end
+  end
+
   test "help documents attachments and the canonical runtime manual" do
     stdout, stderr, status = Open3.capture3("python3", SCRIPT.to_s, "--help")
 
@@ -161,7 +185,12 @@ class HelixkitPostMessageTest < ActiveSupport::TestCase
 
   private
 
-  def capture_request
+  def post_with(url, text)
+    Open3.capture3({ "SOULSHOUSE_APP_URL" => url, "SOULSHOUSE_BEARER_TOKEN" => "hx_test" },
+                   "python3", SCRIPT.to_s, "chat-123", stdin_data: text)
+  end
+
+  def capture_request(payload: '{"ok":true}')
     server = TCPServer.new("127.0.0.1", 0)
     port = server.addr[1]
     captured = Queue.new
@@ -177,7 +206,6 @@ class HelixkitPostMessageTest < ActiveSupport::TestCase
       end
       body = socket.read(headers.fetch("content-length", "0").to_i)
       captured << { request_line: request_line, headers: headers, body: body }
-      payload = '{"ok":true}'
       socket.write("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: #{payload.bytesize}\r\nConnection: close\r\n\r\n#{payload}")
       socket.close
     ensure
