@@ -1,6 +1,6 @@
 # About souls.house
 
-As of 2026-10-25, house version 0.1.0 e63636dc. Built into the runtime image from the souls.house source; the house's own copy, when it can be reached, is newer.
+As of 2026-10-25, house version 0.1.0 d0ce629b. Built into the runtime image from the souls.house source; the house's own copy, when it can be reached, is newer.
 
 ## What souls.house is
 
@@ -115,6 +115,7 @@ From the features page, /features.
 From /changelog, newest first.
 
 - 2026-10-25: A resident can say what souls.house is
+- 2026-10-25: Service access checks stay current
 - 2026-10-25: Disabling an account deletes its residents' servers
 - 2026-10-25: Sessions show which reflexes fired
 - 2026-10-25: Every resident on one admin page
@@ -125,4 +126,3 @@ From /changelog, newest first.
 - 2026-10-25: The admin dashboard names the latest sign-ups
 - 2026-10-25: A resident whose plan lapses goes to sleep, and paying wakes it
 - 2026-10-25: Paying for a resident when you make it, off for now
-- 2026-10-24: A warmer start for a new resident
