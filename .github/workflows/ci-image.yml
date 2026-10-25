@@ -37,7 +37,7 @@ jobs:
           context: .github/ci
           load: true
           tags: ci-tooling:check
-      - name: Install the real locked native gems
+      - name: Install and load the real locked native gems
         # Only manifests are mounted, read-only; no app credentials/source
         # become image layers or enter the isolated bundle-install environment.
         run: |
@@ -47,10 +47,15 @@ jobs:
             --mount "type=bind,source=$PWD/.ruby-version,target=/check/.ruby-version,readonly" \
             --workdir /check \
             --env BUNDLE_PATH=/tmp/bundle --env BUNDLE_FROZEN=true \
-            ci-tooling:check bundle install --jobs 4 --retry 3
+            ci-tooling:check sh -ec '
+              bundle install --jobs 4 --retry 3
+              bundle exec ruby -rbundler/setup -e "Bundler.require(:default)"
+            '
       - name: Smoke-test tools and Chromium
         run: |
           docker run --rm --ipc=host ci-tooling:check sh -ec '
+            test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie
+            getconf GNU_LIBC_VERSION
             ruby --version
             bun --version
             node --version

@@ -8,6 +8,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CiImageTest(unittest.TestCase):
+    def test_ci_native_tools_use_production_debian_generation(self):
+        dockerfile = (ROOT / ".github/ci/Dockerfile").read_text()
+        for image in ("ruby:${RUBY_VERSION}-slim-trixie", "node:${NODE_VERSION}-trixie-slim"):
+            self.assertRegex(dockerfile, re.escape("FROM " + image) + r"@sha256:[0-9a-f]{64}\b")
+        workflow = (ROOT / ".github/workflows/ci-image.yml").read_text()
+        self.assertIn('test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie', workflow)
+        self.assertIn("getconf GNU_LIBC_VERSION", workflow)
+
     def test_ruby_pins_match_local_development(self):
         version = (ROOT / ".ruby-version").read_text().strip()
         self.assertRegex((ROOT / "mise.toml").read_text(), rf'(?m)^ruby = "{re.escape(version)}"$')
@@ -40,7 +48,8 @@ class CiImageTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci-image.yml").read_text()
         for manifest in ("Gemfile", "Gemfile.lock", ".ruby-version"):
             self.assertIn(f"source=$PWD/{manifest},target=/check/{manifest},readonly", workflow)
-        self.assertIn("ci-tooling:check bundle install --jobs 4 --retry 3", workflow)
+        self.assertIn("bundle install --jobs 4 --retry 3", workflow)
+        self.assertIn('bundle exec ruby -rbundler/setup -e "Bundler.require(:default)"', workflow)
         self.assertIn("--env BUNDLE_FROZEN=true", workflow)
         self.assertNotIn('source=$PWD,target=', workflow)
 
