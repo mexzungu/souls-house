@@ -5,6 +5,10 @@ class Agents::OnboardingController < ApplicationController
   def show
     render inertia: "agents/onboarding", props: {
       agent: @agent.as_json,
+      vm_steps: Agents::VmBirthProgress.for(@agent),
+      # The first resident in an account has no other residents to go back
+      # to and nothing yet worth configuring, so the page offers neither.
+      first_resident: current_account.agents.count == 1,
       account: current_account.as_json,
       provisioning_retry_url: account_agent_provisioning_retry_path(current_account, @agent),
       orientation_retry_url: account_agent_orientation_retry_path(current_account, @agent)

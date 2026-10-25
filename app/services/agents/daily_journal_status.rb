@@ -11,8 +11,13 @@ module Agents
       @agent = agent
     end
 
+    # Read from the local container. A resident on its own server has none
+    # here, and asking Docker for it raised, which failed every VM birth's
+    # first wake before it was sent (2026-10-25): there it reads as empty, so
+    # its journal is never counted as grown and oriented_at stays unset.
     def snapshot
       return {} if agent.container_name.blank?
+      return {} unless Agents::RuntimeLocation.local?(agent)
 
       result = docker_capture(
         "exec",
