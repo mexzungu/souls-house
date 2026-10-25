@@ -51,11 +51,26 @@ module Agent::HostedSetup
   # loaded can_send = false before a concurrent grant committed would save
   # enabled = false over can_send = true (only changed columns are written),
   # and re-enabling read would then revive the grant.
-  def set_service_access!(connection, enabled:, actor: Current.user)
+  # Authority and connection status must also be read under these locks.
+  # A resident's own API has the additional restriction that it may manage
+  # only connections it set up, not every connection its key's person owns.
+  def set_service_access!(connection, enabled:, actor: Current.user, resident_actor: nil)
+    enabled = ActiveModel::Type::Boolean.new.cast(enabled)
     connection.transaction do
       connection.lock!
       access = AgentServiceAccess.lock.find_by(agent_id: id, service_connection_id: connection.id) ||
         agent_service_accesses.build(service_connection: connection)
+      if resident_actor && !connection.resident_managed_by?(resident_actor)
+        raise ActiveRecord::RecordNotFound
+      end
+      unless connection.resident_access_changeable_by?(actor, enabled: enabled)
+        raise AgentServiceAccess::ReadGrantRefused, "You cannot change this resident's access"
+      end
+      if enabled && connection.status != "connected"
+        raise AgentServiceAccess::ReadGrantRefused.new(
+          "Reconnect this service before enabling resident access", status: :conflict
+        )
+      end
       access.send_grant_actor = actor
       access.enabled = enabled
       access.follows_default = false

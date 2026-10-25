@@ -40,9 +40,15 @@ class CommsSendGrantTest < ActiveSupport::TestCase
   end
 
   test "a resident setting its own access (resident-connected services) never gains send" do
-    @agent.set_service_access!(@connection, enabled: true, actor: nil)
+    @agent.set_service_access!(@connection, enabled: true, actor: @owner)
     assert @access.reload.enabled?
     assert_not @access.can_send?
+  end
+
+  test "a read grant without an authorised person is refused" do
+    assert_raises(AgentServiceAccess::ReadGrantRefused) do
+      @agent.set_service_access!(@connection, enabled: true, actor: nil)
+    end
   end
 
   test "sending must be switched on for the provider before anyone can grant" do

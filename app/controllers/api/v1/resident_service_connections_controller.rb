@@ -58,7 +58,7 @@ module Api
             credentials: credential_params(definition)
           )
           connection.update!(label: params[:label]) if params[:label].present?
-          current_api_agent.set_service_access!(connection, enabled: true)
+          current_api_agent.set_service_access!(connection, enabled: true, actor: current_api_user, resident_actor: current_api_agent)
           audit(:connect_service, connection, provider: connection.provider, external_identity: connection.external_identity,
                                               authority_summary: connection.credential_metadata["authority_summary"])
           post_notice(chat, "#{current_api_agent.name} connected #{describe(connection)} for #{current_api_user.display_name}. " \
@@ -72,6 +72,8 @@ module Api
         render json: { error: error.message }, status: :unprocessable_entity
       rescue ActiveRecord::RecordInvalid => error
         render json: { error: error.record.errors.full_messages.to_sentence }, status: :unprocessable_entity
+      rescue AgentServiceAccess::ReadGrantRefused => error
+        render json: { error: error.message }, status: error.status
       end
 
       # PATCH /api/v1/resident/service_connections/:id  { label }
@@ -113,13 +115,15 @@ module Api
         chat = notice_chat!
 
         ServiceConnection.transaction do
-          resident.set_service_access!(@connection, enabled: enabled)
+          resident.set_service_access!(@connection, enabled: enabled, actor: current_api_user, resident_actor: current_api_agent)
           audit(enabled ? :enable_resident_service : :disable_resident_service, @connection,
                 provider: @connection.provider, resident_id: resident.to_param)
           verb = enabled ? "gave #{resident.name} access to" : "removed #{resident.name}'s access to"
           post_notice(chat, "#{current_api_agent.name} #{verb} #{describe(@connection)}. #{access_sentence(@connection)}")
         end
         render json: { service_connection: connection_json(@connection) }
+      rescue AgentServiceAccess::ReadGrantRefused => error
+        render json: { error: error.message }, status: error.status
       rescue ActionController::ParameterMissing => error
         render json: { error: error.message }, status: :unprocessable_entity
       end

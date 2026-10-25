@@ -121,13 +121,15 @@ module Api
           return render json: { error: "You cannot change this resident's access" }, status: :forbidden
         end
 
-        access = @agent.set_service_access!(connection, enabled: enabled)
+        access = @agent.set_service_access!(connection, enabled: enabled, actor: current_api_user)
         audit_human_action(enabled ? :enable_resident_service : :disable_resident_service,
                            connection,
                            account: @account,
                            resident_id: @agent.to_param,
                            provider: connection.provider)
         render json: { service_connection: service_connection_json(connection, access) }
+      rescue AgentServiceAccess::ReadGrantRefused => error
+        render json: { error: error.message }, status: error.status
       end
 
       # PATCH /api/v1/residents/:id/service_accesses/:connection_id/send_grant

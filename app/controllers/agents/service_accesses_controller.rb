@@ -16,7 +16,7 @@ class Agents::ServiceAccessesController < ApplicationController
       return
     end
 
-    @agent.set_service_access!(@connection, enabled: enabled)
+    @agent.set_service_access!(@connection, enabled: enabled, actor: Current.user)
 
     audit(enabled ? :enable_resident_service : :disable_resident_service,
           @connection,
@@ -24,6 +24,9 @@ class Agents::ServiceAccessesController < ApplicationController
           provider: @connection.provider)
     redirect_back_or_to edit_account_agent_path(current_account, @agent, tab: "integrations"),
                         notice: enabled ? "Service access will be provisioned" : "Service access will be removed"
+  rescue AgentServiceAccess::ReadGrantRefused => error
+    redirect_back_or_to edit_account_agent_path(current_account, @agent, tab: "integrations"),
+                        alert: error.message
   end
 
   private

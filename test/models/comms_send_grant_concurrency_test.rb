@@ -88,7 +88,7 @@ class CommsSendGrantConcurrencyTest < ActiveSupport::TestCase
     end
     assert holding.wait(WAIT)
     agent, connection = fresh_agent, fresh_connection
-    disable = in_thread { agent.set_service_access!(connection, enabled: false, actor: @other_user) }
+    disable = in_thread { agent.set_service_access!(connection, enabled: false, actor: @owner) }
     sleep 0.3
     release.count_down
 
