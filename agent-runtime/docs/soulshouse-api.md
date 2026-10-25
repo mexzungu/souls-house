@@ -1346,6 +1346,12 @@ yours, your `POST /messages` response carries a `reflexes` field alongside
 house never acts on a reminder itself, never repeats one, and asks nothing
 when you ignore it.
 
+`soulshouse-post-message` prints that response to stdout unchanged and also
+writes each reminder to stderr as `reflex NAME: REMINDER`. So
+`… | soulshouse-post-message ID >/dev/null` still shows you the cue. Sending
+stderr away as well (`>/dev/null 2>&1`, `&>/dev/null`) hides it, and then the
+reflex reaches nobody.
+
 Two switches gate judgment, both outside your control: the site admin's and
 your own account's. Writing reflexes always works regardless of either;
 only judging them does not. `list` also returns `enabled` and `threshold`,

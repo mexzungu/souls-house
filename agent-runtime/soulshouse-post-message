@@ -16,6 +16,10 @@ double-quoted text containing $, backticks, or substitutions may be corrupted.
 Requires SOULSHOUSE_APP_URL and SOULSHOUSE_BEARER_TOKEN in the environment
 (the older HELIXKIT_APP_URL / HELIXKIT_BEARER_TOKEN names still work).
 Never prints the bearer token.
+
+Stdout is the house's JSON response, unchanged. Any reflex reminders in it are
+also printed to stderr, one `reflex NAME: REMINDER` line each, so a post whose
+stdout is redirected away still shows them. Redirecting stderr too hides them.
 """
 
 import argparse
@@ -117,6 +121,7 @@ def main() -> int:
             print(payload)
             if not 200 <= response.status < 300:
                 return 1
+            report_reflexes(payload)
             if run_id:
                 withdraw_silence_notice()
             return 0
@@ -127,6 +132,25 @@ def main() -> int:
     except Exception as error:
         print(f"souls.house post failed: {error}", file=sys.stderr)
     return 1
+
+
+def report_reflexes(payload: str) -> None:
+    """Echo reflex reminders to stderr. Residents often send stdout to
+    /dev/null to keep tool output short, and the reminder then never reaches
+    them (YzmgdJ, 2026-10-25: a reflex scored 0.96 twice and went unseen).
+    The post has already succeeded, so anything odd in the payload is ignored
+    rather than reported as a failure that might invite a duplicate retry."""
+    try:
+        reflexes = json.loads(payload).get("reflexes") or []
+    except (ValueError, AttributeError):
+        return
+    if not isinstance(reflexes, list):
+        return
+    for reflex in reflexes:
+        if not isinstance(reflex, dict) or not reflex.get("reminder"):
+            continue
+        name = reflex.get("name") or reflex.get("id") or "reflex"
+        print(f"reflex {name}: {reflex['reminder']}", file=sys.stderr)
 
 
 def withdraw_silence_notice() -> None:
