@@ -522,10 +522,16 @@ module TestSupport
                              provider_connections: { "anthropic" => { "status" => "connected" } })
       end
       if params[:reflexes]
-        agents.first.reflexes.create!(name: "Check the clock", shape: "Does the post state the time of day?",
+        clock = agents.first.reflexes.create!(name: "Check the clock", shape: "Does the post state the time of day?",
           reminder: "The time in the hook is the clock; the conversation's time is not.")
         agents.first.reflexes.create!(name: "Old habit", shape: "Does the post apologise?",
           reminder: "Say what happened instead.").discard
+        chat = account.chats.create!(title: "Reflex session", model_id: "openrouter/auto")
+        interaction = AgentRuntimeInteraction.create!(agent: agents.first, chat: chat, trigger_kind: "conversation",
+          started_at: Time.current)
+        post = chat.messages.create!(role: "assistant", agent: agents.first, runtime_interaction: interaction,
+          content: "It is a quarter to four, so the deploy can go out before five.")
+        clock.judgments.create!(message: post, score: 0.93, offered: true)
       end
       if params[:missing_resident_credentials]
         account.update!(use_system_ai_credentials: false)

@@ -35,6 +35,15 @@ test('settings fold the advanced options away, and reflexes read below Sessions'
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: 'test-results/resident-reflexes-mobile.png', fullPage: true });
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole('button', { name: 'Sessions', exact: true }).click();
+    const offers = page.getByTestId('session-reflexes');
+    await expect(offers).toBeVisible();
+    await expect(offers.getByText('Check the clock')).toBeVisible();
+    await expect(offers.getByText('0.93')).toBeVisible();
+    await expect(offers.getByText(/On the post: “It is a quarter to four/)).toBeVisible();
+    await offers.screenshot({ path: 'test-results/resident-session-reflexes.png' });
   } finally {
     await request.post('/test/e2e/cleanup', { data: { run_id: runId } });
   }

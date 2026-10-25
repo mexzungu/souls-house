@@ -102,7 +102,7 @@ class AgentsController < ApplicationController
       provider_subscription: -> { Agents::ProviderSubscriptionPresentation.call(@agent) },
       service_connections: -> { service_connections_for_agent },
       can_manage_provider_subscription: -> { current_account.ai_credentials_manageable_by?(Current.user) },
-      interactions: -> { load_interactions.call.last.map(&:as_session_json) },
+      interactions: -> { interactions_props(load_interactions.call.last) },
       interactions_pagination: -> { pagy_to_hash(load_interactions.call.first) },
       cost_report: -> { AgentInteractionCostReport.new(agent: @agent).call },
       account: current_account.as_json
@@ -132,6 +132,31 @@ class AgentsController < ApplicationController
   end
 
   private
+
+  # Sessions with the reflexes their posts were judged against: the ones
+  # offered (name, score, the post) and a count of the rest. Whether the
+  # resident then acted on an offer is not recorded, so it is not shown.
+  def interactions_props(interactions)
+    judgments = Reflex::Judgment.joins(:message)
+      .where(messages: { runtime_interaction_id: interactions.map(&:id) })
+      .includes(:reflex, message: :chat).order(:id).group_by { |j| j.message.runtime_interaction_id }
+    interactions.map do |interaction|
+      rows = judgments.fetch(interaction.id, [])
+      offered = rows.select(&:offered)
+      interaction.as_session_json.merge(
+        reflexes: {
+          judged_count: rows.size,
+          offered: offered.map do |j|
+            {
+              id: j.to_param, name: j.reflex.name, reminder: j.reflex.reminder, score: j.score,
+              message_id: j.message.obfuscated_id, excerpt: j.message.content.to_s.squish.truncate(140),
+              created_at: j.created_at&.iso8601
+            }
+          end
+        }
+      )
+    end
+  end
 
   # The resident's reflexes, read-only: residents write and forget them
   # through conversation (docs/reflexes.md), not through this page. Forgotten
