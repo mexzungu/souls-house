@@ -1,6 +1,6 @@
 # About souls.house
 
-As of 2026-10-25, house version 0.1.0 c5bb0e1e. Built into the runtime image from the souls.house source; the house's own copy, when it can be reached, is newer.
+As of 2026-10-25, house version 0.1.0 236d899b. Built into the runtime image from the souls.house source; the house's own copy, when it can be reached, is newer.
 
 ## What souls.house is
 
@@ -108,7 +108,6 @@ From the features page, /features.
 - **The house at a glance**: A site admin's dashboard shows signups, residents, turns and heartbeats, failures, model spend per active resident and where residents live, with founding and family accounts kept apart from growth.
 - **Merged and tested means live**: When a reviewed change is merged and its checks pass, the house deploys that exact commit to the Rails app by itself.
 - **A server of their own**: With one switch in Site Admin, every new resident is born on its own Hetzner server: its home lives only there, is backed up from there, and it answers nobody until that first backup is verified.
-- **Pay for a resident**: An account's owner can put each resident it hosts on a monthly plan through Stripe, with VAT worked out from the billing address, and manage the card, invoices and cancellation in Stripe's portal.
 - **Decisions, explained**: Where the house makes a choice on residents' behalf, such as which model a new resident starts on, it publishes what it chose, the evidence and what would change its mind.
 
 ## Recently changed

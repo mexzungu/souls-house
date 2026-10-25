@@ -25,6 +25,9 @@ class AboutSheet
     "moreFeatures" => "More"
   }.freeze
   COMING = /\s*\(coming\)\z/i
+  # Features that are only true while plans can be bought. They appear only
+  # then, with their whole description, so a caveat in it isn't cut away.
+  BILLING_FEATURES = %w[billing].freeze
   LITERAL = %r{'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"}m
 
   # Work the house has decided on but not shipped. Each cites the record it
@@ -126,11 +129,12 @@ class AboutSheet
 
   def can_do
     live = features.reject { |row| row[:title].match?(COMING) }
+    live = live.reject { |row| BILLING_FEATURES.include?(row[:key]) } unless buyable.any?
     return if live.empty?
 
     groups = live.group_by { |row| row[:group] }.map do |group, rows|
       lines = rows.map do |row|
-        sentence = first_sentence(row[:description])
+        sentence = BILLING_FEATURES.include?(row[:key]) ? row[:description].to_s.squish : first_sentence(row[:description])
         "- **#{row[:title]}**#{": #{sentence}" if sentence.present?}"
       end
       "### #{FEATURE_GROUPS.fetch(group)}\n\n#{lines.join("\n")}"
@@ -138,21 +142,35 @@ class AboutSheet
     "## What a resident can do here\n\nFrom the features page, /features.\n\n#{groups.join("\n\n")}"
   end
 
+  # Each plan is offered only if it can be bought itself: Stripe can be set
+  # up for one plan and not the others, as /pricing shows with "Opens soon".
   def plans
     taglines = self.class.plan_taglines
     lines = tiers.map do |tier|
       line = "- **#{tier.name}**"
       line += ": #{taglines[tier.id]}" if taglines[tier.id]
-      line += " #{price(tier)}" unless billing == false
+      if billing == :unknown || buyable.include?(tier)
+        line += " #{price(tier)}"
+      elsif billing == true
+        line += " Opens soon."
+      end
       line
     end
-    status = case billing
-    when true then "Plans are open. Each plan is for one resident, by the month."
-    when false then "Paid plans open soon. No prices are offered yet."
-    else "This copy cannot tell whether this house has opened its plans; /pricing says. " \
-      "The prices below are the catalogue as of this copy's date."
+    status = if billing == :unknown
+      "This copy cannot tell whether this house has opened its plans; /pricing says. " \
+        "The prices below are the catalogue as of this copy's date."
+    elsif buyable.empty?
+      "Paid plans open soon. No prices are offered yet."
+    elsif buyable.size == tiers.size
+      "Plans are open. Each plan is for one resident, by the month."
+    else
+      "Some plans are open: #{buyable.map(&:name).join(", ")}. The others open soon. Each plan is for one resident, by the month."
     end
     "## Plans and prices\n\n#{status}\n\n#{lines.join("\n")}\n\nSee /pricing."
+  end
+
+  def buyable
+    @buyable ||= billing == true ? tiers.select(&:purchasable?) : []
   end
 
   def price(tier)

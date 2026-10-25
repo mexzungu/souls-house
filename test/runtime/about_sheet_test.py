@@ -114,6 +114,25 @@ class FreshSessionPromptTest(unittest.TestCase):
         self.assertTrue(prompt.startswith("STOCK\n\n## About souls.house\nNOTE\n\nREQUEST"))
         self.assertGreater(info["about_house"], 0)
 
+    def test_an_imported_home_gets_the_note_without_house_journals(self):
+        import importlib.util
+        os.environ.setdefault("TRIGGER_BEARER_TOKEN", "test-token")
+        spec = importlib.util.spec_from_file_location("about_shim3", RUNTIME / "trigger_shim.py")
+        shim = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = shim
+        spec.loader.exec_module(shim)
+        with patch.object(shim.imported_home, "enabled", return_value=True), \
+                patch.object(shim.imported_home, "validate") as validate, \
+                patch.object(shim, "imported_runtime_context", return_value="HOME CONTEXT"), \
+                patch.object(shim, "identity_context", side_effect=AssertionError("stock identity")), \
+                patch.object(shim, "memory_context", side_effect=AssertionError("house journals read")), \
+                patch.object(shim.about_sheet, "session_note", return_value="## About souls.house\nNOTE"):
+            prompt, info = shim.build_prompt_with_components("REQUEST")
+        validate.assert_called_once()
+        self.assertTrue(prompt.startswith("HOME CONTEXT\n\n## About souls.house\nNOTE\n\nREQUEST"))
+        self.assertEqual(info["journal"], 0)
+        self.assertGreater(info["about_house"], 0)
+
     def test_a_broken_sheet_never_breaks_the_prompt(self):
         import importlib.util
         os.environ.setdefault("TRIGGER_BEARER_TOKEN", "test-token")
