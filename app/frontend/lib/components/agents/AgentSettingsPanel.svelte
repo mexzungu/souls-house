@@ -24,8 +24,13 @@
     'session_context_budget_tokens',
     'turn_timeout_minutes',
   ];
-  // Folded away unless one of its settings came back with an error.
-  let advancedOpen = $state(ADVANCED_FIELDS.some((field) => $form.errors?.[field]));
+  // Folded away unless one of its settings came back with an error, or the
+  // resident is disabled or paused (so switching it back on is in view).
+  let advancedOpen = $state(
+    ADVANCED_FIELDS.some((field) => $form.errors?.[field]) ||
+      $form.agent.active === false ||
+      Boolean($form.agent.paused)
+  );
 </script>
 
 <div class="space-y-8">

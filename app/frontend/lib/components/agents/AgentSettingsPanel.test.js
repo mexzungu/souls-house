@@ -37,3 +37,10 @@ test('an error on an advanced setting opens the section', () => {
   render(AgentSettingsPanel, { form, runtimeManaged: true });
   expect(screen.getByText('must be at least 1')).toBeInTheDocument();
 });
+
+test('a disabled or paused resident opens Advanced so it can be switched back on', () => {
+  const form = writable({ agent: { active: false, paused: false }, errors: {} });
+  render(AgentSettingsPanel, { form, runtimeManaged: true });
+  expect(screen.getByRole('button', { name: 'Hide advanced settings' })).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByText('Availability')).toBeInTheDocument();
+});
