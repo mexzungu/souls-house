@@ -120,6 +120,7 @@ class Account < ApplicationRecord
   after_save -> { FieldTweetStream.refresh!(id) }, if: :saved_change_to_field_tweets_house_key?
   before_destroy :mark_memberships_for_skip_check, prepend: true
   after_update_commit :disconnect_members_app_cable, if: -> { saved_change_to_disabled_at? && disabled? }
+  after_update_commit :release_vm_servers, if: -> { saved_change_to_disabled_at? && disabled? }
   after_update_commit -> { users.ids.each { |id| ReplyExpectation.refresh_for(id) } }, if: :saved_change_to_disabled_at?
   after_save :refresh_directory_presentation, if: -> {
     (saved_changes.keys & %w[name account_type disabled_at recognise_voices auto_name_voices]).any?
@@ -479,6 +480,18 @@ class Account < ApplicationRecord
   # native-app cable connections are dropped (issue #94 B, step 6).
   def disconnect_members_app_cable
     User.where(id: memberships.select(:user_id)).find_each { |user| AppSession.disconnect_cable_for(user) }
+  end
+
+  # A disabled account keeps no servers: Hetzner bills a stopped server, so
+  # each of its residents' VM placements is handed to VmCleanupJob, which
+  # deletes the server and retires the placement. Enabling the account again
+  # does not bring a server back; the resident's backups stay.
+  def release_vm_servers
+    AgentPlacement.where(agent_id: agents.select(:id), backend: "hetzner_cloud")
+      .where.not(state: %w[retired staged]).find_each do |placement|
+      placement.request_cleanup!("account_disabled")
+      VmCleanupJob.perform_later(placement.id)
+    end
   end
 
   # Save validations and insertion share a transaction. Hold the settings row
