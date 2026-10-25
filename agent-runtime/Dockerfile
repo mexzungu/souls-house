@@ -95,6 +95,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-flask \
         python3-yaml \
         python3-markdown \
+        python3-numpy \
+        ffmpeg \
         git \
         curl \
         tini \
@@ -103,6 +105,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         lsof \
         libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
+
+# Fail the image build if the resident audio-analysis baseline is unavailable.
+# Use Debian's Python explicitly; virtual environments may have separate packages.
+RUN ffmpeg -version >/dev/null \
+    && /usr/bin/python3 -c "import numpy; assert numpy.arange(3).sum() == 3"
 
 # The official Node image already reserves UID/GID 1000 for `node`. Hosted
 # volume ownership depends on 1000, so rename that account rather than creating
