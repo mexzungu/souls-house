@@ -48,7 +48,8 @@ class CiImageTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci-image.yml").read_text()
         for manifest in ("Gemfile", "Gemfile.lock", ".ruby-version"):
             self.assertIn(f"source=$PWD/{manifest},target=/check/{manifest},readonly", workflow)
-        self.assertIn("ci-tooling:check bundle install --jobs 4 --retry 3", workflow)
+        self.assertIn("bundle install --jobs 4 --retry 3", workflow)
+        self.assertIn('bundle exec ruby -rbundler/setup -e "Bundler.require(:default)"', workflow)
         self.assertIn("--env BUNDLE_FROZEN=true", workflow)
         self.assertNotIn('source=$PWD,target=', workflow)
 
