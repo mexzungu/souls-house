@@ -12,8 +12,11 @@ const STEM_X = 100;
 const SEED_Y = GROUND + 12;
 const TIP = { x: STEM_X, y: 176 };
 const LINE = 2;
-const HAND_SCALE = 0.95;
-const PINCH_Y = 150;
+// The hand comes in from the left, palm up, the seed lying on its fingers. Its wrist pivots here.
+const WRIST = { x: 6, y: 150 };
+const TILT = 0.5;
+const SEED_ON_HAND = { x: 80, y: -4 };
+const SEED_OFF_HAND = { x: 114, y: -12 };
 
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 const lerp = (a, b, p) => a + (b - a) * p;
@@ -28,11 +31,6 @@ const ease = {
   },
 };
 
-const quad = (p0, p1, p2, t) => {
-  const u = 1 - t;
-  return [u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0], u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1]];
-};
-
 // Ink on paper: every shape is filled with the paper (so it hides what is behind it) and outlined.
 function inked(ctx, pen, path) {
   ctx.fillStyle = pen.paper;
@@ -40,86 +38,64 @@ function inked(ctx, pen, path) {
   ctx.stroke(path);
 }
 
-// A finger: a tapered tube along a quadratic curve with a round tip.
-function limb(ctx, pen, p0, p1, p2, w0, w1) {
-  const N = 24;
-  const left = [];
-  const right = [];
-  for (let i = 0; i <= N; i++) {
-    const t = i / N;
-    const a = quad(p0, p1, p2, Math.max(0, t - 0.01));
-    const b = quad(p0, p1, p2, Math.min(1, t + 0.01));
-    let dx = b[0] - a[0];
-    let dy = b[1] - a[1];
-    const d = Math.hypot(dx, dy) || 1;
-    dx /= d;
-    dy /= d;
-    const w = lerp(w0, w1, t) / 2;
-    const c = quad(p0, p1, p2, t);
-    left.push([c[0] - dy * w, c[1] + dx * w]);
-    right.push([c[0] + dy * w, c[1] - dx * w]);
-  }
-  const tip = quad(p0, p1, p2, 1);
-  const pre = quad(p0, p1, p2, 0.98);
-  const ang = Math.atan2(tip[1] - pre[1], tip[0] - pre[0]);
-  const path = new Path2D();
-  path.moveTo(...left[0]);
-  left.forEach((p) => path.lineTo(...p));
-  path.arc(tip[0], tip[1], w1 / 2, ang + Math.PI / 2, ang - Math.PI / 2, true);
-  for (let i = N; i >= 0; i--) path.lineTo(...right[i]);
-  inked(ctx, pen, path);
-}
-
+// Where the hand is: slid in from the left, then tipped forward at the wrist, then drawn back.
 function handAt(t) {
-  if (t < 1.4) return { y: lerp(-80, PINCH_Y, ease.out(seg(t, 0, 1.4))), open: 0 };
-  if (t < 2.1) return { y: PINCH_Y, open: ease.inOut(seg(t, 1.45, 1.75)) };
-  return { y: lerp(PINCH_Y, -110, ease.in(seg(t, 2.1, 3.0))), open: 1 };
+  if (t < 1.3) return { dx: lerp(-170, 0, ease.out(seg(t, 0, 1.3))), tilt: 0 };
+  if (t < 2.0) return { dx: 0, tilt: TILT * ease.inOut(seg(t, 1.3, 1.75)) };
+  const p = seg(t, 2.0, 2.9);
+  return { dx: lerp(0, -190, ease.in(p)), tilt: lerp(TILT, 0.1, ease.out(p)) };
 }
 
-// Drawn with the pinch (where the seed is held) at the origin, the arm reaching up out of frame.
+// A point in the hand's own frame (wrist at the origin, fingers pointing right) to the canvas.
+function onHand(hand, x, y) {
+  const c = Math.cos(hand.tilt);
+  const s = Math.sin(hand.tilt);
+  return { x: WRIST.x + hand.dx + c * x - s * y, y: WRIST.y + s * x + c * y };
+}
+
+// An open hand seen from the side, palm up: sleeve and cuff off the left edge, the thumb lying along
+// the top, the four fingers stacked beneath it out to a rounded tip. Traced from a palm-up hand icon.
 function drawHand(ctx, pen, hand) {
-  if (hand.y < -70) return;
-  const o = hand.open;
+  if (hand.dx < -180) return;
   const P = (d) => new Path2D(d);
   ctx.save();
-  ctx.translate(STEM_X - 8, hand.y + 4);
-  ctx.scale(HAND_SCALE, HAND_SCALE);
-  ctx.lineWidth = LINE / HAND_SCALE;
-  inked(ctx, pen, P('M 12 -240 L 13 -102 L 55 -102 L 57 -240 Z'));
-  // Index finger, tucked behind the palm's edge; it swings out to let go.
-  ctx.save();
-  ctx.translate(30, -60);
-  ctx.rotate(-0.25 * o);
-  limb(ctx, pen, [0, 0], [4, 30], [-20, 56], 16, 11);
-  ctx.stroke(P('M -6 34 q 4 3 9 2'));
-  ctx.restore();
-  // The palm, with the other three fingers curled under it.
+  ctx.translate(WRIST.x + hand.dx, WRIST.y);
+  ctx.rotate(hand.tilt);
+  inked(ctx, pen, P('M -140 -2 L -14 -2 L -14 30 L -140 30 Z'));
+  inked(ctx, pen, P('M -18 -7 Q -18 -9 -16 -9 L -2 -9 Q 0 -9 0 -7 L 0 33 Q 0 35 -2 35 L -16 35 Q -18 35 -18 33 Z'));
+  // Palm and fingers in one outline: wrist, heel of the hand, fingers out to the tip, back along
+  // the top of the fingers to the thumb's root.
   inked(
     ctx,
     pen,
     P(
-      'M 14 -102 C 10 -88 10 -74 16 -64 C 22 -56 30 -52 36 -50 C 38 -42 46 -38 52 -42 C 58 -46 58 -52 56 -55 C 62 -58 63 -65 60 -68 C 65 -72 64 -80 60 -82 C 60 -90 58 -96 56 -102 Z'
+      'M 0 -2 C 10 -4 18 -2 30 1 L 52 2 C 64 4 78 5 90 3 C 98 1 104 -3 108 -5 C 116 -8 120 2 114 8 C 106 16 94 20 80 23 C 62 27 44 31 28 31 L 0 31 Z'
     )
   );
-  ctx.stroke(P('M 40 -52 C 46 -54 52 -56 56 -55 M 44 -64 C 50 -66 56 -68 60 -68'));
-  // Thumb on top, swinging the other way.
-  ctx.save();
-  ctx.translate(18, -80);
-  ctx.rotate(0.38 * o);
-  limb(ctx, pen, [0, 0], [-20, 24], [-12, 66], 19, 12);
-  ctx.stroke(P('M -15 58 q 3 4 7 3'));
+  // The fingers stacked under the top one, curling up a little at the tips to cradle the seed.
+  ctx.stroke(P('M 62 12 C 78 12 96 9 110 4 M 58 20 C 72 19 88 16 100 13'));
+  // The thumb, lying along the top of the hand, its tip resting short of the fingers.
+  inked(ctx, pen, P('M 2 -2 C 8 -12 18 -14 30 -14 L 50 -13 C 60 -13 61 1 51 1 L 30 1 C 22 1 12 0 2 -2 Z'));
+  ctx.stroke(P('M 43 -13 C 46 -10 46 -5 44 -2'));
   ctx.restore();
-  // Shirt cuff over the wrist.
-  inked(ctx, pen, P('M 9 -112 Q 34 -104 59 -112 L 58 -98 Q 34 -90 10 -98 Z'));
-  ctx.restore();
-  ctx.lineWidth = LINE;
 }
 
+// The seed lies on the fingers, slides off the tip as the hand tips, and falls to the dip.
 function seedAt(t, hand) {
-  if (t < 1.6) return { x: STEM_X, y: hand.y + 4, spin: 0.5, visible: hand.y > -40 };
+  if (t < 1.85) {
+    const p = ease.in(seg(t, 1.45, 1.85));
+    const at = onHand(hand, lerp(SEED_ON_HAND.x, SEED_OFF_HAND.x, p), lerp(SEED_ON_HAND.y, SEED_OFF_HAND.y, p));
+    return { x: at.x, y: at.y, spin: Math.PI / 2 + hand.tilt + p, visible: hand.dx > -150 };
+  }
+  const from = onHand({ dx: 0, tilt: TILT }, SEED_OFF_HAND.x, SEED_OFF_HAND.y);
   if (t < 2.45) {
-    const p = ease.in(seg(t, 1.6, 2.45));
-    return { x: STEM_X, y: lerp(PINCH_Y + 4, SEED_Y, p), spin: lerp(0.5, 0.15, p), visible: true };
+    const p = ease.in(seg(t, 1.85, 2.45));
+    return {
+      x: lerp(from.x, STEM_X, ease.out(seg(t, 1.85, 2.3))),
+      y: lerp(from.y, SEED_Y, p),
+      spin: lerp(Math.PI / 2 + TILT + 1, 0.15 + Math.PI * 2, p),
+      visible: true,
+    };
   }
   return { x: STEM_X, y: SEED_Y, spin: 0.15, visible: t < 8.8 };
 }
@@ -381,11 +357,12 @@ export function drawFrame(ctx, pen, t, T = t) {
   const seed = seedAt(t, hand);
   drawRoots(ctx, t);
   drawGround(ctx, pen, t);
+  // The seed lies on the hand, so the hand goes down first.
+  drawHand(ctx, pen, hand);
   drawSeed(ctx, pen, seed, t);
   drawPlant(ctx, pen, t, T);
   drawClosingSoil(ctx, pen, t);
   drawDot(ctx, pen, dotAt(t, T));
-  drawHand(ctx, pen, hand);
 }
 
 // The card's text colour is the ink, its background the paper, the account dot the resident.
