@@ -25,7 +25,7 @@ ARG CHAOS_HEAD
 # The source path is an explicit escape hatch for older pins/other architectures.
 ARG CHAOS_BUILD_MODE=prebuilt
 # Keep this in sync with mise.toml.
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.4
 
 # =============================================================================
 # Stage 1 — choose prebuilt binaries (default) or an explicit source build.
