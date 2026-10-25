@@ -8,6 +8,10 @@ module Backup
 
       agent = Agent.find(agent_id)
       return unless agent.externally_hosted?
+      # A disabled account's residents are not backed up, even when the job
+      # was queued before the disable or forced: their servers are being
+      # deleted and nothing of theirs should start.
+      return if agent.account.disabled?
       if Agents::RemoteRuntime.remote?(agent)
         return VmResident.issue!(placement: Agents::RemoteRuntime.placement_for(agent))
       end
