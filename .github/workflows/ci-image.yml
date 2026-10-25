@@ -51,6 +51,8 @@ jobs:
       - name: Smoke-test tools and Chromium
         run: |
           docker run --rm --ipc=host ci-tooling:check sh -ec '
+            test "$(. /etc/os-release; echo "$VERSION_CODENAME")" = trixie
+            getconf GNU_LIBC_VERSION
             ruby --version
             bun --version
             node --version
