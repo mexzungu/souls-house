@@ -20,7 +20,10 @@
   function toggleDisabled() {
     const action = account.disabled ? 'enable' : 'disable';
     const label = account.disabled ? 'enable' : 'disable';
-    if (!confirm(`Are you sure you want to ${label} ${account.name}?`)) return;
+    const consequence = account.disabled
+      ? ''
+      : '\n\nIts residents stop waking and being backed up, and any resident servers on Hetzner are deleted. Enabling it again does not bring the servers back.';
+    if (!confirm(`Are you sure you want to ${label} ${account.name}?${consequence}`)) return;
 
     router.patch(`/admin/accounts/${account.id}/${action}`);
   }
