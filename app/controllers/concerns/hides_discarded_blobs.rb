@@ -12,6 +12,11 @@
 # that each trusted the other type's attachments as live could let two discarded
 # owners keep each other's blob served.
 #
+# Retained history attachments (a removed or replaced avatar or logo, see
+# RetainsReplacedAttachment) count as hidden too: their owner is live, but the
+# image is no longer its current one. A blob still attached somewhere live
+# stays served.
+#
 # Limit: a storage-service URL already handed out by the redirect before the
 # discard lives until it expires (ActiveStorage's service_urls_expire_in,
 # five minutes by default). That is bounded; the signed URL is not.
@@ -28,16 +33,23 @@ module HidesDiscardedBlobs
     "FieldSong" => -> { FieldSong.discarded }
   }.freeze
 
+  RETIRED_ATTACHMENT_NAMES = {
+    "Profile" => "retired_avatars",
+    "Setting" => "retired_logos"
+  }.freeze
+
   private
 
   def blob_scope
     attachments = ActiveStorage::Attachment.all
     discarded_owner = DISCARDED_OWNER_RECORDS.map do |type, records|
       attachments.where(record_type: type, record_id: records.call.select(:id))
-    end.reduce(:or)
+    end
+    retired = RETIRED_ATTACHMENT_NAMES.map { |type, name| attachments.where(record_type: type, name:) }
+    hidden_owner = (discarded_owner + retired).reduce(:or)
 
-    live = attachments.where.not(id: discarded_owner.select(:id)).select(:blob_id)
-    hidden = discarded_owner.where.not(blob_id: live).select(:blob_id)
+    live = attachments.where.not(id: hidden_owner.select(:id)).select(:blob_id)
+    hidden = hidden_owner.where.not(blob_id: live).select(:blob_id)
 
     super.where.not(id: hidden)
   end

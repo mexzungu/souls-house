@@ -1,6 +1,7 @@
 class Setting < ApplicationRecord
 
   include Broadcastable
+  include RetainsReplacedAttachment
 
   FOLLOW_THROUGH_SCOPES = %w[off selected all].freeze
   REFLEXES_SCOPES = %w[disabled account_choice enabled].freeze
@@ -11,6 +12,8 @@ class Setting < ApplicationRecord
   ].freeze
 
   has_one_attached :logo
+  # Removed and replaced logos keep their bytes, hidden (#93).
+  retains_replaced_attachment :logo, history: :retired_logos
 
   # Field OCR covers only files brought in after it was (last) turned on.
   before_save { self.field_ocr_enabled_at = Time.current if field_ocr_enabled_changed?(to: true) }
