@@ -205,6 +205,7 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       assert_in_delta 45.minutes.from_now, placement.birth_deadline_at, 5
       assert_equal "hk-agent-#{agent.uuid}", agent.container_name
       assert agent.trigger_bearer_token.present?
+      assert_equal [], progress(agent)
 
       run_job(agent)
       assert_equal 1, @client.creates.size
@@ -217,14 +218,17 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
 
       boot_and_enroll!(agent)
       run_job(agent)
+      assert_equal %w[server_ordered server_online], progress(agent)
       assert_equal "seed_home", RunnerCommand.where(agent_placement_id: placement.id).order(:id).last.kind
       answer_latest(placement, "seed_home")
+      assert_equal %w[server_ordered server_online home_prepared], progress(agent)
 
       run_job(agent)
       assert_equal "ready", placement.reload.state
       start = RunnerCommand.where(agent_placement_id: placement.id, kind: "start_resident").last
       assert_equal IMAGE, JSON.parse(start.payload_json)["image"]
       answer_latest(placement, "start_resident")
+      assert_equal %w[server_ordered server_online home_prepared runtime_started], progress(agent)
 
       # Ready, healthy runner, resident started - and still nothing dispatches.
       assert_nil Agents::RemoteRuntime.enrollment_for(agent.reload)
@@ -242,7 +246,15 @@ class ProvisionVmAgentJobTest < ActiveJob::TestCase
       assert_equal "healthy", agent.health_state
       assert Agents::RemoteRuntime.enrollment_for(agent)
       assert_equal 1, @client.creates.size
+      assert_equal %w[server_ordered server_online home_prepared runtime_started first_backup], progress(agent)
+      assert_equal({}, Agents::DailyJournalStatus.new(agent).snapshot,
+        "its first wake reads no local container: there is none, and asking for one failed the wake")
     end
+  end
+
+  # What the onboarding page shows as done (Agents::VmBirthProgress).
+  def progress(agent)
+    Agents::VmBirthProgress.for(agent.reload).select { |step| step[:done] }.map { |step| step[:key] }
   end
 
   # An archive import staged for its own server, as Portability::Import

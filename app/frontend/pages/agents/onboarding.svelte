@@ -13,6 +13,8 @@
   let {
     agent,
     account,
+    vm_steps: vmSteps = null,
+    first_resident: firstResident = false,
     provisioning_retry_url: provisioningRetryUrl,
     orientation_retry_url: orientationRetryUrl,
   } = $props();
@@ -27,18 +29,25 @@
   let orientationStarted = $derived(Boolean(agent.orientation_requested_at));
   let orientationFinished = $derived(Boolean(agent.orientation_completed_at));
   let orientationFailed = $derived(Boolean(agent.orientation_last_error));
+  // A resident born on its own server goes through more steps, about a
+  // minute apart (vm_steps, from Agents::VmBirthProgress).
+  let setupStages = $derived(
+    vmSteps ?? [
+      {
+        label: 'Home prepared',
+        detail: 'The persistent identity volume has been seeded.',
+        done: Boolean(agent.identity_seeded_at),
+      },
+      { label: 'Runtime ready', detail: 'The hosted Chaos runtime passed its health check.', done: runtimeReady },
+    ]
+  );
   let stages = $derived([
     {
       label: 'Beginning recorded',
       detail: 'The write-once seed and resident record are committed.',
       done: Boolean(agent.birth_committed_at),
     },
-    {
-      label: 'Home prepared',
-      detail: 'The persistent identity volume has been seeded.',
-      done: Boolean(agent.identity_seeded_at),
-    },
-    { label: 'Runtime ready', detail: 'The hosted Chaos runtime passed its health check.', done: runtimeReady },
+    ...setupStages,
     {
       label: 'First wake offered',
       detail: orientationFinished
@@ -55,7 +64,7 @@
   onMount(() => {
     const interval = setInterval(() => {
       if (!orientationFinished && !orientationFailed && !setupFailed) {
-        router.reload({ only: ['agent'], preserveScroll: true });
+        router.reload({ only: ['agent', 'vm_steps'], preserveScroll: true });
       }
     }, 3000);
     return () => clearInterval(interval);
@@ -119,6 +128,9 @@
           Infrastructure failed after the birth commit. The soul seed remains read-only and retryable.
         {:else}
           {$siteName} is preparing a persistent home and runtime.
+          {#if vmSteps}
+            They get a server of their own, which usually takes about five minutes.
+          {/if}
         {/if}
       </CardDescription>
     </CardHeader>
@@ -142,7 +154,12 @@
             </div>
             <div>
               <p class="font-medium {stage.done ? '' : 'text-muted-foreground'}">{stage.label}</p>
-              <p class="mt-1 text-sm text-muted-foreground">{stage.detail}</p>
+              <p class="mt-1 text-sm text-muted-foreground">
+                {stage.detail}
+                {#if stage.estimate && !stage.done}
+                  <span class="whitespace-nowrap">Usually {stage.estimate}.</span>
+                {/if}
+              </p>
             </div>
           </li>
         {/each}
@@ -192,25 +209,29 @@
         </div>
       {/if}
 
-      <div class="flex flex-wrap gap-3 border-t pt-6">
-        {#if runtimeReady}
-          <a href={newAccountChatPath(account.id)}>
-            <Button>
-              Start your first conversation
-              <ArrowRight class="ml-2 size-4" />
-            </Button>
-          </a>
-        {/if}
-        <a href={editAccountAgentPath(account.id, agent.id)}>
-          <Button variant="outline">
-            <Gear class="mr-2 size-4" />
-            Resident settings
-          </Button>
-        </a>
-        <a href={accountAgentsPath(account.id)}>
-          <Button variant="ghost">All residents</Button>
-        </a>
-      </div>
+      {#if runtimeReady || !firstResident}
+        <div class="flex flex-wrap gap-3 border-t pt-6">
+          {#if runtimeReady}
+            <a href={newAccountChatPath(account.id)}>
+              <Button>
+                Start your first conversation
+                <ArrowRight class="ml-2 size-4" />
+              </Button>
+            </a>
+          {/if}
+          {#if !firstResident}
+            <a href={editAccountAgentPath(account.id, agent.id)}>
+              <Button variant="outline">
+                <Gear class="mr-2 size-4" />
+                Resident settings
+              </Button>
+            </a>
+            <a href={accountAgentsPath(account.id)}>
+              <Button variant="ghost">All residents</Button>
+            </a>
+          {/if}
+        </div>
+      {/if}
     </CardContent>
   </Card>
 </div>
