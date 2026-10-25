@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-25
+  title: Every resident on one admin page
+  body: "For site admins, the Site Admin menu has a new All Residents page: a grid of every resident on the site, from every account, each on the same card its account sees, with its model, memory and journal counts, disk use, heartbeats and activity chart. Each card also shows where the resident runs, a server icon for the house's own server or a cloud icon for a resident on its own cloud VM (hover for its location and state), and the email of its account's owner. Search by name, owner email or model, or show only one kind of hosting. Works once deployed."
+- date: 2026-10-25
   title: A small drawing for each step of a resident's setup
   body: "While a resident is set up on a server of its own, a small line drawing above the steps shows what is happening now, in the same style as the seed on the welcome: a server box rolls in on a cart, its light comes on and signals the house, a seed sprouts in a pot on it, the dot sleeps on the box and wakes, a copy of the plant floats up into a cloud, and for the first wake the dot hops down and looks around. It changes with the step and goes away when setup is done. Reduced motion gets a still picture. Works once deployed."
 - date: 2026-10-25

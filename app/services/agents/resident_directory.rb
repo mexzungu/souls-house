@@ -1,10 +1,13 @@
 module Agents
   # Shared, deliberately bounded presentation for account and administrator cards.
   class ResidentDirectory
+
     def initialize(account)
       @account = account
     end
 
+    # A block, when given, adds fields to each card (the site admin's grid
+    # adds hosting and the account's owner).
     def call
       agents = @account.agents.for_resident_directory
       activity = ResidentActivity.new(agents).call
@@ -26,8 +29,9 @@ module Agents
           mnemodyne_edge_count: agent.deprecated? ? nil : edge_counts.fetch(agent.id, 0),
           provider_subscription: ProviderSubscriptionPresentation.call(agent),
           failed_runs: RunFailureStreak.call(agent).as_card_json
-        )
+        ).merge(block_given? ? yield(agent) : {})
       end
     end
+
   end
 end
