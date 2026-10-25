@@ -35,6 +35,13 @@
     if (state === 'unsupported') return 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300';
     return 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300';
   }
+
+  const reflexes = $derived(interaction.reflexes || { judged_count: 0, offered: [] });
+  const unoffered = $derived(reflexes.judged_count - reflexes.offered.length);
+
+  function score(value) {
+    return value === null || value === undefined ? 'no score' : value.toFixed(2);
+  }
 </script>
 
 <div class="rounded border bg-card p-4">
@@ -95,6 +102,33 @@
       </div>
     {/each}
   </div>
+
+  {#if reflexes.judged_count > 0}
+    <div class="mt-4 rounded border border-dashed p-3 text-sm" data-testid="session-reflexes">
+      <div class="flex flex-wrap items-baseline justify-between gap-2">
+        <span class="font-medium">Reflexes</span>
+        <span class="text-xs text-muted-foreground">
+          {reflexes.offered.length} offered{#if unoffered > 0}, {unoffered} checked and not offered{/if}
+        </span>
+      </div>
+      {#if reflexes.offered.length > 0}
+        <ul class="mt-2 space-y-2">
+          {#each reflexes.offered as offer (offer.id)}
+            <li>
+              <div class="flex flex-wrap items-baseline gap-2">
+                <span class="font-medium">{offer.name}</span>
+                <span class="font-mono text-xs text-muted-foreground">{score(offer.score)}</span>
+              </div>
+              <div class="text-muted-foreground">Brought to mind: {offer.reminder}</div>
+              {#if offer.excerpt}
+                <div class="mt-0.5 text-xs text-muted-foreground">On the post: “{offer.excerpt}”</div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 
   <InteractionDiagnostics {interaction} />
 </div>

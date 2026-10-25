@@ -464,6 +464,25 @@ class AgentsControllerTest < ActionDispatch::IntegrationTest
     assert old["discarded_at"].present?
   end
 
+  test "edit shows each session the reflexes judged on its posts" do
+    offered = @agent.reflexes.create!(name: "Review ask", shape: "Does the post open a PR?", reminder: "Tag Mira.")
+    quiet = @agent.reflexes.create!(name: "Clock", shape: "Does the post state a time?", reminder: "Read the hook.")
+    chat = @account.chats.create!(title: "Reflexes", model_id: "openrouter/auto")
+    interaction = @agent.agent_runtime_interactions.create!(chat: chat, trigger_kind: "conversation", started_at: Time.current)
+    post = chat.messages.create!(role: "assistant", agent: @agent, content: "PR #555 is up.",
+      runtime_interaction: interaction)
+    offered.judgments.create!(message: post, score: 0.96, offered: true)
+    quiet.judgments.create!(message: post, score: 0.1, offered: false)
+
+    get edit_account_agent_path(@account, @agent)
+
+    card = inertia_shared_props["interactions"].find { |i| i["id"] == interaction.to_param }
+    reflexes = card["reflexes"]
+    assert_equal 2, reflexes["judged_count"]
+    assert_equal [ [ "Review ask", "Tag Mira.", 0.96, post.obfuscated_id, "PR #555 is up." ] ],
+      reflexes["offered"].map { |o| o.values_at("name", "reminder", "score", "message_id", "excerpt") }
+  end
+
   test "edit says whether the resident's plan includes sub-agents" do
     get edit_account_agent_path(@account, @agent)
     assert_equal true, inertia_shared_props["subagents_available"]
