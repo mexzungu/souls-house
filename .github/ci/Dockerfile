@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 # CI tooling only. No application source, credentials or production image.
 ARG RUBY_VERSION=4.0.9
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.4
 ARG NODE_VERSION=22.23.3
-FROM oven/bun:${BUN_VERSION}@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6 AS bun
+FROM oven/bun:${BUN_VERSION}@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS bun
 FROM node:${NODE_VERSION}-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS node
 FROM ruby:${RUBY_VERSION}-slim-bookworm@sha256:16af53d3b3909a6ec074ca7e208aac3b912b04b3da80764e7fda9b9640f68696
 

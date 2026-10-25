@@ -6,7 +6,7 @@
 
 # Keep these runtime versions in sync with mise.toml and .ruby-version.
 ARG RUBY_VERSION=4.0.9
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.4
 
 FROM registry.docker.com/oven/bun:$BUN_VERSION AS bun
 FROM registry.docker.com/library/ruby:$RUBY_VERSION-slim AS base
