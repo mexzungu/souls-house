@@ -7,9 +7,12 @@
 # "openrouter:deepseek/deepseek-v4-flash".
 #
 # Only for residents on the Work plan, or on the house: a complimentary
-# entitlement, or no plan at all (residents from before billing). Lower plans
-# can't switch it on, and a resident that drops below Work stops carrying the
-# permission even if the switch was left on.
+# entitlement, or no plan at all in an account that doesn't pay per resident.
+# A paid birth has no entitlement for a moment (between the birth committing
+# and billing linking it, retried until it succeeds), so a resident with a
+# birth order is never taken for one on the house. Lower plans can't switch it
+# on, and a resident that drops below Work stops carrying the permission even
+# if the switch was left on.
 module Agent::Subagents
 
   extend ActiveSupport::Concern
@@ -32,7 +35,8 @@ module Agent::Subagents
   # Whether this resident's plan includes sub-agents.
   def subagents_available?
     entitlement = ResidentEntitlement.find_by(agent_id: id)
-    return true if entitlement.nil? || entitlement.complimentary? || entitlement.complimentary_granted_at.present?
+    return !ResidentBirthOrder.exists?(agent_id: id) if entitlement.nil?
+    return true if entitlement.complimentary? || entitlement.complimentary_granted_at.present?
 
     entitlement.tier.in?(SUBAGENT_TIERS) && entitlement.state.in?(Billing::Tier::IN_FORCE_STATES)
   end

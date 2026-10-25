@@ -72,6 +72,8 @@ test('provider edit subscriptions preserve broad maps and reconcile rendered sta
     'interactions',
     'interactions_pagination',
     'cost_report',
+    'reflexes',
+    'subagents_available',
   ]);
   expect(subscribeToModel).toHaveBeenCalledWith('IntegrationStatus', 'first', ['service_connections']);
   const providers = () => subscribeToModel.mock.calls.filter(([model]) => model === 'ProviderPresentation');

@@ -135,4 +135,16 @@ class Agent::SubagentsTest < ActiveSupport::TestCase
     assert_includes @agent.errors[:subagents_enabled], "Sub-agents come with the Work plan"
   end
 
+  test "a paid birth waiting for its billing link is not taken for a resident on the house" do
+    assert @agent.subagents_available?
+
+    ResidentBirthOrder.create!(account: @agent.account, creator: users(:user_1), tier: "life", state: "born",
+      agent: @agent)
+    assert_not @agent.subagents_available?, "no entitlement yet, but this resident was paid for"
+
+    ResidentEntitlement.create!(agent: @agent, account: @agent.account, source: "stripe", state: "active",
+      tier: "work")
+    assert @agent.subagents_available?, "once linked, the plan decides"
+  end
+
 end
