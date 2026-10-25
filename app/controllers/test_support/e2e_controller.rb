@@ -521,6 +521,12 @@ module TestSupport
         agents.first.update!(model_id: "anthropic/claude-opus-5.5", provider_auth_modes: { "anthropic" => "oauth_account" },
                              provider_connections: { "anthropic" => { "status" => "connected" } })
       end
+      if params[:reflexes]
+        agents.first.reflexes.create!(name: "Check the clock", shape: "Does the post state the time of day?",
+          reminder: "The time in the hook is the clock; the conversation's time is not.")
+        agents.first.reflexes.create!(name: "Old habit", shape: "Does the post apologise?",
+          reminder: "Say what happened instead.").discard
+      end
       if params[:missing_resident_credentials]
         account.update!(use_system_ai_credentials: false)
         agents.first.update!(health_state: "healthy", birth_committed_at: Time.current,

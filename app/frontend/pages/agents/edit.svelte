@@ -11,6 +11,7 @@
     TerminalWindow,
     CurrencyDollar,
     Graph,
+    Lightning,
   } from 'phosphor-svelte';
   import {
     accountAgentsPath,
@@ -30,6 +31,7 @@
   import AgentSettingsTabs from '$lib/components/agents/AgentSettingsTabs.svelte';
   import AgentInteractionsPanel from '$lib/components/agents/AgentInteractionsPanel.svelte';
   import AgentCostsPanel from '$lib/components/agents/AgentCostsPanel.svelte';
+  import AgentReflexesPanel from '$lib/components/agents/AgentReflexesPanel.svelte';
   import ResidentPortabilityPanel from '$lib/components/agents/resident-portability-panel.svelte';
 
   let {
@@ -59,11 +61,21 @@
     subagent_catalog = [],
     subagent_catalog_empty_reason = null,
     subagent_providers = [],
+    subagents_available: subagentsAvailable = false,
+    reflexes = {},
     account,
   } = $props();
 
   useSync({
-    [`Agent:${agent.id}`]: ['agent', 'memories', 'interactions', 'interactions_pagination', 'cost_report'],
+    [`Agent:${agent.id}`]: [
+      'agent',
+      'memories',
+      'interactions',
+      'interactions_pagination',
+      'cost_report',
+      'reflexes',
+      'subagents_available',
+    ],
   });
 
   const updateIntegrationSync = createDynamicSync();
@@ -97,6 +109,7 @@
       activeTab !== 'portability' &&
       activeTab !== 'interactions' &&
       activeTab !== 'costs' &&
+      activeTab !== 'reflexes' &&
       activeTab !== 'integrations' &&
       (!runtimeManaged ||
         activeTab === 'appearance' ||
@@ -109,17 +122,21 @@
     if (activeTab === 'hosting') hostingVisited = true;
   });
 
-  const tabs = [
+  // Sub-agents come with the Work plan and with residents on the house; on
+  // lower plans the tab is hidden and the server ignores the switch.
+  let showSubagents = $derived(Boolean(subagentsAvailable));
+  let tabs = $derived([
     { id: 'appearance', label: 'Appearance', icon: Palette },
     { id: 'settings', label: 'Settings', icon: Gear },
-    { id: 'subagents', label: 'Sub-agents', icon: UsersThree },
+    ...(showSubagents ? [{ id: 'subagents', label: 'Sub-agents', icon: UsersThree }] : []),
     { id: 'integrations', label: 'Integrations', icon: Plug },
     { id: 'hosting', label: 'Hosting', icon: CloudArrowUp },
     { id: 'interactions', label: 'Sessions', icon: TerminalWindow },
+    { id: 'reflexes', label: 'Reflexes', icon: Lightning },
     { id: 'memory', label: 'Memory', icon: Graph },
     { id: 'costs', label: 'Costs', icon: CurrencyDollar },
     ...(portability?.can_manage ? [{ id: 'portability', label: 'Export / Import', icon: CloudArrowUp }] : []),
-  ];
+  ]);
 
   let form = useForm({
     agent: {
@@ -230,7 +247,7 @@
             groupedModels={grouped_models}
             {runtimeManaged}
             bind:selectedModel />
-        {:else if activeTab === 'subagents'}
+        {:else if activeTab === 'subagents' && showSubagents}
           <AgentSubagentsPanel
             bind:enabled={$form.agent.subagents_enabled}
             bind:models={$form.agent.subagent_models}
@@ -259,6 +276,8 @@
             {account}
             {agent}
             {runtimeObservabilityUrl} />
+        {:else if activeTab === 'reflexes'}
+          <AgentReflexesPanel {reflexes} agentName={agent.name} />
         {:else if activeTab === 'costs'}
           <AgentCostsPanel report={costReport} />
         {:else if activeTab === 'portability'}

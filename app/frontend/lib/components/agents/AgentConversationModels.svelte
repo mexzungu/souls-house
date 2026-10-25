@@ -5,6 +5,7 @@
   import { Label } from '$lib/components/shadcn/label';
   import { Switch } from '$lib/components/shadcn/switch';
   import { findModel } from '$lib/agent-models';
+  import { CaretDown } from 'phosphor-svelte';
 
   let { form, groupedModels = {}, defaultModelId = null, agentName = 'this resident' } = $props();
 
@@ -51,77 +52,105 @@
     )
   );
 
+  const selectedCount = $derived(($form.agent.switchable_model_ids || []).filter((id) => id !== defaultModelId).length);
+  // Folded away by default; open when something here needs attention.
+  let open = $state(
+    Boolean($form.errors?.switchable_model_ids) ||
+      ($form.agent.switchable_model_ids || []).some(
+        (id) => id !== defaultModelId && !candidates.some((m) => m.model_id === id)
+      )
+  );
+
   function toggle(id, checked) {
     const current = $form.agent.switchable_model_ids || [];
     $form.agent.switchable_model_ids = checked ? [...new Set([...current, id])] : current.filter((x) => x !== id);
   }
 </script>
 
-<div class="space-y-4">
-  <div>
-    <h2 class="text-lg font-semibold">Models for conversations</h2>
-    <p class="text-sm text-muted-foreground">
-      People in a conversation can pick one of these models from {agentName}'s button in the room. {defaultLabel} stays the
-      default. Switching keeps the conversation's session.
-    </p>
-  </div>
+<div class="border-t pt-4">
+  <button
+    type="button"
+    class="flex w-full items-center justify-between gap-3 text-left"
+    aria-expanded={open}
+    aria-controls="additional-models"
+    onclick={() => (open = !open)}>
+    <span class="space-y-0.5">
+      <span class="block text-sm font-medium">Additional available models</span>
+      <span class="block text-xs text-muted-foreground">
+        {selectedCount === 0
+          ? `Off: only ${defaultLabel || 'the default model'} is used.`
+          : `${selectedCount} more ${selectedCount === 1 ? 'model' : 'models'} people can switch to in a conversation.`}
+      </span>
+    </span>
+    <CaretDown size={16} class="shrink-0 transition-transform {open ? 'rotate-180' : ''}" />
+  </button>
 
-  {#if defaultIsHouse}
-    <p class="text-sm text-muted-foreground rounded border bg-muted/30 p-4">
-      Conversation models are not available while the default is a house model.
-    </p>
-  {:else if candidates.length === 0}
-    <p class="text-sm text-muted-foreground rounded border bg-muted/30 p-4">
-      No other models from the same provider as {defaultLabel} are available.
-    </p>
-  {:else}
-    <fieldset class="rounded border bg-muted/30 p-4">
-      <legend class="sr-only">Models people can pick for {agentName} in a conversation</legend>
-      <div class="grid gap-2 sm:grid-cols-2">
-        {#each candidates as model (model.model_id)}
-          <label class="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              class="size-4 accent-primary"
-              checked={($form.agent.switchable_model_ids || []).includes(model.model_id)}
-              onchange={(event) => toggle(model.model_id, event.currentTarget.checked)} />
-            <span>{model.label}</span>
-          </label>
-        {/each}
-      </div>
-    </fieldset>
-  {/if}
-
-  {#if staleIds.length > 0}
-    <div
-      class="rounded border border-amber-500/60 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-      <p>These listed models no longer match the default model's provider. Conversations cannot use them.</p>
-      <ul class="mt-1 space-y-1">
-        {#each staleIds as id (id)}
-          <li class="flex items-center gap-2">
-            <span>{findModel(groupedModels, id)?.label || id}</span>
-            <button type="button" class="text-xs underline underline-offset-2" onclick={() => toggle(id, false)}
-              >Remove</button>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
-
-  {#if $form.errors?.switchable_model_ids}
-    <p class="text-sm text-destructive">{$form.errors.switchable_model_ids}</p>
-  {/if}
-
-  <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
-    <div class="space-y-1">
-      <Label for="resident_may_switch_model">Let {agentName} change its own model in a conversation</Label>
+  {#if open}
+    <div id="additional-models" class="mt-4 space-y-4">
       <p class="text-sm text-muted-foreground">
-        It picks from the same list. The change applies from its next turn and never starts one.
+        Ticking a model here lets the people in a conversation switch {agentName} to it from {agentName}'s button in the
+        room, for that conversation only. {defaultLabel} stays the default everywhere else, and switching keeps the conversation's
+        session.
       </p>
+
+      {#if defaultIsHouse}
+        <p class="text-sm text-muted-foreground rounded border bg-muted/30 p-4">
+          Conversation models are not available while the default is a house model.
+        </p>
+      {:else if candidates.length === 0}
+        <p class="text-sm text-muted-foreground rounded border bg-muted/30 p-4">
+          No other models from the same provider as {defaultLabel} are available.
+        </p>
+      {:else}
+        <fieldset class="rounded border bg-muted/30 p-4">
+          <legend class="sr-only">Models people can pick for {agentName} in a conversation</legend>
+          <div class="grid gap-2 sm:grid-cols-2">
+            {#each candidates as model (model.model_id)}
+              <label class="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  class="size-4 accent-primary"
+                  checked={($form.agent.switchable_model_ids || []).includes(model.model_id)}
+                  onchange={(event) => toggle(model.model_id, event.currentTarget.checked)} />
+                <span>{model.label}</span>
+              </label>
+            {/each}
+          </div>
+        </fieldset>
+      {/if}
+
+      {#if staleIds.length > 0}
+        <div
+          class="rounded border border-amber-500/60 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          <p>These listed models no longer match the default model's provider. Conversations cannot use them.</p>
+          <ul class="mt-1 space-y-1">
+            {#each staleIds as id (id)}
+              <li class="flex items-center gap-2">
+                <span>{findModel(groupedModels, id)?.label || id}</span>
+                <button type="button" class="text-xs underline underline-offset-2" onclick={() => toggle(id, false)}
+                  >Remove</button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if $form.errors?.switchable_model_ids}
+        <p class="text-sm text-destructive">{$form.errors.switchable_model_ids}</p>
+      {/if}
+
+      <div class="flex items-center justify-between gap-6 rounded border bg-muted/30 p-4">
+        <div class="space-y-1">
+          <Label for="resident_may_switch_model">Let {agentName} change its own model in a conversation</Label>
+          <p class="text-sm text-muted-foreground">
+            It picks from the same list. The change applies from its next turn and never starts one.
+          </p>
+        </div>
+        <Switch
+          id="resident_may_switch_model"
+          checked={$form.agent.resident_may_switch_model}
+          onCheckedChange={(checked) => ($form.agent.resident_may_switch_model = checked)} />
+      </div>
     </div>
-    <Switch
-      id="resident_may_switch_model"
-      checked={$form.agent.resident_may_switch_model}
-      onCheckedChange={(checked) => ($form.agent.resident_may_switch_model = checked)} />
-  </div>
+  {/if}
 </div>

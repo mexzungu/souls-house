@@ -15,6 +15,7 @@ test('resident turn timeout defaults to 30 minutes and persists a 24-hour budget
     await page.getByRole('link', { name: 'Edit', exact: true }).first().click();
     const editUrl = page.url();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Advanced settings', exact: true }).click();
     const timeout = page.getByLabel('Turn timeout (minutes)');
     await expect(timeout).toHaveValue('30');
     await timeout.fill('1440');
@@ -22,6 +23,7 @@ test('resident turn timeout defaults to 30 minutes and persists a 24-hour budget
     await expect(page).toHaveURL(editUrl.split('/residents/')[0] + '/residents');
     await page.goto(editUrl);
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('button', { name: 'Advanced settings', exact: true }).click();
     await expect(page.getByLabel('Turn timeout (minutes)')).toHaveValue('1440');
   } finally {
     await request.post('/test/e2e/cleanup', { data: { run_id: runId } });

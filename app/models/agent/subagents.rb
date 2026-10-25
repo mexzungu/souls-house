@@ -5,26 +5,46 @@
 #
 # Keys are "provider:model", e.g. "anthropic:claude-sonnet-5" or
 # "openrouter:deepseek/deepseek-v4-flash".
+#
+# Only for residents on the Work plan, or on the house: a complimentary
+# entitlement, or no plan at all (residents from before billing). Lower plans
+# can't switch it on, and a resident that drops below Work stops carrying the
+# permission even if the switch was left on.
 module Agent::Subagents
 
   extend ActiveSupport::Concern
 
   MAX_SUBAGENT_MODELS = 50
   SUBAGENT_MODEL_KEY = %r{\A[a-z]+:[A-Za-z0-9][A-Za-z0-9._/:\[\]@-]{0,199}\z}
+  SUBAGENT_TIERS = %w[work].freeze
 
   included do
     before_validation :normalize_subagent_models
     before_save :stamp_subagent_policy_change, if: -> { subagents_enabled_changed? || subagent_models_changed? }
     validate :subagent_models_are_well_formed
+    validate :subagents_allowed_by_plan, if: -> { subagents_enabled? && subagents_enabled_changed? }
   end
 
   def subagent_catalog
     Agents::SubagentCatalog.new(self)
   end
 
+  # Whether this resident's plan includes sub-agents.
+  def subagents_available?
+    entitlement = ResidentEntitlement.find_by(agent_id: id)
+    return true if entitlement.nil? || entitlement.complimentary? || entitlement.complimentary_granted_at.present?
+
+    entitlement.tier.in?(SUBAGENT_TIERS) && entitlement.state.in?(Billing::Tier::IN_FORCE_STATES)
+  end
+
+  # The switch is on and the plan allows it.
+  def subagents_permitted?
+    subagents_enabled? && subagents_available?
+  end
+
   # The allowed entries the account can still pay for, in the owner's order.
   def available_subagent_models
-    return [] unless subagents_enabled?
+    return [] unless subagents_permitted?
 
     catalog = subagent_catalog
     subagent_models.filter_map { |key| catalog.resolve(key) }
@@ -48,6 +68,10 @@ module Agent::Subagents
     end
     invalid = subagent_models.reject { |key| key.match?(SUBAGENT_MODEL_KEY) }
     errors.add(:subagent_models, "contains invalid entries: #{invalid.first(3).join(', ')}") if invalid.any?
+  end
+
+  def subagents_allowed_by_plan
+    errors.add(:subagents_enabled, "Sub-agents come with the Work plan") unless subagents_available?
   end
 
 end

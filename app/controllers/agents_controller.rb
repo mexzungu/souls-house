@@ -81,6 +81,8 @@ class AgentsController < ApplicationController
       subagent_catalog: -> { load_catalog.call.options },
       subagent_providers: -> { load_catalog.call.providers },
       subagent_catalog_empty_reason: -> { load_catalog.call.empty_reason },
+      subagents_available: -> { @agent.subagents_available? },
+      reflexes: -> { reflexes_props },
       # Count/provider partials must not mint another registration token.
       telegram_deep_link: InertiaRails.optional { @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil },
       telegram_configuration: -> { { configured: @agent.telegram_configured?, username: @agent.telegram_bot_username } },
@@ -130,6 +132,28 @@ class AgentsController < ApplicationController
   end
 
   private
+
+  # The resident's reflexes, read-only: residents write and forget them
+  # through conversation (docs/reflexes.md), not through this page. Forgotten
+  # ones are included so their history stays visible.
+  def reflexes_props
+    reflexes = @agent.reflexes.order(:id).to_a
+    counts = Reflex::Judgment.where(reflex_id: reflexes.map(&:id)).group(:reflex_id, :offered).count
+    last_offered = Reflex::Judgment.where(reflex_id: reflexes.map(&:id), offered: true).group(:reflex_id)
+      .maximum(:created_at)
+    {
+      enabled: ReflexCheck.enabled_for?(@agent),
+      max_kept: Reflex::MAX_KEPT,
+      items: reflexes.map do |reflex|
+        offered = counts.fetch([ reflex.id, true ], 0)
+        reflex.as_json.merge(
+          judged_count: offered + counts.fetch([ reflex.id, false ], 0),
+          offered_count: offered,
+          last_offered_at: last_offered[reflex.id]&.iso8601
+        )
+      end
+    }
+  end
 
   # Asleep because its plan lapsed; the Billing tab is where it is paid
   # (shown only to those who can pay).
