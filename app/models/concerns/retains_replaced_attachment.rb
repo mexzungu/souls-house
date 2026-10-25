@@ -11,9 +11,11 @@
 # Old signed URLs are hidden by HidesDiscardedBlobs: a blob whose only
 # attachments are history rows has no live owner.
 #
-# Destroying the owner itself still erases its history (dependent:
-# :purge_later). That is the explicit administrative deletion of the whole
-# record, a separate #93 slice.
+# Destroying the owner itself still removes its history links (dependent:
+# :purge_later), and with them the bytes of any blob attached nowhere else. A
+# blob still attached to another record keeps its bytes. Owner deletion is
+# the explicit administrative deletion of the whole record, a separate #93
+# slice.
 module RetainsReplacedAttachment
 
   extend ActiveSupport::Concern
