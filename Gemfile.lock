@@ -450,8 +450,6 @@ GEM
       base64
       websocket-extensions (>= 0.1.0)
     websocket-extensions (0.1.5)
-    x (0.19.0)
-      base64 (>= 0.2)
     xpath (3.2.0)
       nokogiri (~> 1.8)
     yaml (0.4.0)
@@ -524,7 +522,6 @@ DEPENDENCIES
   vite_rails (~> 3.11)
   web-console
   webmock
-  x
 
 BUNDLED WITH
   4.0.16
