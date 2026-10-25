@@ -36,6 +36,44 @@ class SiteDashboardTest < ActiveSupport::TestCase
     assert_equal [ @founding_agent.account.to_param ], data[:founding].map { |row| row[:id] }
   end
 
+  test "latest sign-ups name the newest humans with their residents' activity" do
+    owner = @public_agent.account.memberships.find_by!(role: "owner").user
+    owner.update_columns(created_at: 1.minute.ago)
+    interaction(@public_agent)
+    interaction(@public_agent, kind: "wake", at: 3.days.ago)
+    interaction(@public_agent, at: 20.days.ago)
+    interaction(@public_agent, at: 60.days.ago)
+
+    signups = SiteDashboard.new.call[:latest_signups]
+    assert_operator signups.size, :<=, SiteDashboard::LATEST_SIGNUPS
+    assert_equal User.order(created_at: :desc, id: :desc).limit(SiteDashboard::LATEST_SIGNUPS).pluck(:email_address),
+                 signups.map { |row| row[:email] }
+    newest = signups.first
+    assert_equal owner.email_address, newest[:email]
+    resident = newest[:residents].find { |row| row[:name] == @public_agent.name }
+    assert resident, "the owner's resident is listed"
+    assert_equal 2, resident[:turns_7d]
+    assert_equal 3, resident[:turns_30d]
+    assert_equal 2, resident[:conversation_turns_30d]
+    assert_equal 4, resident[:turns_total]
+    assert_equal 1.hour.ago.iso8601, resident[:last_turn_at]
+  end
+
+  test "latest sign-ups do not credit a member with the residents of an account they only joined" do
+    owner = @public_agent.account.memberships.find_by!(role: "owner").user
+    joiner = User.where.not(id: @public_agent.account.memberships.select(:user_id)).first!
+    joiner.update_columns(created_at: 1.minute.ago)
+    @public_agent.account.update_columns(account_type: Account.account_types[:team])
+    Membership.create!(account: @public_agent.account, user: joiner, role: "member", confirmed_at: Time.current)
+
+    signups = SiteDashboard.new.call[:latest_signups]
+    row = signups.find { |signup| signup[:email] == joiner.email_address }
+    assert row, "the joiner is among the newest sign-ups"
+    assert_includes row[:accounts], { id: @public_agent.account.to_param, name: @public_agent.account.name, role: "member" }
+    assert_not_includes row[:residents].map { |resident| resident[:name] }, @public_agent.name
+    assert_not_equal owner.id, joiner.id
+  end
+
   test "failure rate counts errors and timeouts among finished turns" do
     interaction(@public_agent)
     interaction(@public_agent, status: "error")

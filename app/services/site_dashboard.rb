@@ -10,12 +10,13 @@ class SiteDashboard
   DAYS = 30
   WEEKS = 26
   HOURS = 7 * 24
+  LATEST_SIGNUPS = 10
   GIB = 1024**3
   RESTIC_FRESH_FOR = 36.hours
   DISK_FRESH_FOR = 6.hours
   # Bump the version whenever the payload shape changes: Solid Cache
   # survives a deploy, and the page must never read an older shape.
-  CACHE_KEY = "admin/site_dashboard/v2".freeze
+  CACHE_KEY = "admin/site_dashboard/v3".freeze
   # A finished turn failed if the runtime said error or timeout, if the live
   # activity path finished it as failed or timed out, or if the house
   # recorded an error and the runtime never reported a status (a refused or
@@ -58,6 +59,7 @@ class SiteDashboard
     {
       generated_at: now.iso8601,
       headline: headline,
+      latest_signups: latest_signups,
       growth: growth,
       funnel: funnel,
       activity: activity,
@@ -132,6 +134,87 @@ class SiteDashboard
 
   def count_with_delta(scope, since)
     { value: scope.count, added: scope.where(created_at: since..).count }
+  end
+
+  # --- latest sign-ups ------------------------------------------------------
+
+  # The ten newest humans, founding or not (a founding sign-up is marked, not
+  # hidden), with the residents in the accounts they own and how busy each
+  # resident has been. Residents of accounts they only joined are not theirs.
+  def latest_signups
+    users = User.order(created_at: :desc, id: :desc).limit(LATEST_SIGNUPS)
+                .includes(:profile, memberships: { account: :agents }).to_a
+    agents = users.flat_map { |user| owned_memberships(user).flat_map { |membership| membership.account.agents } }
+    agent_activity = signup_agent_activity(agents.map(&:id))
+    messages = signup_message_counts(users.map(&:id))
+    founding = founding_ids.to_set
+    users.map do |user|
+      memberships = user.memberships.select { |membership| membership.account }
+      owned = owned_memberships(user)
+      {
+        email: user.email_address,
+        name: user.full_name.presence,
+        signed_up_at: user.created_at.iso8601,
+        confirmed: memberships.any? { |membership| membership.confirmed_at.present? },
+        founding: memberships.any? { |membership| founding.include?(membership.account_id) },
+        accounts: memberships.map do |membership|
+          { id: membership.account.to_param, name: membership.account.name, role: membership.role }
+        end,
+        messages_7d: messages.dig(user.id, :week).to_i,
+        messages_total: messages.dig(user.id, :total).to_i,
+        last_message_at: messages.dig(user.id, :last)&.iso8601,
+        residents: owned.flat_map { |membership| membership.account.agents }
+                        .sort_by(&:created_at)
+                        .map { |agent| signup_resident(agent, agent_activity[agent.id] || {}) }
+      }
+    end
+  end
+
+  def owned_memberships(user)
+    user.memberships.select { |membership| membership.account && membership.role == "owner" }
+  end
+
+  def signup_resident(agent, activity)
+    {
+      name: agent.name,
+      created_at: agent.created_at.iso8601,
+      active: agent.active,
+      paused: agent.paused,
+      turns_7d: activity[:week].to_i,
+      turns_30d: activity[:month].to_i,
+      conversation_turns_30d: activity[:conversation].to_i,
+      turns_total: activity[:total].to_i,
+      last_turn_at: activity[:last]&.iso8601
+    }
+  end
+
+  def signup_agent_activity(agent_ids)
+    return {} if agent_ids.empty?
+    week = 7.days.ago(now)
+    month = DAYS.days.ago(now)
+    AgentRuntimeInteraction.where(agent_id: agent_ids)
+                           .group(:agent_id)
+                           .pluck(:agent_id,
+                                  Arel.sql("count(*)"),
+                                  Arel.sql(AgentRuntimeInteraction.sanitize_sql([ "count(*) FILTER (WHERE started_at >= ?)", week ])),
+                                  Arel.sql(AgentRuntimeInteraction.sanitize_sql([ "count(*) FILTER (WHERE started_at >= ?)", month ])),
+                                  Arel.sql(AgentRuntimeInteraction.sanitize_sql([
+                                    "count(*) FILTER (WHERE started_at >= ? AND trigger_kind IN ('conversation', 'telegram'))", month
+                                  ])),
+                                  Arel.sql("max(started_at)"))
+                           .to_h do |agent_id, total, in_week, in_month, conversation, last|
+                             [ agent_id, { total:, week: in_week, month: in_month, conversation:, last: } ]
+                           end
+  end
+
+  def signup_message_counts(user_ids)
+    return {} if user_ids.empty?
+    Message.where(role: "user", user_id: user_ids)
+           .group(:user_id)
+           .pluck(:user_id, Arel.sql("count(*)"),
+                  Arel.sql(Message.sanitize_sql([ "count(*) FILTER (WHERE messages.created_at >= ?)", 7.days.ago(now) ])),
+                  Arel.sql("max(messages.created_at)"))
+           .to_h { |user_id, total, week, last| [ user_id, { total:, week:, last: } ] }
   end
 
   def active_agent_ids(since:, agent_ids:, until_time: now)
