@@ -8,8 +8,11 @@ container that has never reached the house falls back to the copy baked into
 the image, which carries its own date.
 """
 
+import io
 import os
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -34,9 +37,23 @@ def baked_path():
     return Path(docs) / "about-souls-house.md"
 
 
+class RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the request carries the house credential, and
+    urllib would re-send it to whatever origin the Location names."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urlsplit(newurl).netloc or newurl
+        message = (f"refused to follow a redirect ({code}) to {target} with the house credential; "
+                   "check SOULSHOUSE_APP_URL")
+        raise urllib.error.HTTPError(req.full_url, code, message, headers, io.BytesIO(message.encode()))
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(RefuseRedirects)
+
+
 def _http_get(url, token):
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "text/markdown"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+    with NO_REDIRECT_OPENER.open(request, timeout=TIMEOUT) as response:
         if response.status != 200:
             raise OSError(f"HTTP {response.status}")
         return response.read(MAX_BYTES + 1)
@@ -68,7 +85,8 @@ def refresh(fetch=None, now=None, path=None):
         tmp.replace(path)
         return "fetched"
     except Exception as error:  # Never fail a turn over this.
-        return f"failed: {type(error).__name__}"
+        # The reason, never the key: a refused redirect names only the host.
+        return f"failed: {type(error).__name__}: {error}"
 
 
 def _age(seconds):

@@ -53,6 +53,7 @@ class IdentityLeakTest < ActiveSupport::TestCase
     "app/lib/agent_repo_creator.rb" => "GitHub deploy key title / User-Agent header",
     "app/lib/agent_credentials_encryptor.rb" => "generated credentials comment (envelope keys remain helix_kit)",
     "app/lib/agent_identity_exporter.rb" => "exported identity and bootstrap copy",
+    "app/models/about_sheet.rb" => "the resident's sheet about the product, headed by its name; the runtime checks that heading",
     "app/services/agents/portability/export.rb" => "archive producer product label and offline README copy, not installation identity",
     "app/lib/notices/renderer.rb" => "standing notice copy",
     "app/lib/agent_attention_renderer.rb" => "cross-room attention notice copy (API channel keys remain helixkit)",
