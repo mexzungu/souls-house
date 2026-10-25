@@ -96,6 +96,18 @@ export function shortDateTime(iso) {
   return new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+// "3h ago", "2d ago": how long before `nowIso` (the dashboard's own clock,
+// so a cached payload reads consistently). Null when there is nothing to age.
+export function timeAgo(iso, nowIso) {
+  if (!iso) return null;
+  const minutes = Math.max(0, Math.round((new Date(nowIso) - new Date(iso)) / 60000));
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 // "measured hourly" stops being true the moment readings go missing or old;
 // say so next to the total instead of letting it pass as complete.
 export function coverageNote(coverage) {

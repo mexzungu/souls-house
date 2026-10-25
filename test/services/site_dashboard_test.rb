@@ -36,6 +36,29 @@ class SiteDashboardTest < ActiveSupport::TestCase
     assert_equal [ @founding_agent.account.to_param ], data[:founding].map { |row| row[:id] }
   end
 
+  test "latest sign-ups name the newest humans with their residents' activity" do
+    owner = @public_agent.account.memberships.find_by!(role: "owner").user
+    owner.update_columns(created_at: 1.minute.ago)
+    interaction(@public_agent)
+    interaction(@public_agent, kind: "wake", at: 3.days.ago)
+    interaction(@public_agent, at: 20.days.ago)
+    interaction(@public_agent, at: 60.days.ago)
+
+    signups = SiteDashboard.new.call[:latest_signups]
+    assert_operator signups.size, :<=, SiteDashboard::LATEST_SIGNUPS
+    assert_equal User.order(created_at: :desc, id: :desc).limit(SiteDashboard::LATEST_SIGNUPS).pluck(:email_address),
+                 signups.map { |row| row[:email] }
+    newest = signups.first
+    assert_equal owner.email_address, newest[:email]
+    resident = newest[:residents].find { |row| row[:name] == @public_agent.name }
+    assert resident, "the owner's resident is listed"
+    assert_equal 2, resident[:turns_7d]
+    assert_equal 3, resident[:turns_30d]
+    assert_equal 2, resident[:conversation_turns_30d]
+    assert_equal 4, resident[:turns_total]
+    assert_equal 1.hour.ago.iso8601, resident[:last_turn_at]
+  end
+
   test "failure rate counts errors and timeouts among finished turns" do
     interaction(@public_agent)
     interaction(@public_agent, status: "error")

@@ -9,6 +9,7 @@
   import CostsPanel from '$lib/components/admin/dashboard/CostsPanel.svelte';
   import InfraPanel from '$lib/components/admin/dashboard/InfraPanel.svelte';
   import StoragePanel from '$lib/components/admin/dashboard/StoragePanel.svelte';
+  import LatestSignups from '$lib/components/admin/dashboard/LatestSignups.svelte';
   import { TEAL, CORAL, VIOLET, SLATE, AMBER } from '$lib/components/admin/dashboard/palette.js';
   import {
     formatCount,
@@ -157,6 +158,8 @@
       sparkColor={CORAL}
       hint="Turns that ended in error or timeout, all residents" />
   </section>
+
+  <LatestSignups signups={dashboard.latest_signups ?? []} generatedAt={dashboard.generated_at} />
 
   <section class="grid gap-4 lg:grid-cols-3">
     <!-- Growth -->
