@@ -32,6 +32,25 @@ class RetainedImageUrlsTest < ActionDispatch::IntegrationTest
     assert_served blob_url(@profile.reload.avatar.blob)
   end
 
+  test "restoring and re-retiring an avatar moves its URLs between served and hidden" do
+    @profile.avatar.attach(png("first.png"))
+    first = @profile.avatar.blob
+    @profile.update!(avatar: png("second.png"))
+    second = @profile.reload.avatar.blob
+    first_urls = [ blob_url(first), representation_url(first) ]
+    second_urls = [ blob_url(second), representation_url(second) ]
+    first_urls.each { |url| assert_hidden url }
+
+    @profile.restore_retired_avatar!(first)
+
+    first_urls.each { |url| assert_served url }
+    second_urls.each { |url| assert_hidden url }
+
+    @profile.reload.retire_avatar!
+
+    (first_urls + second_urls).each { |url| assert_hidden url }
+  end
+
   test "a retired blob still attached to a live owner stays served" do
     @profile.avatar.attach(png("first.png"))
     blob = @profile.avatar.blob

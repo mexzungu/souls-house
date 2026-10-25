@@ -35,4 +35,6 @@ request (for the logo, a site-admin decision).
 Storage: history is not counted towards any quota and is not pruned. Avatars are
 under 5 MB each. Permanently erasing a person's or the site's image history is
 part of the separate administrative account/user deletion process (#93):
-destroying the Profile or Setting still purges its history.
+destroying the Profile or Setting removes its history links and purges the
+bytes of each image attached nowhere else. An image still attached to another
+record (for example a message attachment) keeps its bytes.

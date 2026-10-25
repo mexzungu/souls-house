@@ -56,24 +56,30 @@ class RetainedImagesTest < ActiveSupport::TestCase
   test "restoring a retired avatar makes it current and retains the displaced one" do
     @profile.avatar.attach(png("first.png"))
     first = @profile.avatar.blob
-    @profile.update!(avatar: png("second.png"))
+    perform_enqueued_jobs { @profile.update!(avatar: png("second.png")) }
     second = @profile.reload.avatar.blob
 
-    @profile.restore_retired_avatar!(first)
+    perform_enqueued_jobs { @profile.restore_retired_avatar!(first) }
 
     @profile.reload
     assert_equal first.id, @profile.avatar.blob.id
     assert_equal [ second.id ], @profile.retired_avatars.blobs.pluck(:id)
+    assert [ first, second ].all? { |b| b.service.exist?(b.key) }, "restore keeps both images' bytes"
   end
 
-  test "an avatar removed, restored and removed again keeps one history row" do
+  test "an avatar removed, restored and removed again keeps one history row and its bytes" do
     @profile.avatar.attach(png("first.png"))
     blob = @profile.avatar.blob
-    @profile.retire_avatar!
-    @profile.restore_retired_avatar!(blob)
-    @profile.reload.retire_avatar!
+    perform_enqueued_jobs do
+      @profile.retire_avatar!
+      @profile.restore_retired_avatar!(blob)
+      @profile.reload.retire_avatar!
+    end
 
-    assert_equal [ blob.id ], @profile.reload.retired_avatars.blobs.pluck(:id)
+    @profile.reload
+    assert_not @profile.avatar.attached?
+    assert_equal [ blob.id ], @profile.retired_avatars.blobs.pluck(:id)
+    assert blob.service.exist?(blob.key)
   end
 
   test "replacing and removing the site logo retains each one" do
@@ -99,6 +105,19 @@ class RetainedImagesTest < ActiveSupport::TestCase
     perform_enqueued_jobs { @profile.destroy! }
 
     assert_not ActiveStorage::Blob.exists?(blob.id)
+  end
+
+  test "destroying the owner keeps the bytes of a history image attached elsewhere" do
+    @profile.avatar.attach(png("first.png"))
+    blob = @profile.avatar.blob
+    chat = accounts(:personal_account).chats.create!(model_id: "openrouter/auto", title: "Shared")
+    chat.messages.create!(content: "Same bytes", role: "user", user: users(:user_1)).attachments.attach(blob)
+    @profile.retire_avatar!
+
+    perform_enqueued_jobs { @profile.destroy! }
+
+    assert ActiveStorage::Blob.exists?(blob.id)
+    assert blob.service.exist?(blob.key)
   end
 
   private
