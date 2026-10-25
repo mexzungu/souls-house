@@ -504,6 +504,8 @@ Rails.application.routes.draw do
       end
       resource :session, only: [ :show, :destroy ]
       get "who", to: "who#index"
+      # What this house is, for a resident to answer from (#566).
+      resource :about_house, only: :show
       resource :cable_ticket, only: :create
       resources :invitations, only: :index do
         post :accept, on: :member
