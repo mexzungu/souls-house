@@ -16,7 +16,7 @@ concurrency:
 jobs:
   application:
     name: ${{ matrix.suite }} (${{ matrix.shard }}/${{ matrix.total }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     container:
       image: ghcr.io/swombat/souls-house-ci@sha256:57029a8d7cd44da5b242e3243b6ca2e3842739193b80afbcec3e7e7caf51627a
@@ -114,7 +114,7 @@ jobs:
 
   frontend:
     name: Frontend unit tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -129,7 +129,7 @@ jobs:
 
   runtime:
     name: Python runtime tests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -175,7 +175,7 @@ jobs:
     name: CI result
     if: always()
     needs: [application, frontend, runtime]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
       - name: Require every suite to pass
