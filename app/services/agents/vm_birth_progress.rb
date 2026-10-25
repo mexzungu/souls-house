@@ -26,10 +26,10 @@ module Agents
       # a minute apart: a person watching wants to know a spinner is normal.
       [
         step("server_ordered", "Server ordered",
-          "souls.house is renting a server of its own from the hosting provider.", "about a minute",
+          "#{house} is renting a server of its own from the hosting provider.", "about a minute",
           ready || server_provisioned?),
         step("server_online", "Server online",
-          "The server has started and checked in with souls.house.", "about a minute", ready || enrolled?),
+          "The server has started and checked in with #{house}.", "about a minute", ready || enrolled?),
         step("home_prepared", "Home prepared",
           "Their home folder, with the beginning in it, is on the server.", "under a minute",
           ready || command_done?("seed_home")),
@@ -42,6 +42,8 @@ module Agents
     end
 
     private
+
+    def house = Setting.instance.site_name
 
     def step(key, label, detail, estimate, done) = { key:, label:, detail:, estimate:, done: }
 
