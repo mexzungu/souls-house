@@ -137,3 +137,26 @@ test('an asleep resident says so, and why, without claiming it is paused', () =>
   expect(badge).toHaveAttribute('title', expect.stringMatching(/payment .* has lapsed/));
   expect(screen.queryByText('Paused')).not.toBeInTheDocument();
 });
+
+test('the admin grid shows where a resident runs and its owner', () => {
+  render(AgentCard, {
+    agent: {
+      ...agent,
+      hosting: { kind: 'cloud', state: 'ready', location: 'fsn1' },
+      owner_email: 'owner@example.com',
+      account_name: 'Owner account',
+    },
+    accountId: 'test',
+    admin: true,
+    showActions: false,
+  });
+  expect(screen.getByTestId('resident-hosting')).toHaveAttribute('data-kind', 'cloud');
+  expect(screen.getByLabelText('Own cloud VM (fsn1)')).toBeInTheDocument();
+  expect(screen.getByTestId('resident-owner')).toHaveTextContent('owner@example.com');
+});
+
+test('an account card shows neither hosting nor owner', () => {
+  render(AgentCard, { agent, accountId: 'test' });
+  expect(screen.queryByTestId('resident-hosting')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('resident-owner')).not.toBeInTheDocument();
+});

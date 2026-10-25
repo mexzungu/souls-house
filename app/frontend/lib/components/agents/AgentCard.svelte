@@ -18,6 +18,8 @@
     Circle,
     Plugs,
     Receipt,
+    HardDrives,
+    Cloud,
   } from 'phosphor-svelte';
   import { agentIconFor } from '$lib/agent-icons';
   import { editAccountAgentPath } from '@/routes';
@@ -52,6 +54,14 @@
   let heartbeatEnabled = $derived(agent.scheduled_wakes_enabled && agent.active && !agent.paused && !agent.deprecated);
   let IconComponent = $derived(agentIconFor(agent.icon));
   let failedRuns = $derived(agent.failed_runs);
+  // Only the site admin's grid sends these.
+  let hostingTitle = $derived(
+    agent.hosting?.kind === 'cloud'
+      ? `Own cloud VM${agent.hosting.location ? ` (${agent.hosting.location})` : ''}${agent.hosting.state === 'ready' ? '' : ` · ${agent.hosting.state}`}`
+      : agent.hosting
+        ? `On the house server${agent.hosting.state === 'ready' ? '' : ` · ${agent.hosting.state}`}`
+        : null
+  );
   // The streak start in the reader's own clock; a date only when it isn't today.
   function sinceLabel(iso) {
     if (!iso) return '';
@@ -76,12 +86,35 @@
             weight="duotone" />
         </div>
         <div>
-          <CardTitle class="text-lg">{agent.name}</CardTitle>
+          <div class="flex items-center gap-1.5">
+            <CardTitle class="text-lg">{agent.name}</CardTitle>
+            {#if agent.hosting}
+              <span
+                class={agent.hosting.kind === 'cloud' ? 'text-sky-600 dark:text-sky-400' : 'text-muted-foreground'}
+                title={hostingTitle}
+                data-testid="resident-hosting"
+                data-kind={agent.hosting.kind}>
+                {#if agent.hosting.kind === 'cloud'}
+                  <Cloud class="size-4" weight="duotone" aria-label={hostingTitle} />
+                {:else}
+                  <HardDrives class="size-4" weight="duotone" aria-label={hostingTitle} />
+                {/if}
+              </span>
+            {/if}
+          </div>
           <p class="text-xs font-light text-muted-foreground mt-0.5">
             {agent.model_label || agent.model_id}{#if agent.reasoning_effort}<span class="opacity-50">
                 / {agent.reasoning_effort === 'default' ? 'provider default' : agent.reasoning_effort}</span
               >{/if}
           </p>
+          {#if agent.account_name || agent.owner_email}
+            <p
+              class="text-xs text-muted-foreground mt-0.5 truncate"
+              title={agent.account_name}
+              data-testid="resident-owner">
+              {agent.owner_email || 'no owner'}
+            </p>
+          {/if}
           <div class="flex flex-wrap gap-1 mt-1">
             {#if agent.deprecated}
               <Badge variant="secondary" title="The inline runtime has been retired. History is preserved.">

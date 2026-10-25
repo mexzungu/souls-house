@@ -16,6 +16,7 @@
     CaretRight,
     Check,
     Question,
+    UsersThree,
   } from 'phosphor-svelte';
   import * as DropdownMenu from '$lib/components/shadcn/dropdown-menu/index.js';
   import { buttonVariants } from '$lib/components/shadcn/button/index.js';
@@ -164,6 +165,10 @@
       <DropdownMenu.Item onclick={() => router.visit('/admin/accounts')}>
         <Buildings class="mr-2 size-4" />
         <span>Manage Accounts</span>
+      </DropdownMenu.Item>
+      <DropdownMenu.Item onclick={() => router.visit('/admin/residents')}>
+        <UsersThree class="mr-2 size-4" />
+        <span>All Residents</span>
       </DropdownMenu.Item>
       <DropdownMenu.Item onclick={() => router.visit('/admin/audit_logs')}>
         <ClockClockwise class="mr-2 size-4" />
