@@ -6,7 +6,8 @@ module Backup
     def perform
       return unless Agents::Config.backups_enabled?
 
-      Agent.where(runtime: "external").find_each do |agent|
+      # A disabled account's servers are being deleted; nothing to back up.
+      Agent.where(runtime: "external", account_id: Account.enabled.select(:id)).find_each do |agent|
         next if VmResident.held?(agent)
         next unless due?(agent)
         Backup::AgentResticJob.perform_later(agent.id)

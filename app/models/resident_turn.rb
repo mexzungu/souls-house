@@ -86,6 +86,7 @@ class ResidentTurn < ApplicationRecord
   def eligible?
     return false unless agent.active? && !agent.paused? && agent.external?
     return false if agent.billing_held?
+    return false if agent.account.reload.disabled?
     return false unless Agents::RuntimeLocation.dispatchable?(agent)
     interaction = agent_runtime_interaction
     if interaction.chat
@@ -117,11 +118,12 @@ class ResidentTurn < ApplicationRecord
   # records it and capacity is released only by the runtime's answer, never
   # by this local decision.
   # An admitted turn not yet submitted is also withdrawn if its resident fell
-  # asleep meanwhile (plan lapsed); a turn already running is never touched
-  # here, it may finish within the drain.
+  # asleep meanwhile (plan lapsed) or its account was disabled; a turn
+  # already running is never touched here, it may finish within the drain.
   def withdraw_unless_deliverable!
     return if cancel_requested_at? ||
-      (Agents::RuntimeLocation.dispatchable?(agent) && !agent.billing_held? && dispatch_deliverable?)
+      (Agents::RuntimeLocation.dispatchable?(agent) && !agent.billing_held? &&
+        !agent.account.reload.disabled? && dispatch_deliverable?)
 
     with_lock { update!(cancel_requested_at: Time.current) unless cancel_requested_at? || finished_at? }
   end
