@@ -42,12 +42,11 @@
       placeholder="Name, owner email, model…"
       aria-label="Filter residents"
       class="h-9 w-64 rounded-md border bg-background px-3 text-sm" />
-    <div role="radiogroup" aria-label="Hosting" class="inline-flex gap-1 rounded-md border p-1">
+    <div role="group" aria-label="Hosting" class="inline-flex gap-1 rounded-md border p-1">
       {#each filters as option}
         <button
           type="button"
-          role="radio"
-          aria-checked={hosting === option.value}
+          aria-pressed={hosting === option.value}
           class="rounded px-2 py-1 text-sm {hosting === option.value ? 'bg-primary text-primary-foreground' : ''}"
           onclick={() => (hosting = option.value)}>{option.label}</button>
       {/each}
