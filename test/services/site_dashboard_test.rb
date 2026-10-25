@@ -38,7 +38,8 @@ class SiteDashboardTest < ActiveSupport::TestCase
 
   test "latest sign-ups name the newest humans with their residents' activity" do
     owner = @public_agent.account.memberships.find_by!(role: "owner").user
-    owner.update_columns(created_at: 1.minute.ago)
+    # Later than every fixture, however recently a fixture or a neighbouring test set its own.
+    owner.update_columns(created_at: 1.day.from_now)
     interaction(@public_agent)
     interaction(@public_agent, kind: "wake", at: 3.days.ago)
     interaction(@public_agent, at: 20.days.ago)
