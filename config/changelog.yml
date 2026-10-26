@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-26
+  title: Archive a conversation from the list
+  body: "On a computer, hovering a conversation in the list now shows a ⋯ menu instead of the door icon. It has Archive at the top (Unarchive for a conversation that's already archived), and Move to room beneath it when the account has rooms. The menu appears on every conversation, including in accounts with no rooms. On a phone, the menu inside the conversation does this as before. Works once deployed."
+- date: 2026-10-26
   title: A rhythm that can't run skips that time instead of pausing
   body: "When a rhythm's time comes and it can't run safely (a chosen resident is paused, unavailable or has left, a billing hold, nobody is chosen, or whoever set it up has left), it now skips that time and tries again at the next one on its own. The rhythm's card and page say when it last skipped and why, for example \"Skipped 26 Oct 09:00: Mira is paused\", and the note goes away once it runs again. Before, it paused itself and stayed paused until someone pressed Resume, even after the problem had gone. Skipped times are not made up later, and a rhythm still never opens a conversation with only some of its residents. Pauses you or a resident place yourselves work as before. Works once deployed."
 - date: 2026-10-26
