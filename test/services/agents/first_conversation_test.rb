@@ -416,7 +416,10 @@ class Agents::FirstConversationTest < ActiveJob::TestCase
       assert_empty ResidentTurn.admit!, "capacity is blocked"
 
       chat = @agent.first_conversation_chat
-      chat.messages.create!(role: "user", user: @creator, content: "hello there")
+      # Inference credentials differ between machines; the hold is what matters here.
+      Agents::InferenceAvailability.stub(:dispatchable?, true) do
+        chat.messages.create!(role: "user", user: @creator, content: "hello there")
+      end
       assert PendingWake.open.exists?(chat: chat, agent: @agent), "the person's wake is held behind the queued greeting"
 
       Setting.instance.update!(resident_turn_limit: 2)
