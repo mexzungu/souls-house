@@ -1,15 +1,17 @@
 <script>
   import { Button } from '$lib/components/shadcn/button/index.js';
-  import { Plus, Trash, X } from 'phosphor-svelte';
+  import { Archive, Plus, Trash, X } from 'phosphor-svelte';
   import RoomSwitcher from './RoomSwitcher.svelte';
 
   let {
     accountId,
     hasRooms = false,
     canSeeDeleted = false,
+    showArchived = false,
     showDeleted = false,
     onCreate,
     onClose,
+    onToggleArchived,
     onToggleDeleted,
   } = $props();
 </script>
@@ -30,8 +32,18 @@
       </Button>
     </div>
   </div>
-  {#if canSeeDeleted}
-    <div class="flex items-center gap-3">
+  <div class="flex flex-wrap items-center gap-3">
+    <label
+      class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:opacity-80 transition-opacity">
+      <input
+        type="checkbox"
+        checked={showArchived}
+        onchange={onToggleArchived}
+        class="w-3 h-3 rounded border-gray-300 text-primary focus:ring-primary focus:ring-offset-0 focus:ring-1 transition-colors cursor-pointer" />
+      <Archive size={12} />
+      <span>Show archived</span>
+    </label>
+    {#if canSeeDeleted}
       <label
         class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:opacity-80 transition-opacity">
         <input
@@ -42,6 +54,6 @@
         <Trash size={12} />
         <span>Deleted</span>
       </label>
-    </div>
-  {/if}
+    {/if}
+  </div>
 </header>
