@@ -33,3 +33,35 @@ test('other orientation failures use a plain explanation without raw diagnostics
   expect(screen.queryByText(agent.orientation_last_error)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Try orientation again' })).toBeEnabled();
 });
+
+const ready = { ...agent, orientation_last_error: null, orientation_completed_at: '2026-10-26T15:00:00Z' };
+
+test('the first conversation is linked as soon as it exists, before the resident has written', () => {
+  render(Onboarding, {
+    account: { id: 'account' },
+    agent: ready,
+    first_conversation: { id: 'chat1', has_reply: false },
+  });
+  expect(screen.getByRole('link', { name: /Open your first conversation/ })).toHaveAttribute(
+    'href',
+    '/accounts/account/chats/chat1'
+  );
+  expect(screen.queryByText(/Start your first conversation/)).not.toBeInTheDocument();
+});
+
+test('once the resident has written, the link says so', () => {
+  render(Onboarding, {
+    account: { id: 'account' },
+    agent: ready,
+    first_conversation: { id: 'chat1', has_reply: true },
+  });
+  expect(screen.getByRole('link', { name: /Read what Resident wrote/ })).toHaveAttribute(
+    'href',
+    '/accounts/account/chats/chat1'
+  );
+});
+
+test('without a first conversation the page still offers to start one', () => {
+  render(Onboarding, { account: { id: 'account' }, agent: ready });
+  expect(screen.getByRole('link', { name: /Start your first conversation/ })).toBeVisible();
+});
