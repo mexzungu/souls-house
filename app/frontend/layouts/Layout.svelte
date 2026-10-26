@@ -12,8 +12,9 @@
   let { children } = $props();
   let themeInitialized = false;
   const showFooter = $derived(!$page.component?.startsWith('chats/'));
-  // Every page under admin/ is for site admins only; say so in the house's admin red.
-  const adminPage = $derived($page.component?.startsWith('admin/') ?? false);
+  // Every Admin:: page is for site admins only (the server says which: notices
+  // renders notices/index); say so in the house's admin red.
+  const adminPage = $derived(!!$page.props?.site_admin_page);
   const themeHue = $derived($page.props?.user?.theme_hue ?? null);
   const accountColour = $derived($page.props?.account?.logo_colour ?? null);
   const chromeColours = $derived(browserChromeColours(themeHue));
