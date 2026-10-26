@@ -130,7 +130,11 @@
         onsuccess={(message) => actions.notify(message, 'successMessage')} />
       <TokenWarningBanner level={tokenWarningLevel} {contextTokens} />
       <TelegramBanner {telegramDeepLink} {agents} chatId={chat?.id} />
-      {#if debugMode && isSiteAdmin}<ChatDebug />{/if}
+      {#if debugMode && isSiteAdmin}<div
+          class="border-y border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/30"
+          data-admin-only>
+          <ChatDebug />
+        </div>{/if}
       <ChatMessageList
         {agents}
         accountId={account.id}

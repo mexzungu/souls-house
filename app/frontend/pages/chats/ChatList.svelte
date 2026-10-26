@@ -20,6 +20,8 @@
 
   // Check if user can see deleted chats
   const canSeeDeleted = $derived($page.props.is_account_admin || $page.props.user?.site_admin);
+  // Red when the toggle is there only because the viewer is a site admin.
+  const deletedIsAdminOnly = $derived(!$page.props.is_account_admin && !!$page.props.user?.site_admin);
 
   const showArchived = $derived(new URLSearchParams($page.url.split('?')[1] || '').get('show_archived') === 'true');
 
@@ -68,6 +70,7 @@
     {accountId}
     {hasRooms}
     {canSeeDeleted}
+    {deletedIsAdminOnly}
     {showArchived}
     {showDeleted}
     onCreate={createNewChat}
