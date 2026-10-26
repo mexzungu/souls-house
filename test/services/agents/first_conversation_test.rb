@@ -399,4 +399,72 @@ class Agents::FirstConversationTest < ActiveJob::TestCase
     assert Agents::FirstConversation.presentation(@agent)[:has_reply]
   end
 
+  # Queued turns (SOULSHOUSE_ASYNC_TURNS): the greeting is claimed, then
+  # waits for capacity as a ResidentTurn, possibly for a long time.
+  def queue_greeting_turn!
+    open_and_reserve!
+    interaction = @agent.first_conversation_interaction
+    assert interaction.claim_dispatch!
+    interaction.update!(request_text: "the request", endpoint_url: "https://runtime.example.test")
+    ResidentTurn.enqueue!(interaction, { session_id: interaction.session_id, request: "the request" })
+  end
+
+  test "a queued greeting is withdrawn at admission once a person has written, and their wake is kept" do
+    ResidentTurn.stub(:enabled?, true) do
+      Setting.instance.update!(resident_turn_limit: 0)
+      turn = queue_greeting_turn!
+      assert_empty ResidentTurn.admit!, "capacity is blocked"
+
+      chat = @agent.first_conversation_chat
+      chat.messages.create!(role: "user", user: @creator, content: "hello there")
+      assert PendingWake.open.exists?(chat: chat, agent: @agent), "the person's wake is held behind the queued greeting"
+
+      Setting.instance.update!(resident_turn_limit: 2)
+      clear_enqueued_jobs
+      assert_empty ResidentTurn.admit!
+      assert_equal "cancelled", turn.reload.state
+      assert_nil turn.admitted_at
+      assert_equal "skipped", @agent.reload.first_conversation_greeting
+      assert Chat.exists?(chat.id), "withdrawing the greeting leaves the conversation alone"
+      assert_enqueued_with(job: PendingWakeJob, args: [ chat.id, @agent.id ])
+      assert PendingWake.open.exists?(chat: chat, agent: @agent)
+    end
+  end
+
+  test "an admitted greeting not yet submitted is withdrawn before submission once a person has written" do
+    ResidentTurn.stub(:enabled?, true) do
+      Setting.instance.update!(resident_turn_limit: 2)
+      turn = queue_greeting_turn!
+      assert_equal [ turn.id ], ResidentTurn.admit!
+
+      person_writes!(@agent.first_conversation_chat)
+      turn.reload.withdraw_unless_deliverable!
+      assert_predicate turn.reload.cancel_requested_at, :present?
+      assert_equal "skipped", @agent.reload.first_conversation_greeting
+    end
+  end
+
+  test "a queued greeting cancelled before admission was never sent, and is owed again" do
+    ResidentTurn.stub(:enabled?, true) do
+      turn = queue_greeting_turn!
+      assert_equal :pending, Agents::FirstConversation.new(@agent).settle!, "request_text alone is not delivery on the queued path"
+
+      turn.cancel!
+      assert_equal :unsent, Agents::FirstConversation.new(@agent).settle!
+      assert_equal "owed", @agent.reload.first_conversation_greeting
+    end
+  end
+
+  test "an admitted greeting that finished quietly is final" do
+    ResidentTurn.stub(:enabled?, true) do
+      Setting.instance.update!(resident_turn_limit: 2)
+      turn = queue_greeting_turn!
+      ResidentTurn.admit!
+      turn.reload.update!(state: "finished", finished_at: Time.current)
+      assert_equal :spent, Agents::FirstConversation.new(@agent).settle!
+      calls = stub_request { assert_equal :not_owed, Agents::FirstConversation.wake!(@agent) }
+      assert_empty calls
+    end
+  end
+
 end

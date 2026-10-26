@@ -78,18 +78,19 @@ module Agents
       end
     end
 
-    # Settles a reserved greeting from its run: spent once the request was
-    # handed to the runtime client (the request writes request_text just
-    # before invoking), unsent if the run ended or lapsed before that.
+    # Settles a reserved greeting from its run (see delivery): spent once it
+    # reached the runtime, given back as owed if the run ended or lapsed
+    # before that, otherwise still pending.
     def settle!
       agent.with_lock do
         next :not_owed unless agent.first_conversation_greeting == "sent"
 
         interaction = agent.first_conversation_interaction
-        if interaction&.request_text.present?
+        case delivery(interaction)
+        when :reached
           agent.update!(first_conversation_greeting: "spent")
           :spent
-        elsif interaction.nil? || interaction.finished_at? || interaction.execution_deadline_at&.past?
+        when :unsent
           interaction&.with_lock { interaction.finish_execution!("cancelled") if interaction.dispatch_claimed_at.nil? && !interaction.finished_at? }
           give_back!
           :unsent
@@ -97,6 +98,38 @@ module Agents
           :pending
         end
       end
+    end
+
+    # Whether the greeting's run reached the resident's runtime.
+    # Synchronous runs: the request writes request_text just before invoking
+    # the runtime client. Queued runs (ResidentTurn): the request is written
+    # before the turn waits for capacity, so only admission counts; a turn
+    # cancelled while still queued never reached the runtime. A turn admitted
+    # and then withdrawn before submission is counted as reached: at most
+    # once, never a second coaxing.
+    def delivery(interaction)
+      return :unsent if interaction.nil?
+
+      if (turn = interaction.resident_turn)
+        return :pending unless turn.finished_at?
+
+        return turn.admitted_at? ? :reached : :unsent
+      end
+      return :reached if interaction.request_text.present? && !ResidentTurn.enabled?
+      return :unsent if interaction.finished_at? || interaction.execution_deadline_at&.past?
+
+      :pending
+    end
+
+    # Checked by ResidentTurn at admission and again before first submission
+    # (dispatch_deliverable?): a queued greeting can wait for capacity long
+    # after its claim, and a person may write meanwhile. Then the greeting is
+    # withdrawn (the person's own wake is held and released when this run
+    # ends) and the conversation is left alone. Lock order: turn, then agent.
+    def self.turn_deliverable?(interaction)
+      greeted = Agent.find_by(first_conversation_interaction_id: interaction.id) or return true
+
+      new(greeted).send(:turn_deliverable?, interaction)
     end
 
     # Called from AgentRuntimeInteraction#claim_dispatch! for the greeting's
@@ -175,8 +208,7 @@ module Agents
     # is the first word, and no greeting is owed.
     def person_first(chat)
       if (existing = person_started_chat(excluding: chat))
-        agent.update!(first_conversation_chat_id: existing.id, first_conversation_greeting: "skipped",
-          first_conversation_interaction_id: nil)
+        agent.update!(first_conversation_chat_id: existing.id, first_conversation_greeting: "skipped")
         # Only under this chat's row lock (held by the caller): a message
         # being posted here waits on it and then fails on the missing chat,
         # rather than being deleted with it.
@@ -188,8 +220,25 @@ module Agents
       nil
     end
 
+    # The run stays recorded on the agent, so every later gate (claim,
+    # admission, submission) still recognises it as the greeting and refuses.
+    def turn_deliverable?(interaction)
+      agent.with_lock do
+        next false unless agent.first_conversation_greeting == "sent"
+
+        chat = interaction.chat or next false
+        if (existing = person_started_chat(excluding: chat))
+          agent.update!(first_conversation_chat_id: existing.id, first_conversation_greeting: "skipped")
+          next false
+        end
+        next skip!(false) if human_spoke?(chat)
+
+        true
+      end
+    end
+
     def skip!(outcome)
-      agent.update!(first_conversation_greeting: "skipped", first_conversation_interaction_id: nil)
+      agent.update!(first_conversation_greeting: "skipped")
       outcome
     end
 
