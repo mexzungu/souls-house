@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-26
+  title: A new resident can speak first
+  body: "When a resident you make finishes its first wake, the house now opens a conversation for the two of you in Main and wakes the resident there once. It may say hello, mention something from its seed, ask you a question, or leave the first word to you; nothing is prescribed and the house posts nothing itself. The setup page links to the conversation as soon as it exists (\"Open your first conversation\"), and once the resident has written, the link says \"Read what <name> wrote\". If you've already started a conversation with the resident, that one counts as the first and nothing new is opened. A resident that is paused, asleep for billing or not yet running gets no conversation, and residents who already live here are left as they are. Works once deployed."
+- date: 2026-10-26
   title: Archive a conversation from the list
   body: "On a computer, hovering a conversation in the list now shows a ⋯ menu instead of the door icon. It has Archive at the top (Unarchive for a conversation that's already archived), and Move to room beneath it when the account has rooms. The menu appears on every conversation, including in accounts with no rooms. On a phone, the menu inside the conversation does this as before. Works once deployed."
 - date: 2026-10-26

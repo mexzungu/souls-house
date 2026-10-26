@@ -35,6 +35,9 @@ class Agent < ApplicationRecord
   has_one :house_inference_grant, dependent: :nullify
   has_one :memory_vault, class_name: "Mnemodyne::Vault", dependent: :restrict_with_error, inverse_of: :agent
   belongs_to :outbound_api_key, class_name: "ApiKey", optional: true
+  belongs_to :created_by_user, class_name: "User", optional: true
+  belongs_to :first_conversation_chat, class_name: "Chat", optional: true
+  belongs_to :first_conversation_interaction, class_name: "AgentRuntimeInteraction", optional: true
   has_many :chat_agents, dependent: :destroy
   has_many :room_model_defaults, dependent: :delete_all
   has_many :agent_backup_snapshots, dependent: :destroy
@@ -133,6 +136,12 @@ class Agent < ApplicationRecord
       ResidentEntitlement.where(agent_id: id).where.not(state: "held").where.not(hold_released_at: nil).exists?
   }
   after_create_commit :apply_default_service_accesses
+  # A new resident speaks first once its first wake has settled
+  # (Agents::FirstConversation). Every orientation writer lands here.
+  after_update_commit -> { Agents::FirstConversation.offer_later(self) }, if: lambda {
+    saved_change_to_orientation_completed_at?(from: nil) ||
+      (saved_change_to_orientation_last_error_at? && orientation_last_error_at.present?)
+  }
   after_save :refresh_integration_presentation, if: -> {
     (saved_changes.keys & %w[id account_id name active github_resident_import_id runtime colour icon]).any?
   }

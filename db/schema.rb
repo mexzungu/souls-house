@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_26_150000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_26_160000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -468,11 +468,20 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_26_150000) do
     t.boolean "follow_through", default: false, null: false
     t.jsonb "switchable_model_ids", default: [], null: false
     t.boolean "resident_may_switch_model", default: false, null: false
+    t.bigint "created_by_user_id"
+    t.bigint "first_conversation_chat_id"
+    t.string "first_conversation_greeting"
+    t.datetime "first_conversation_woken_at"
+    t.bigint "first_conversation_interaction_id"
+    t.integer "first_conversation_attempts", default: 0, null: false
     t.index ["account_id", "active"], name: "index_agents_on_account_id_and_active"
     t.index ["account_id", "name"], name: "index_agents_on_account_id_and_name", unique: true
     t.index ["account_id", "paused"], name: "index_agents_on_account_id_and_paused"
     t.index ["account_id"], name: "index_agents_on_account_id"
     t.index ["container_name"], name: "index_agents_on_container_name", unique: true
+    t.index ["created_by_user_id"], name: "index_agents_on_created_by_user_id"
+    t.index ["first_conversation_chat_id"], name: "index_agents_on_first_conversation_chat_id"
+    t.index ["first_conversation_interaction_id"], name: "index_agents_on_first_conversation_interaction_id"
     t.index ["github_resident_import_id"], name: "index_agents_on_github_resident_import_id", unique: true
     t.index ["outbound_api_key_id"], name: "index_agents_on_outbound_api_key_id"
     t.index ["portable_home_id"], name: "index_agents_on_portable_home_id", unique: true
@@ -480,6 +489,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_26_150000) do
     t.index ["sandbox_host"], name: "index_agents_on_sandbox_host"
     t.index ["telegram_webhook_token"], name: "index_agents_on_telegram_webhook_token", unique: true
     t.index ["uuid"], name: "index_agents_on_uuid", unique: true
+    t.check_constraint "first_conversation_greeting IS NULL OR (first_conversation_greeting::text = ANY (ARRAY['owed'::character varying, 'sent'::character varying, 'spent'::character varying, 'skipped'::character varying]::text[]))", name: "agents_first_conversation_greeting_values"
     t.check_constraint "turn_timeout_minutes >= 1 AND turn_timeout_minutes <= 1440", name: "agents_turn_timeout_minutes_range"
   end
 
@@ -2804,8 +2814,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_26_150000) do
   add_foreign_key "agent_service_accesses", "agents"
   add_foreign_key "agent_service_accesses", "service_connections"
   add_foreign_key "agents", "accounts"
+  add_foreign_key "agents", "agent_runtime_interactions", column: "first_conversation_interaction_id", on_delete: :nullify
   add_foreign_key "agents", "api_keys", column: "outbound_api_key_id"
+  add_foreign_key "agents", "chats", column: "first_conversation_chat_id", on_delete: :nullify
   add_foreign_key "agents", "github_resident_imports"
+  add_foreign_key "agents", "users", column: "created_by_user_id", on_delete: :nullify
   add_foreign_key "api_key_requests", "api_keys"
   add_foreign_key "api_keys", "accounts"
   add_foreign_key "api_keys", "agents"

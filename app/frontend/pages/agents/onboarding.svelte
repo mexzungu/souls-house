@@ -7,7 +7,7 @@
   import { CheckCircle, Circle, SpinnerGap, Warning, ArrowRight, Gear } from 'phosphor-svelte';
   import { agentIconFor } from '$lib/agent-icons';
   import { useSync } from '$lib/use-sync';
-  import { accountAgentsPath, editAccountAgentPath, newAccountChatPath } from '@/routes';
+  import { accountAgentsPath, accountChatPath, editAccountAgentPath, newAccountChatPath } from '@/routes';
   import { siteName } from '$lib/branding';
   import SetupStepLoop from '$lib/components/agents/birth/setup-step-loop.svelte';
 
@@ -15,6 +15,7 @@
     agent,
     account,
     vm_steps: vmSteps = null,
+    first_conversation: firstConversation = null,
     first_resident: firstResident = false,
     provisioning_retry_url: provisioningRetryUrl,
     orientation_retry_url: orientationRetryUrl,
@@ -69,10 +70,24 @@
     },
   ]);
 
+  // After the first wake settles, the house opens the first conversation and
+  // the resident may write in it; keep looking for a while so the button can
+  // change to "Read what <Name> wrote" without a refresh. The window starts
+  // when the first wake is seen to settle, not when the page opened, so a
+  // slow setup doesn't use it up.
+  const FIRST_WORD_WINDOW_MS = 10 * 60 * 1000;
+
   onMount(() => {
+    let settledAt = null;
     const interval = setInterval(() => {
       if (!orientationFinished && !orientationFailed && !setupFailed) {
-        router.reload({ only: ['agent', 'vm_steps'], preserveScroll: true });
+        router.reload({ only: ['agent', 'vm_steps', 'first_conversation'], preserveScroll: true });
+        return;
+      }
+      if (!runtimeReady || firstConversation?.has_reply) return;
+      settledAt ??= Date.now();
+      if (Date.now() - settledAt < FIRST_WORD_WINDOW_MS) {
+        router.reload({ only: ['agent', 'first_conversation'], preserveScroll: true });
       }
     }, 3000);
     return () => clearInterval(interval);
@@ -220,9 +235,16 @@
         </div>
       {/if}
 
-      {#if runtimeReady || !firstResident}
+      {#if runtimeReady || firstConversation || !firstResident}
         <div class="flex flex-wrap gap-3 border-t pt-6">
-          {#if runtimeReady}
+          {#if firstConversation}
+            <a href={accountChatPath(account.id, firstConversation.id)}>
+              <Button>
+                {firstConversation.has_reply ? `Read what ${agent.name} wrote` : 'Open your first conversation'}
+                <ArrowRight class="ml-2 size-4" />
+              </Button>
+            </a>
+          {:else if runtimeReady}
             <a href={newAccountChatPath(account.id)}>
               <Button>
                 Start your first conversation
