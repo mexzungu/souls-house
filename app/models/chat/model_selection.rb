@@ -60,6 +60,7 @@ module Chat::ModelSelection
     { model_id: "openai/gpt-6-astra-pro", label: "GPT-6 Astra Pro", group: "OpenAI", thinking: { supported: true } },
     { model_id: "openai/gpt-6.1-sol", label: "GPT-6.1 Sol", group: "OpenAI", provider_model_id: "gpt-6.1-sol", thinking: { supported: true } },
     { model_id: "openai/gpt-6.1-sol-pro", label: "GPT-6.1 Sol Pro", group: "OpenAI", thinking: { supported: true } },
+    { model_id: "openai/gpt-6.1-terra", label: "GPT-6.1 Terra", group: "OpenAI", provider_model_id: "gpt-6.1-terra", thinking: { supported: true } },
     { model_id: "openai/gpt-6-sol", label: "GPT-6 Sol", group: "OpenAI", provider_model_id: "gpt-6-sol", thinking: { supported: true } },
     { model_id: "openai/gpt-6-sol-pro", label: "GPT-6 Sol Pro", group: "OpenAI", thinking: { supported: true } },
     { model_id: "openai/gpt-6-luna", label: "GPT-6 Luna", group: "OpenAI", provider_model_id: "gpt-6-luna", thinking: { supported: true } },
@@ -662,7 +663,7 @@ module Chat::ModelSelection
 
     def reasoning_profile_for(model_id)
       case model_id
-      when "openai/gpt-6.1-sol", "openai/gpt-6.1-sol-pro", "openai/gpt-6-sol", "openai/gpt-6-sol-pro", "openai/gpt-6-luna", "openai/gpt-6-luna-pro"
+      when "openai/gpt-6.1-sol", "openai/gpt-6.1-sol-pro", "openai/gpt-6.1-terra", "openai/gpt-6-sol", "openai/gpt-6-sol-pro", "openai/gpt-6-luna", "openai/gpt-6-luna-pro"
         REASONING_PROFILES[:openai_max].merge(options: %i[none low medium high xhigh max])
       when "openai/gpt-6-astra-pro"
         REASONING_PROFILES[:openai_max]

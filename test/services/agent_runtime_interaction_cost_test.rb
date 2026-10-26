@@ -267,6 +267,21 @@ class AgentRuntimeInteractionCostTest < ActiveSupport::TestCase
     assert_equal "0.015", cost.dig(:components_usd, :cache_read_input)
   end
 
+  test "GPT-6.1 Terra is priced from the OpenAI standard endpoint" do
+    [ "openai/gpt-6.1-terra", "gpt-6.1-terra" ].each do |model|
+      cost = build_interaction(
+        model: model,
+        uncached_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000,
+        cache_read_input_tokens: 1_000_000, output_tokens: 1_000_000
+      ).estimated_cost
+      assert_equal "estimated", cost[:status], model
+      assert_equal "7.3", cost[:amount_usd], model
+      assert_equal "1.25", cost.dig(:components_usd, :cache_creation_input), model
+      assert_equal "0.05", cost.dig(:components_usd, :cache_read_input), model
+    end
+    assert_equal "gpt-6.1-terra", Chat.provider_model_id("openai/gpt-6.1-terra")
+  end
+
   test "Kimi K3.1 Pro is priced from the Moonshot AI standard endpoint" do
     cost = build_interaction(
       provider: "openrouter", model: "moonshotai/kimi-k3.1-pro",
