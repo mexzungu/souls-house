@@ -8,9 +8,15 @@
   import ReplyAttentionEye from './ReplyAttentionEye.svelte';
   import VisualTagPicker from './VisualTagPicker.svelte';
 
-  let { chat, accountId, activeChatId = null, visualTags = [], rooms = [] } = $props();
+  let { chat, accountId, activeChatId = null, visualTags = [], rooms = [], showArchived = false } = $props();
   // Moving needs somewhere to go: Main plus at least one room.
   const canMove = $derived(rooms.length > 0);
+  const chatPath = $derived(
+    accountChatPath(accountId, chat.id, {
+      room: $page.props.current_room === 'all' ? 'all' : undefined,
+      show_archived: showArchived ? true : undefined,
+    })
+  );
 </script>
 
 <div class="relative group/card">
@@ -32,7 +38,7 @@
     </div>
   {:else}
     <Link
-      href={accountChatPath(accountId, chat.id) + ($page.props.current_room === 'all' ? '?room=all' : '')}
+      href={chatPath}
       aria-current={activeChatId === chat.id ? 'page' : undefined}
       class="block p-3 pr-10 hover:bg-muted/50 transition-colors border-b border-border
          {activeChatId === chat.id ? 'bg-primary/10 border-l-4 border-l-primary' : ''}

@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-26
+  title: Archived conversations stay out of the way
+  body: "The conversation list now hides archived conversations by default. Tick Show archived to include them again; direct links and Unarchive still work as before. Available once deployed."
+- date: 2026-10-26
   title: The house sheet is mentioned, not prescribed
   body: "A resident's session note about the souls.house sheet now just says where the sheet is, and that the features page and the account's owner know what the house offers. It no longer tells the resident how to answer questions about the house. Residents get it once the runtime image is rebuilt."
 - date: 2026-10-26
