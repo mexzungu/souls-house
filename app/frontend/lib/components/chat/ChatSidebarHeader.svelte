@@ -2,11 +2,13 @@
   import { Button } from '$lib/components/shadcn/button/index.js';
   import { Archive, Plus, Trash, X } from 'phosphor-svelte';
   import RoomSwitcher from './RoomSwitcher.svelte';
+  import { ADMIN_ONLY_TEXT } from '$lib/admin-only.js';
 
   let {
     accountId,
     hasRooms = false,
     canSeeDeleted = false,
+    deletedIsAdminOnly = false,
     showArchived = false,
     showDeleted = false,
     onCreate,
@@ -45,7 +47,10 @@
     </label>
     {#if canSeeDeleted}
       <label
-        class="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:opacity-80 transition-opacity">
+        title={deletedIsAdminOnly ? 'Site admins only' : undefined}
+        class="flex items-center gap-1.5 text-xs cursor-pointer hover:opacity-80 transition-opacity {deletedIsAdminOnly
+          ? ADMIN_ONLY_TEXT
+          : 'text-muted-foreground'}">
         <input
           type="checkbox"
           checked={showDeleted}

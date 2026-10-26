@@ -85,7 +85,7 @@
   <DropdownMenu.Trigger
     aria-label="Site admin menu"
     title={badge?.title}
-    class={cn(buttonVariants({ variant: 'outline' }), 'rounded-full px-2.5 gap-1')}>
+    class={cn(buttonVariants({ variant: 'outline' }), 'rounded-full px-2.5 gap-1 border-red-300 dark:border-red-900')}>
     <!-- Below md the badge is hidden and the shield itself carries the state:
          green when live is master, red when behind, grey when it can't tell. -->
     <span class="relative inline-flex shrink-0" data-testid="admin-shield" data-kind={badge?.kind}>

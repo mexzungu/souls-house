@@ -223,7 +223,7 @@ class Message < ApplicationRecord
                   :completed, :created_at_formatted, :created_at_hour, :streaming,
                   :files_json, :stones_json, :content_html, :tools_used, :tool_status,
                   :author_name, :author_type, :author_colour, :input_tokens, :output_tokens,
-                  :editable, :deletable,
+                  :editable, :deletable, :controls_admin_only,
                   :moderation_flagged, :moderation_severity, :moderation_scores,
                   :audio_source, :audio_url,
                   :voice_available, :voice_audio_url,
@@ -385,6 +385,11 @@ class Message < ApplicationRecord
 
   def editable
     editable_by?(Current.user)
+  end
+
+  # Edit/delete offered only because the viewer is a site admin, not the author.
+  def controls_admin_only
+    role == "user" && Current.user.present? && user_id != Current.user.id && Current.user.site_admin
   end
 
   # A human edit or discard, serialized against this message's wake (#94 B,
