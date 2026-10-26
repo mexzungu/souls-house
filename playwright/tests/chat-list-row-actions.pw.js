@@ -20,7 +20,7 @@ test('on desktop, hovering a card shows the actions button above the count, clea
 
   await component.getByRole('link', { name: /stalled-thread/ }).hover();
   await expect(first).toHaveCSS('opacity', '1');
-  const button = first.getByRole('button', { name: 'Conversation actions' });
+  const button = first.getByRole('button', { name: /^Actions for / });
   const title = component.getByText(/stalled-thread/);
   const [b, t] = [await button.boundingBox(), await title.boundingBox()];
   expect(t.x + t.width).toBeLessThanOrEqual(b.x);
@@ -69,6 +69,6 @@ test.describe('touch', () => {
 
   test('on a phone the button is not shown', async ({ mount }) => {
     const component = await mount(ChatListItemsHarness, { props: { chats, rooms } });
-    await expect(component.getByRole('button', { name: 'Conversation actions' })).toBeHidden();
+    await expect(component.getByRole('button', { name: /^Actions for / })).toBeHidden();
   });
 });

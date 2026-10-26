@@ -6,11 +6,11 @@ import ChatSidebarItem from './ChatSidebarItem.svelte';
 
 const chat = { id: 'chat-one', title: 'A question', visual_tag: null, room_id: null };
 const rooms = [{ id: 'room-two', name: 'Work' }];
-const open = () => fireEvent.click(screen.getByRole('button', { name: 'Conversation actions' }));
+const open = () => fireEvent.click(screen.getByRole('button', { name: /^Actions for / }));
 
 test('the hover menu is there even with no rooms, outside the link, desktop only', () => {
   render(ChatSidebarItem, { chat, accountId: 'house', rooms: [] });
-  const button = screen.getByRole('button', { name: 'Conversation actions' });
+  const button = screen.getByRole('button', { name: 'Actions for A question' });
   expect(button.closest('a')).toBeNull();
   // Desktop only: hidden below md, where the conversation menu does this.
   expect(button.closest('[data-row-actions]')).toHaveClass('hidden', 'md:inline-flex');

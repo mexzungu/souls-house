@@ -12,6 +12,9 @@
   let saving = $state(false);
   let error = $state('');
   const current = $derived(chat.room_id || MAIN);
+  // Its own name per row: the header's menu is "Conversation actions", and
+  // page-wide locators for that name must still find exactly one button.
+  const label = $derived(`Actions for ${chat.title_or_default || chat.title || 'New Chat'}`);
 
   const options = (failure) => ({
     preserveScroll: true,
@@ -45,8 +48,8 @@
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
     class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline focus-visible:outline-2"
-    aria-label="Conversation actions"
-    title="Conversation actions"
+    aria-label={label}
+    title={label}
     disabled={saving}>
     <DotsThree size={16} weight="bold" />
   </DropdownMenu.Trigger>
