@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_25_190000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_26_150000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -2206,10 +2206,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_190000) do
     t.datetime "updated_at", null: false
     t.index ["agent_id"], name: "index_rhythm_holds_on_agent_id"
     t.index ["rhythm_id", "agent_id"], name: "index_rhythm_holds_one_open_agent", unique: true, where: "((released_at IS NULL) AND ((kind)::text = 'agent'::text))"
-    t.index ["rhythm_id", "kind"], name: "index_rhythm_holds_one_open_system", unique: true, where: "((released_at IS NULL) AND ((kind)::text = 'system'::text))"
     t.index ["rhythm_id", "user_id"], name: "index_rhythm_holds_one_open_human", unique: true, where: "((released_at IS NULL) AND ((kind)::text = 'human'::text))"
     t.index ["rhythm_id"], name: "index_rhythm_holds_on_rhythm_id"
     t.index ["user_id"], name: "index_rhythm_holds_on_user_id"
+    t.check_constraint "(kind::text = ANY (ARRAY['human'::character varying, 'agent'::character varying]::text[])) OR released_at IS NOT NULL", name: "rhythm_holds_open_kind_known"
   end
 
   create_table "rhythm_occurrences", force: :cascade do |t|
@@ -2256,6 +2256,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_25_190000) do
     t.bigint "creator_agent_id"
     t.string "room_choice", default: "resident_default", null: false
     t.bigint "room_id"
+    t.datetime "last_skipped_at"
+    t.string "last_skip_reason"
     t.index ["account_id"], name: "index_rhythms_on_account_id"
     t.index ["creator_agent_id"], name: "index_rhythms_on_creator_agent_id"
     t.index ["creator_id"], name: "index_rhythms_on_creator_id"
