@@ -94,7 +94,7 @@ module Agents
       return outcome unless outcome == :sent
 
       result = ExternalAgentResponseRequest.new(
-        agent: agent, chat: chat, requested_by: "souls.house", initiation_reason: reason_text
+        agent: agent, chat: chat, initiation_reason: reason_text
       ).call
       # Status 0 means the request never reached the runtime; anything else
       # (a reply, a quiet completion, a run already going) settles it.
