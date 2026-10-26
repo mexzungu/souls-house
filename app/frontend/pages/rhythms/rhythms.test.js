@@ -81,6 +81,20 @@ test('the list shows schedule, residents, creator and the next time in the rhyth
   expect(screen.getByText(/Next: .*09:00/)).toBeInTheDocument();
 });
 
+test('a paused rhythm shows its last skip without promising the next slot', () => {
+  const last_skip = { at: '2026-10-26T08:00:00Z', reason: 'resident_paused: Mira', explanation: 'Mira is paused' };
+  const holds = [{ id: 'h1', holder_name: 'Daniel', holder_type: 'human', reason: 'Not this week' }];
+  render(RhythmShow, { account, rhythm: rhythmFixture({ state: 'paused', holds, last_skip }) });
+  expect(screen.getByTestId('rhythm-last-skip')).toHaveTextContent(/Skipped .*: Mira is paused\.$/);
+  expect(screen.getByTestId('rhythm-last-skip')).not.toHaveTextContent(/tries again/);
+});
+
+test('an active rhythm with a skip says the next slot tries again', () => {
+  const last_skip = { at: '2026-10-26T08:00:00Z', reason: 'resident_paused: Mira', explanation: 'Mira is paused' };
+  render(RhythmShow, { account, rhythm: rhythmFixture({ last_skip }) });
+  expect(screen.getByTestId('rhythm-last-skip')).toHaveTextContent(/tries again on its own/);
+});
+
 test('a card shows the last skipped slot and its reason next to the next time', () => {
   const last_skip = { at: '2026-10-26T08:00:00Z', reason: 'resident_paused: Mira', explanation: 'Mira is paused' };
   render(RhythmsIndex, { account, rhythms: [rhythmFixture({ last_skip })] });
@@ -145,7 +159,11 @@ test('a resident-created invitation shows its author without granting a viewing 
 });
 
 test('an empty resident invitation stays active and says why its last slot was skipped', () => {
-  const last_skip = { at: '2026-10-26T08:00:00Z', reason: 'no_selected_residents', explanation: 'no residents are selected' };
+  const last_skip = {
+    at: '2026-10-26T08:00:00Z',
+    reason: 'no_selected_residents',
+    explanation: 'no residents are selected',
+  };
   render(RhythmShow, {
     account,
     rhythm: rhythmFixture({

@@ -113,8 +113,9 @@
     </div>
     {#if rhythm.last_skip}
       <p class="mt-4 text-sm text-muted-foreground" data-testid="rhythm-last-skip">
-        Skipped {formatWhen(rhythm.last_skip.at, zone)}: {rhythm.last_skip.explanation}. The next slot tries again on its
-        own.
+        Skipped {formatWhen(rhythm.last_skip.at, zone)}: {rhythm.last_skip.explanation}.{rhythm.state === 'paused'
+          ? ''
+          : ' The next slot tries again on its own.'}
       </p>
     {/if}
 
