@@ -33,7 +33,7 @@ for (const mobile of [false, true]) {
       const sidebar = page.locator('aside');
       const archivedLink = sidebar.getByRole('link', { name: /E2E long conversation/ });
       async function openSidebar() {
-        if (mobile) await page.locator('main header button').first().click();
+        if (mobile) await page.locator('header:has([aria-label="Conversation actions"]) button').first().click();
       }
 
       await login(page, setup.secondary_user, setup.password);
