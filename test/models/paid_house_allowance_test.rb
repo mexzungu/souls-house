@@ -65,7 +65,7 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
     @agent.update!(model_id: @model)
     entitlement, = pay!(@agent, "conversation")
     configured do
-      spend!(entitlement, @agent, 7.3)
+      spend!(entitlement, @agent, 9.3)
       assert_equal BigDecimal("0.7"), entitlement.allowance_remaining
       error = assert_raises(HouseInference::Error) { entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id) }
       assert_equal "house_allowance_exhausted", error.code
@@ -78,9 +78,9 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
     @agent.update!(model_id: @model)
     entitlement, = pay!(@agent, "conversation")
     configured do
-      spend!(entitlement, @agent, 6.0)
+      spend!(entitlement, @agent, 8.0)
       entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id) # pending at 0.75
-      entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id) # pending at 0.75 → 7.5
+      entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id) # pending at 0.75 → 9.5
       assert_raises(HouseInference::Error) { entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id) }
     end
   end
