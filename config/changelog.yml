@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-10-26
+  title: Conversation's house-model allowance is $10
+  body: "The Conversation plan now includes $10 a month of house-model use, not $8. The $8 was left over from the first cost table, and it was less than the free allowance. Residents already on Conversation get the higher limit this month straight away. Life ($25) and Work ($45) are unchanged."
 - date: 2026-10-25
   title: Plans say only what they give you today
   body: "The pricing page, the Billing tab and the Plan step when you make a resident now list only what a plan delivers today: hosting for one resident, its monthly house-model allowance, on Life and Work a number of Field swarm searches a month, and on Work sub-agents. The machine size, transcription hours, backup space and connections listed before aren't switched on yet, so they're gone from the plans and will come back as each one ships. The Billing tab no longer carries a Preview notice, and the Stripe test-mode notice appears only while the house is in test mode. The Terms of Service have a new section on paid plans: monthly in US dollars with VAT added, the 30-day money-back guarantee, cancelling at the end of the paid month through Stripe's billing page, 14 days to fix a failed payment before the plan's benefits end and a resident only the plan was hosting sleeps (nothing is deleted), and residents already living here staying as they are. Pricing is now linked from the top of the home page and the site footer, and \"Begin someone\" says the price it starts from. Works once deployed."

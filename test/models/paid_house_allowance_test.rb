@@ -38,12 +38,12 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
       call = entitlement.reserve_house_call!(@offering, @model, agent_id: @agent.id)
       call.settle!({ "cost" => 0.02 })
       assert_equal "settled", call.reload.status
-      assert_equal BigDecimal("7.98"), entitlement.allowance_remaining
+      assert_equal BigDecimal("9.98"), entitlement.allowance_remaining
       assert_equal entitlement.id, call.resident_entitlement_id
       assert_equal @agent.id, call.agent_id
       assert_nil call.house_inference_grant_id
     end
-    assert_equal BigDecimal("8"), entitlement.allowance_limit
+    assert_equal BigDecimal("10"), entitlement.allowance_limit
   end
 
   test "two paid residents on one account have independent ledgers and need no free grant" do
@@ -56,8 +56,8 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
 
     configured do
       spend!(first, @agent, 7.5)
-      assert_equal BigDecimal("0.5"), first.allowance_remaining
-      assert_equal BigDecimal("8"), second.allowance_remaining
+      assert_equal BigDecimal("2.5"), first.allowance_remaining
+      assert_equal BigDecimal("10"), second.allowance_remaining
     end
   end
 
@@ -148,8 +148,8 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
     assert_equal BigDecimal("5"), entitlement.allowance_remaining
 
     travel_to Time.utc(2026, 11, 2)
-    assert_equal BigDecimal("8"), entitlement.allowance_limit
-    assert_equal BigDecimal("8"), entitlement.allowance_remaining
+    assert_equal BigDecimal("10"), entitlement.allowance_limit
+    assert_equal BigDecimal("10"), entitlement.allowance_remaining
   end
 
   test "an upgrade raises the limit at once, but spend so far still counts" do
@@ -172,7 +172,7 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
 
     replacement, = pay!(@agent, "conversation", id: "sub_replacement")
     assert replacement.active?
-    assert_equal BigDecimal("1"), replacement.allowance_remaining
+    assert_equal BigDecimal("3"), replacement.allowance_remaining
   end
 
   test "a downgrade after the month rolled over still counts the outgoing tier for the new month" do
@@ -201,7 +201,7 @@ class PaidHouseAllowanceTest < ActiveSupport::TestCase
     assert_equal BigDecimal("5"), replacement.allowance_remaining
 
     travel_to Time.utc(2026, 12, 1)
-    assert_equal BigDecimal("8"), replacement.allowance_limit
+    assert_equal BigDecimal("10"), replacement.allowance_limit
   end
 
   test "grace expiry in a new month also marks the month before the plan ends" do

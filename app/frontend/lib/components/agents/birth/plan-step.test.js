@@ -7,7 +7,7 @@ const tiers = [
     name: 'Conversation',
     monthly_usd: 20,
     purchasable: true,
-    features: { hosting: true, allowance_usd: 8, swarm_searches: 0, subagents: false },
+    features: { hosting: true, allowance_usd: 10, swarm_searches: 0, subagents: false },
   },
   {
     id: 'life',
@@ -36,7 +36,7 @@ test('offers each plan with its price, preselects the first, and states the term
   expect(screen.getByRole('radio', { name: /Conversation/ })).toBeChecked();
   expect(screen.getByRole('radio', { name: /Life/ })).not.toBeChecked();
   expect(screen.getByText('Someone to talk with.')).toBeVisible();
-  expect(screen.getByText('$8 a month of house model')).toBeVisible();
+  expect(screen.getByText('$10 a month of house model')).toBeVisible();
   expect(screen.getAllByText('Hosting for one resident')).toHaveLength(2);
   expect(screen.getByText('Swarm search, 20 a month')).toBeVisible();
   expect(screen.queryByText('Sub-agents')).toBeNull();
