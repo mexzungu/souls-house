@@ -46,12 +46,12 @@ for (const mobile of [false, true]) {
       await expect(page.getByText('This conversation has been archived.', { exact: true })).toBeVisible();
       await expect(page.getByTestId('message-composer').locator('textarea')).toBeDisabled();
       await openSidebar();
-      await expect(sidebar.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+      await expect(sidebar.getByRole('checkbox', { name: 'Archived' })).not.toBeChecked();
       // Existing account policy treats confirmed members as trusted managers.
       // This change must not narrow the older Deleted control's permissions.
       await expect(sidebar.getByRole('checkbox', { name: 'Deleted', exact: true })).not.toBeChecked();
       await expect(archivedLink).toHaveCount(0);
-      await sidebar.getByRole('checkbox', { name: 'Show archived' }).check();
+      await sidebar.getByRole('checkbox', { name: 'Archived' }).check();
       await expect(archivedLink).toBeVisible();
       await archivedLink.click();
       await expect(page).toHaveURL(/show_archived=true/);
@@ -59,10 +59,10 @@ for (const mobile of [false, true]) {
         await sidebar.getByRole('button', { name: 'Close sidebar', exact: true }).click();
         await openSidebar();
       }
-      await expect(sidebar.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+      await expect(sidebar.getByRole('checkbox', { name: 'Archived' })).toBeChecked();
       await expect(archivedLink).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath('show-archived.png') });
-      await sidebar.getByRole('checkbox', { name: 'Show archived' }).uncheck();
+      await sidebar.getByRole('checkbox', { name: 'Archived' }).uncheck();
       await expect(archivedLink).toHaveCount(0);
       await expect(page.getByText(fixture.first_message, { exact: true })).toBeVisible();
       if (mobile) await sidebar.getByRole('button', { name: 'Close sidebar', exact: true }).click();
@@ -71,7 +71,7 @@ for (const mobile of [false, true]) {
       await expect(page.getByTestId('message-composer').locator('textarea')).toBeEnabled();
       await openSidebar();
       await expect(archivedLink).toBeVisible();
-      await expect(sidebar.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+      await expect(sidebar.getByRole('checkbox', { name: 'Archived' })).not.toBeChecked();
     } finally {
       await request.post('/test/e2e/cleanup', { data: { run_id: setup.run_id } });
     }
@@ -98,13 +98,13 @@ test('existing owner deleted audit mode includes archived with either checkbox s
     await sidebar.getByRole('checkbox', { name: 'Deleted', exact: true }).check();
     await expect(page).toHaveURL(/show_deleted=true/);
     await expect(archivedLink).toBeVisible();
-    await sidebar.getByRole('checkbox', { name: 'Show archived' }).check();
+    await sidebar.getByRole('checkbox', { name: 'Archived' }).check();
     await expect(page).toHaveURL(/show_archived=true/);
     await expect(archivedLink).toBeVisible();
     await sidebar.getByRole('checkbox', { name: 'Deleted', exact: true }).uncheck();
     await expect(page).not.toHaveURL(/show_deleted/);
     await expect(archivedLink).toBeVisible();
-    await sidebar.getByRole('checkbox', { name: 'Show archived' }).uncheck();
+    await sidebar.getByRole('checkbox', { name: 'Archived' }).uncheck();
     await expect(page).not.toHaveURL(/show_archived/);
     await expect(archivedLink).toHaveCount(0);
   } finally {

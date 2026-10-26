@@ -18,17 +18,17 @@ function visit(url, props = {}) {
 
 beforeEach(() => visit('/accounts/house/chats'));
 
-test('ordinary users get an unchecked Show archived checkbox without the deleted control', () => {
+test('ordinary users get an unchecked Archived checkbox without the deleted control', () => {
   render(ChatList, { accountId: 'house' });
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).not.toBeChecked();
   expect(screen.queryByRole('checkbox', { name: 'Deleted' })).not.toBeInTheDocument();
 });
 
-test('Show archived adds and removes only its own URL parameter', async () => {
+test('Archived adds and removes only its own URL parameter', async () => {
   visit('/accounts/house/chats?room=all&show_deleted=true', { is_account_admin: true });
   render(ChatList, { accountId: 'house' });
 
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Archived' }));
   let target = new URL(router.visit.mock.calls.at(-1)[0]);
   expect(target.pathname).toBe('/accounts/house/chats');
   expect(Object.fromEntries(target.searchParams)).toEqual({
@@ -40,8 +40,8 @@ test('Show archived adds and removes only its own URL parameter', async () => {
 
   visit(target.pathname + target.search, { is_account_admin: true });
   await tick();
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).toBeChecked();
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Archived' }));
   target = new URL(router.visit.mock.calls.at(-1)[0]);
   expect(Object.fromEntries(target.searchParams)).toEqual({ room: 'all', show_deleted: 'true' });
 });
@@ -49,15 +49,15 @@ test('Show archived adds and removes only its own URL parameter', async () => {
 test('checkbox follows navigation and history URLs while the sidebar stays mounted', async () => {
   visit('/accounts/house/chats?show_archived=true');
   render(ChatList, { accountId: 'house' });
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).toBeChecked();
 
   visit('/accounts/house/chats?show_archived=false');
   await tick();
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).not.toBeChecked();
 
   visit('/accounts/house/chats?show_archived=true');
   await tick();
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).toBeChecked();
 });
 
 test.each([undefined, 'all'])(
@@ -83,7 +83,7 @@ test.each([{ is_account_admin: true }, { user: { site_admin: true } }])(
   async (props) => {
     visit('/accounts/house/chats?room=all&show_archived=true', props);
     render(ChatList, { accountId: 'house' });
-    expect(screen.getByRole('checkbox', { name: 'Show archived' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Archived' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: 'Deleted' })).not.toBeChecked();
 
     await fireEvent.click(screen.getByRole('checkbox', { name: 'Deleted' }));

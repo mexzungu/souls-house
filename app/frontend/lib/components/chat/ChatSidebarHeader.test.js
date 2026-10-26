@@ -7,7 +7,7 @@ test('admin header has archive and deleted checkboxes, with deleted unchanged', 
   render(ChatSidebarHeader, { canSeeDeleted: true, onToggleDeleted });
   expect(screen.queryByText('Resident-Only')).not.toBeInTheDocument();
   expect(screen.getAllByRole('checkbox')).toHaveLength(2);
-  expect(screen.getByRole('checkbox', { name: 'Show archived' })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: 'Archived' })).not.toBeChecked();
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Deleted' }));
   expect(onToggleDeleted).toHaveBeenCalledOnce();
 });
@@ -17,6 +17,6 @@ test('member header has only the working archive filter', async () => {
   render(ChatSidebarHeader, { onToggleArchived });
   expect(screen.getAllByRole('checkbox')).toHaveLength(1);
   expect(screen.queryByRole('checkbox', { name: 'Deleted' })).not.toBeInTheDocument();
-  await fireEvent.click(screen.getByRole('checkbox', { name: 'Show archived' }));
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Archived' }));
   expect(onToggleArchived).toHaveBeenCalledOnce();
 });

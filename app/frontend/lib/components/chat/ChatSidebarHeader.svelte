@@ -43,7 +43,7 @@
         onchange={onToggleArchived}
         class="w-3 h-3 rounded border-gray-300 text-primary focus:ring-primary focus:ring-offset-0 focus:ring-1 transition-colors cursor-pointer" />
       <Archive size={12} />
-      <span>Show archived</span>
+      <span>Archived</span>
     </label>
     {#if canSeeDeleted}
       <label
