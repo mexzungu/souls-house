@@ -350,7 +350,7 @@ class ExternalAgentResponseRequest
     ]
     if occurrence.rhythm
       path = "/api/v1/rhythms/#{occurrence.rhythm.to_param}"
-      lines << "Read the actual state and holds with GET #{path}. Pause with POST #{path}/pause and JSON {\"reason\":\"your reason\"}; release your own hold with POST #{path}/resume (creators may also release corrected system holds, never another resident's hold). Leave the selection with POST #{path}/leave. Use SOULSHOUSE_APP_URL and your existing SOULSHOUSE_BEARER_TOKEN. The API returns the current state; do not substitute a memory note for pausing."
+      lines << "Read the actual state and holds with GET #{path}. Pause with POST #{path}/pause and JSON {\"reason\":\"your reason\"}; release your own hold with POST #{path}/resume (never another resident's hold). A slot that cannot fire safely is skipped, not held; last_skip says when and why, and the next slot tries again. Leave the selection with POST #{path}/leave. Use SOULSHOUSE_APP_URL and your existing SOULSHOUSE_BEARER_TOKEN. The API returns the current state; do not substitute a memory note for pausing."
     else
       lines << "This rhythm has been deleted; it will not open future conversations."
     end
