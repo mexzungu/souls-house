@@ -37,6 +37,7 @@ class Agent < ApplicationRecord
   belongs_to :outbound_api_key, class_name: "ApiKey", optional: true
   belongs_to :created_by_user, class_name: "User", optional: true
   belongs_to :first_conversation_chat, class_name: "Chat", optional: true
+  belongs_to :first_conversation_interaction, class_name: "AgentRuntimeInteraction", optional: true
   has_many :chat_agents, dependent: :destroy
   has_many :room_model_defaults, dependent: :delete_all
   has_many :agent_backup_snapshots, dependent: :destroy

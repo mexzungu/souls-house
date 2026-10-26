@@ -19,6 +19,8 @@ module Agents
 
     # A greeting still owed after this long is dropped, not chased.
     GIVE_UP_AFTER = 1.day
+    # Reservations that never reached the runtime are retried this many times.
+    MAX_ATTEMPTS = 3
     SYSTEM_TEST_TITLE_PREFIX = "system: agent test for".freeze
 
     def self.trigger?(agent)
@@ -63,49 +65,151 @@ module Agents
       outcome
     end
 
-    # :sent, :skipped, :not_owed, or a refusal symbol (still owed).
+    # Drives the greeting one step: reserves a run for an owed greeting and
+    # dispatches it, re-drives a reserved run nobody claimed, and settles one
+    # that ended. Returns :spent (handed to the runtime client: final, even if
+    # the resident stays quiet or the outcome is unknown), :pending, :unsent
+    # (back to owed), :skipped, :not_owed, or a refusal (still owed).
     def wake!
-      chat = nil
-      outcome = agent.with_lock do
-        next :not_owed unless agent.first_conversation_greeting == "owed"
-
-        chat = agent.first_conversation_chat
-        if chat.nil? || agent.birth_committed_at < GIVE_UP_AFTER.ago
-          agent.update!(first_conversation_greeting: "skipped")
-          next :skipped
-        end
-        # A person started their own conversation while this one was being
-        # opened: theirs is the first conversation, and the empty one goes.
-        if (existing = person_started_chat(excluding: chat))
-          agent.update!(first_conversation_chat_id: existing.id, first_conversation_greeting: "skipped")
-          chat.destroy! if chat.messages.empty?
-          next :skipped
-        end
-        # A person has already written here: the ordinary reply answers them.
-        if human_spoke?(chat)
-          agent.update!(first_conversation_greeting: "skipped")
-          next :skipped
-        end
-        next refusal if refusal
-
-        agent.update!(first_conversation_greeting: "sent", first_conversation_woken_at: Time.current)
-        :sent
+      case agent.reload.first_conversation_greeting
+      when "owed" then reserve_and_dispatch!
+      when "sent" then resume!
+      else :not_owed
       end
-      return outcome unless outcome == :sent
-
-      result = ExternalAgentResponseRequest.new(
-        agent: agent, chat: chat, initiation_reason: reason_text
-      ).call
-      # Status 0 means the request never reached the runtime; anything else
-      # (a reply, a quiet completion, a run already going) settles it.
-      return :sent unless result[:status].to_i.zero?
-
-      reopen!
-      :unreached
-    rescue Agent::RuntimeAvailability::Unavailable
-      reopen!
-      :unavailable
     end
+
+    # Settles a reserved greeting from its run: spent once the request was
+    # handed to the runtime client (the request writes request_text just
+    # before invoking), unsent if the run ended or lapsed before that.
+    def settle!
+      agent.with_lock do
+        next :not_owed unless agent.first_conversation_greeting == "sent"
+
+        interaction = agent.first_conversation_interaction
+        if interaction&.request_text.present?
+          agent.update!(first_conversation_greeting: "spent")
+          :spent
+        elsif interaction.nil? || interaction.finished_at? || interaction.execution_deadline_at&.past?
+          interaction&.with_lock { interaction.finish_execution!("cancelled") if interaction.dispatch_claimed_at.nil? && !interaction.finished_at? }
+          give_back!
+          :unsent
+        else
+          :pending
+        end
+      end
+    end
+
+    # Called from AgentRuntimeInteraction#claim_dispatch! for the greeting's
+    # run. Under the chat then agent locks, yields (the actual claim) only if
+    # the greeting is still owed to this run; otherwise records why not and
+    # returns false.
+    def claim(interaction)
+      chat = interaction.chat or return false
+      chat.with_lock do
+        agent.with_lock do
+          next false unless agent.first_conversation_greeting == "sent" && agent.first_conversation_interaction_id == interaction.id
+          next false if person_first(chat)
+          if refusal
+            give_back!
+            next false
+          end
+          yield
+        end
+      end
+    end
+
+    private
+
+    def reserve_and_dispatch!
+      chat = agent.first_conversation_chat
+      return agent.with_lock { skip!(:skipped) } if chat.nil?
+
+      interaction = nil
+      outcome = chat.with_lock do
+        agent.with_lock do
+          next :not_owed unless agent.first_conversation_greeting == "owed"
+          next skip!(:skipped) if agent.birth_committed_at < GIVE_UP_AFTER.ago || agent.first_conversation_attempts >= MAX_ATTEMPTS
+          if (person = person_first(chat))
+            next person
+          end
+          if (reason = refusal || dispatch_refusal(chat))
+            next reason
+          end
+
+          interaction = AgentRuntimeInteraction.reserve!(agent: agent, chat: chat)
+          agent.update!(first_conversation_greeting: "sent", first_conversation_interaction: interaction,
+            first_conversation_attempts: agent.first_conversation_attempts + 1, first_conversation_woken_at: Time.current)
+          :reserved
+        rescue Chat::AlreadyResponding
+          :busy
+        rescue Agent::RuntimeAvailability::Unavailable
+          :unavailable
+        end
+      end
+      return outcome unless outcome == :reserved
+
+      dispatch!(interaction)
+    end
+
+    # A run reserved but not yet claimed (its worker died, or the job was
+    # lost) is driven again; the claim lets only one worker through.
+    def resume!
+      interaction = agent.first_conversation_interaction
+      if interaction && interaction.dispatch_claimed_at.nil? && !interaction.finished_at? && interaction.execution_deadline_at&.future?
+        return dispatch!(interaction)
+      end
+
+      settle!
+    end
+
+    def dispatch!(interaction)
+      ExternalAgentResponseRequest.new(
+        agent: agent, chat: interaction.chat, initiation_reason: reason_text, interaction: interaction
+      ).call
+      settle!
+    rescue Agent::RuntimeAvailability::Unavailable
+      settle!
+    end
+
+    # The person spoke first, here or in a conversation of their own: theirs
+    # is the first word, and no greeting is owed.
+    def person_first(chat)
+      if (existing = person_started_chat(excluding: chat))
+        agent.update!(first_conversation_chat_id: existing.id, first_conversation_greeting: "skipped",
+          first_conversation_interaction_id: nil)
+        # Only under this chat's row lock (held by the caller): a message
+        # being posted here waits on it and then fails on the missing chat,
+        # rather than being deleted with it.
+        chat.destroy! unless chat.messages.exists?
+        return :skipped
+      end
+      return skip!(:skipped) if human_spoke?(chat)
+
+      nil
+    end
+
+    def skip!(outcome)
+      agent.update!(first_conversation_greeting: "skipped", first_conversation_interaction_id: nil)
+      outcome
+    end
+
+    def give_back!
+      exhausted = agent.first_conversation_attempts >= MAX_ATTEMPTS || agent.birth_committed_at < GIVE_UP_AFTER.ago
+      agent.update!(first_conversation_greeting: exhausted ? "skipped" : "owed", first_conversation_interaction_id: nil,
+        first_conversation_woken_at: nil)
+    end
+
+    # What the request would otherwise turn into a house notice in the room
+    # without reaching the runtime: checked first so retries can't fill the
+    # conversation with notices.
+    def dispatch_refusal(chat)
+      return :runtime_unreachable if agent.offline? || (agent.health_state == "unhealthy" && agent.consecutive_health_failures >= 6)
+      return :model_unavailable unless Agents::ModelSelection.for(agent, chat: chat).ok?
+
+      nil
+    end
+
+    public
 
     def reason_text
       person = creator
@@ -135,7 +239,8 @@ module Agents
     # progress line.
     def self.presentation(agent)
       chat = agent.first_conversation_chat or return nil
-      replied = chat.messages.kept.where(role: "assistant", agent_id: agent.id, progress_message: false)
+      replied = chat.messages.kept.without_safeguard_label
+        .where(role: "assistant", agent_id: agent.id, progress_message: false)
         .where.not(runtime_interaction_id: nil).exists?
       { id: chat.to_param, has_reply: replied }
     end
@@ -148,12 +253,6 @@ module Agents
 
     attr_reader :agent
 
-    # Never reached the runtime: still owed, for the sweep.
-    def reopen!
-      agent.with_lock do
-        agent.update!(first_conversation_greeting: "owed", first_conversation_woken_at: nil) if agent.first_conversation_greeting == "sent"
-      end
-    end
 
     def refusal
       return :inactive unless agent.active?

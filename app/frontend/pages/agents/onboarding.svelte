@@ -72,15 +72,21 @@
 
   // After the first wake settles, the house opens the first conversation and
   // the resident may write in it; keep looking for a while so the button can
-  // change to "Read what <Name> wrote" without a refresh.
+  // change to "Read what <Name> wrote" without a refresh. The window starts
+  // when the first wake is seen to settle, not when the page opened, so a
+  // slow setup doesn't use it up.
   const FIRST_WORD_WINDOW_MS = 10 * 60 * 1000;
 
   onMount(() => {
-    const mountedAt = Date.now();
+    let settledAt = null;
     const interval = setInterval(() => {
       if (!orientationFinished && !orientationFailed && !setupFailed) {
         router.reload({ only: ['agent', 'vm_steps', 'first_conversation'], preserveScroll: true });
-      } else if (runtimeReady && !firstConversation?.has_reply && Date.now() - mountedAt < FIRST_WORD_WINDOW_MS) {
+        return;
+      }
+      if (!runtimeReady || firstConversation?.has_reply) return;
+      settledAt ??= Date.now();
+      if (Date.now() - settledAt < FIRST_WORD_WINDOW_MS) {
         router.reload({ only: ['agent', 'first_conversation'], preserveScroll: true });
       }
     }, 3000);
