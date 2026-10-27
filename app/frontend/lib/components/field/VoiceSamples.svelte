@@ -6,6 +6,9 @@
   // Accept and reject show at once: the row moves to the end, marked saving,
   // and the list refreshes behind it, so the next sample can be played
   // straight away. A failed save puts the row back with the reason.
+  // A sample from a long recording takes seconds to cut, so the next few are
+  // cut ahead (warm), and a row shows it is loading until sound starts. A
+  // play interrupted by a click or a refresh is not an error.
   import { untrack } from 'svelte';
   import { Button } from '$lib/components/shadcn/button/index.js';
   import VoiceSampleRow from './VoiceSampleRow.svelte';
@@ -30,6 +33,11 @@
   const playingId = $derived(playing?.id ?? null);
   let page = $state(1);
   let paused = $state(true);
+  // The row whose audio has been asked for and has not started sounding.
+  let loadingId = $state(null);
+  // id|digest -> when it was last asked to be cut ahead. The server keeps a cut
+  // for ten minutes, so ask again after five.
+  let warmed = new Map();
   let progress = $state({});
 
   // Reviews shown before the server has answered (voice-sample-pending.js).
@@ -110,6 +118,7 @@
         heard = {};
         progress = {};
         pending = {};
+        warmed = new Map();
         page = 1;
         stop();
       }
@@ -128,21 +137,53 @@
     if (playing) audio?.pause();
     playing = null;
     paused = true;
+    loadingId = null;
+  }
+
+  // Ask the server to cut the next few playable samples after `from` (or the
+  // top of the list), so they start at once when played. Fire and forget.
+  function warmAhead(from = null) {
+    const list = rows;
+    const start = from == null ? 0 : list.findIndex((row) => row.id === from) + 1;
+    const ids = list
+      .slice(Math.max(start, 0))
+      .filter((row) => row.audio_url && !String(row.id).startsWith('upload-') && !heardIt(row))
+      .filter((row) => row.state === 'review' || row.state === 'removed')
+      .filter((row) => !(Date.now() - (warmed.get(`${row.id}|${row.digest}`) ?? -Infinity) < 5 * 60_000))
+      .slice(0, WARM_AHEAD);
+    if (!ids.length) return;
+    ids.forEach((row) => warmed.set(`${row.id}|${row.digest}`, Date.now()));
+    fetch(`${base}/samples/warm`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ ids: ids.map((row) => row.id) }),
+    }).catch(() => {});
+  }
+
+  // play() is refused with AbortError when a pause or a new source interrupts
+  // it; that is the person (or a refresh) changing their mind, not a failure.
+  function playFailed(failure) {
+    if (failure?.name === 'AbortError') return;
+    loadingId = null;
+    error = 'This audio could not be played. Check the source recording, then try again.';
   }
 
   function toggle(sample) {
     if (!audio || !sample.audio_url) return;
+    error = '';
     if (playing?.id === sample.id && playing.digest === sample.digest && playing.url === sample.audio_url) {
-      if (audio.paused) audio.play();
-      else audio.pause();
+      if (audio.paused) {
+        loadingId = sample.id;
+        audio.play().catch(playFailed);
+      } else audio.pause();
       return;
     }
     playing = { id: sample.id, digest: sample.digest, url: sample.audio_url };
+    loadingId = sample.id;
     audio.src = sample.audio_url;
     audio.currentTime = 0;
-    audio.play().catch(() => {
-      error = 'This audio could not be played. Check the source recording, then try again.';
-    });
+    audio.play().catch(playFailed);
+    warmAhead(sample.id);
   }
 
   function tick() {
@@ -156,6 +197,7 @@
       progress = { ...progress, [playing.id]: 1 };
     }
     paused = true;
+    loadingId = null;
   }
 
   async function save(path, method, body) {
@@ -201,6 +243,13 @@
   }
 
   const rows = $derived(orderedRows(result?.samples, pending));
+  const WARM_AHEAD = 8;
+
+  // Whenever the list (re)loads, have the first samples cut before they're asked for.
+  $effect(() => {
+    if (!result) return;
+    untrack(() => warmAhead(playing?.id ?? null));
+  });
 
   const heardIt = (sample) => heard[sample.id] === sample.digest;
   // Accepting says "I heard all of this and it is only them". A sample
@@ -220,11 +269,18 @@
   class="hidden"
   data-testid="sample-audio"
   onplay={() => (paused = false)}
-  onpause={() => (paused = true)}
+  onplaying={() => (loadingId = null)}
+  onpause={() => {
+    paused = true;
+    loadingId = null;
+  }}
   ontimeupdate={tick}
   onended={ended}
   onerror={() => {
-    if (playingId) error = 'This audio could not be played. Check the source recording, then try again.';
+    // A source swapped mid-load reports MEDIA_ERR_ABORTED; only a real failure is shown.
+    if (!playingId || audio?.error?.code === 1) return;
+    loadingId = null;
+    error = 'This audio could not be played. Check the source recording, then try again.';
   }}></audio>
 
 <section class="space-y-3" data-testid="voice-samples">
@@ -263,6 +319,7 @@
             {name}
             playing={playingId === sample.id && playing.digest === sample.digest && !paused}
             progress={progress[sample.id] ?? null}
+            loading={loadingId === sample.id && playingId === sample.id}
             busy={busy != null || sample.saving}
             acceptable={canAccept(sample)}
             onToggle={() => toggle(sample)}

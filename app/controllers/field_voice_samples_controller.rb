@@ -2,13 +2,9 @@
 # short preview. Every read (including each media range) is account scoped.
 class FieldVoiceSamplesController < ApplicationController
 
-  # Never use Rails.cache here: production stores it in the cache database.
-  # This bounded, process-local store cannot persist audio to disk or backups.
-  AUDIO_CACHE = ActiveSupport::Cache::MemoryStore.new(size: 16.megabytes, expires_in: 10.minutes)
-
   require_feature_enabled :agents
   before_action :set_voice
-  before_action :set_speaker, except: %i[index prepare]
+  before_action :set_speaker, except: %i[index prepare warm]
   rescue_from FieldVoiceprints::Limits::Reached, FieldVoiceSamples::Conflict do |error|
     render json: { error: error.message }, status: :conflict
   end
@@ -50,6 +46,24 @@ class FieldVoiceSamplesController < ApplicationController
     render json: { queued: FieldVoiceprints::Learning.prepare_for_review!(@voice) }
   end
 
+  # Cut, in the background, the samples the page is about to play, so Play
+  # starts at once instead of waiting for a long recording to be fetched and
+  # decoded. Only this voice's current samples with source audio.
+  def warm
+    ids = Array(params[:ids]).map(&:to_s).reject { |id| id.start_with?("upload-") }.first(FieldVoiceSamples::Audio::WARM_LIMIT)
+    speaker_ids = ids.filter_map { |id| FieldRecordingSpeaker.decode_id(id) }
+    speakers = kept_speakers.where(id: speaker_ids).includes(:voice_samples, field_recording: { audio_attachment: :blob })
+      .index_by(&:id)
+    pairs = speaker_ids.filter_map do |id|
+      speaker = speakers[id]
+      sample = speaker&.voice_samples&.find { |row| row.field_voice_id == @voice.id && row.removed_at.nil? }
+      next unless sample&.source_current? && sample.source_segments.present? && speaker.field_recording.audio.attached?
+
+      [ speaker, sample ]
+    end
+    render json: { warming: FieldVoiceSamples::Audio.warm(current_account, pairs) }
+  end
+
   def update
     if @uploaded_sample
       @uploaded_sample.review!(digest: params[:digest], by: Current.user, included: params[:included])
@@ -87,13 +101,9 @@ class FieldVoiceSamplesController < ApplicationController
     return head(:not_found) unless @speaker.field_recording.audio.attached?
 
     # Authorise and source-check every range, but reuse this exact private cut
-    # for Safari's probe/chunk requests rather than downloading the source again.
-    AUDIO_CACHE.cleanup
-    bytes = AUDIO_CACHE.fetch(
-      [ "field-voice-sample-audio-v1", current_account.id, sample.id, sample.source_digest ]
-    ) do
-      FieldVoiceprints::Sample.cut(@speaker.field_recording, sample.source_segments) { |path| File.binread(path) }
-    end
+    # (process memory only, FieldVoiceSamples::Audio) for Safari's probe/chunk
+    # requests and for cuts made ahead by #warm.
+    bytes = FieldVoiceSamples::Audio.bytes(current_account, @speaker, sample)
     response.headers["Cache-Control"] = "private, no-store"
     response.headers["Accept-Ranges"] = "bytes"
     if request.headers["Range"].present?

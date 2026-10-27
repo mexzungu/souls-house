@@ -89,6 +89,19 @@ class FieldVoiceprintsTest < ActiveSupport::TestCase
     end
   end
 
+  test "one pass cuts several samples, each byte for byte what a single cut makes" do
+    recording = ready_recording(account: @account, user: @user)
+    lists = [ [ [ 0, 400 ], [ 500, 900 ] ], [ [ 100, 300 ] ], [ [ 200, 700 ] ] ]
+    singles = lists.map { |segments| FieldVoiceprints::Sample.cut(recording, segments) { |path| File.binread(path) } }
+    opened = 0
+    blob = recording.audio.blob
+    original = blob.method(:open)
+    blob.define_singleton_method(:open) { |*args, **options, &block| opened += 1; original.call(*args, **options, &block) }
+    many = FieldVoiceprints::Sample.cut_many(recording, lists) { |paths| paths.map { |path| File.binread(path) } }
+    assert_equal 1, opened, "the recording is fetched once for all of them"
+    assert_equal singles, many
+  end
+
   test "nothing biometric happens while a gate is shut: nothing learned, nothing embedded, no guess" do
     client = embeddings
     store_print!(@voice)
