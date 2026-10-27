@@ -6,14 +6,13 @@
   // Accept and reject show at once: the row moves to the end, marked saving,
   // and the list refreshes behind it, so the next sample can be played
   // straight away. A failed save puts the row back with the reason.
-  // A sample from a long recording takes seconds to cut, so the next few are
-  // cut ahead (warm), and a row shows it is loading until sound starts. A
-  // play interrupted by a click or a refresh is not an error.
+  // Cutting ahead and interrupted plays: voice-sample-warm.js.
   import { untrack } from 'svelte';
   import { Button } from '$lib/components/shadcn/button/index.js';
   import VoiceSampleRow from './VoiceSampleRow.svelte';
   import OtherNamings from './OtherNamings.svelte';
-  import { STATES } from './voice-sample-format.js';
+  import VoiceSampleSummary from './VoiceSampleSummary.svelte';
+  import { askToWarm, interrupted, warmIds } from './voice-sample-warm.js';
   import { orderedRows, shownCounts, stillPending } from './voice-sample-pending.js';
 
   let { base, name, version = '', onChanged = () => {} } = $props();
@@ -35,8 +34,6 @@
   let paused = $state(true);
   // The row whose audio has been asked for and has not started sounding.
   let loadingId = $state(null);
-  // id|digest -> when it was last asked to be cut ahead. The server keeps a cut
-  // for ten minutes, so ask again after five.
   let warmed = new Map();
   let progress = $state({});
 
@@ -140,30 +137,12 @@
     loadingId = null;
   }
 
-  // Ask the server to cut the next few playable samples after `from` (or the
-  // top of the list), so they start at once when played. Fire and forget.
   function warmAhead(from = null) {
-    const list = rows;
-    const start = from == null ? 0 : list.findIndex((row) => row.id === from) + 1;
-    const ids = list
-      .slice(Math.max(start, 0))
-      .filter((row) => row.audio_url && !String(row.id).startsWith('upload-') && !heardIt(row))
-      .filter((row) => row.state === 'review' || (row.state === 'removed' && !result?.full))
-      .filter((row) => !(Date.now() - (warmed.get(`${row.id}|${row.digest}`) ?? -Infinity) < 5 * 60_000))
-      .slice(0, WARM_AHEAD);
-    if (!ids.length) return;
-    ids.forEach((row) => warmed.set(`${row.id}|${row.digest}`, Date.now()));
-    fetch(`${base}/samples/warm`, {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({ ids: ids.map((row) => row.id) }),
-    }).catch(() => {});
+    askToWarm(base, warmIds(rows, { from, heard: heardIt, full: result?.full, warmed }), headers());
   }
 
-  // play() is refused with AbortError when a pause or a new source interrupts
-  // it; that is the person (or a refresh) changing their mind, not a failure.
   function playFailed(failure) {
-    if (failure?.name === 'AbortError') return;
+    if (interrupted(failure)) return;
     loadingId = null;
     error = 'This audio could not be played. Check the source recording, then try again.';
   }
@@ -243,7 +222,6 @@
   }
 
   const rows = $derived(orderedRows(result?.samples, pending));
-  const WARM_AHEAD = 8;
 
   // Whenever the list (re)loads, have the first samples cut before they're asked for.
   $effect(() => {
@@ -254,8 +232,7 @@
   const heardIt = (sample) => heard[sample.id] === sample.digest;
   // Accepting says "I heard all of this and it is only them". A sample
   // confirmed earlier and later removed can come back without replaying.
-  // With twenty included, nothing more is added until one is rejected (an
-  // included sample can still be confirmed).
+  // With twenty included, only an included sample can still be confirmed.
   const canAccept = (sample) =>
     (!result?.full || sample.included) &&
     sample.source_current &&
@@ -279,48 +256,16 @@
   }}
   ontimeupdate={tick}
   onended={ended}
-  onerror={() => {
-    // A source swapped mid-load reports MEDIA_ERR_ABORTED; only a real failure is shown.
-    if (!playingId || audio?.error?.code === 1) return;
-    loadingId = null;
-    error = 'This audio could not be played. Check the source recording, then try again.';
-  }}></audio>
+  onerror={() => playingId && audio?.error?.code !== 1 && playFailed()}></audio>
+<!-- error code 1 is MEDIA_ERR_ABORTED: a source swapped mid-load, not a failure. -->
 
 <section class="space-y-3" data-testid="voice-samples">
   {#if error}<p role="alert" class="text-sm text-destructive">{error}</p>{/if}
   {#if !result && loading}<p class="text-sm text-muted-foreground">Loading samples…</p>{/if}
 
   {#if result}
-    <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="text-sm">
-        <p data-testid="voice-print-state">{result.print}</p>
-        {#if result.learning !== 'Learning enabled'}<p class="text-muted-foreground">{result.learning}</p>{/if}
-      </div>
-      {#if result.preparable > 0}
-        <Button size="sm" disabled={busy != null} onclick={prepareAll} data-testid="voice-prepare">
-          Prepare {result.preparable}
-          {result.preparable === 1 ? 'sample' : 'samples'} for listening
-        </Button>
-      {/if}
-    </div>
-
-    {#if result.samples.length === 0}
-      <p class="text-sm text-muted-foreground">No fingerprint samples yet.</p>
-    {:else}
-      <p class="text-xs text-muted-foreground">
-        {result.total}
-        {result.total === 1 ? 'sample' : 'samples'}
-        {#each Object.keys(STATES) as state (state)}
-          {#if counts[state]}<span> · {counts[state]} {STATES[state].label.toLowerCase()}</span>{/if}
-        {/each}.
-        {#if result.full}
-          Twenty samples are included, which is as many as a fingerprint uses, so no new ones are offered. Reject one if
-          it is wrong, and candidates are offered again.
-        {:else}
-          Accept after playing a sample to the end, if it is only {name} throughout. Wrong person or mixed voices: reject
-          it, then correct the speaker in the recording.
-        {/if}
-      </p>
+    <VoiceSampleSummary {result} {counts} {name} busy={busy != null} onPrepare={prepareAll} />
+    {#if result.samples.length > 0}
       <ul class="divide-y rounded-md border" data-testid="voice-sample-list">
         {#each rows as sample (sample.id)}
           <VoiceSampleRow
