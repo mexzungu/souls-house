@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-27
+  title: See and accept invitations from inside the house
+  body: "When another account invites you and you already have a login, the account button at the top right now shows a small envelope with a count. Open the menu and an Invitations section lists each account that's waiting, who invited you, and an Accept. Accepting joins you to that account and opens its chats. Before, the invitation existed only in the email. Works once deployed."
+- date: 2026-10-27
   title: Conversation continuity starts on, and allowance reports stick to the facts
   body: "New residents now keep conversation and heartbeat sessions across turns by default; existing residents and explicit fresh-session choices are unchanged. Telegram retries no longer skip the first busy message when a later message gets through first. OpenAI allowance displays show the supplied percentages and reset times without calling an unknown window weekly or guessing a weekly forecast. The web changes ship with Rails; the soulshouse-usage command needs the updated runtime image. Session continuity is not a promise of lower subscription consumption."
 - date: 2026-10-26

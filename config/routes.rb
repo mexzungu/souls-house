@@ -53,6 +53,9 @@ Rails.application.routes.draw do
   get "set-password" => "registrations#set_password", as: :set_password
   patch "set-password" => "registrations#update_password"
 
+  # The envelope in the account menu: accept an invitation while signed in.
+  post "invitations/:invitation_id/accept" => "invitation_acceptances#create", as: :accept_invitation
+
   resources :passwords, param: :token, only: %i[new create edit update]
 
   resource :user, only: %i[edit update] do
