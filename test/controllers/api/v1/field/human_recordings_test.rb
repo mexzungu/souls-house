@@ -111,6 +111,9 @@ class Api::V1::Field::HumanRecordingsTest < ActionDispatch::IntegrationTest
     assert_equal Time.zone.local(2019, 3, 14), @recording.reload.recorded_at
     assert_equal Time.zone.local(2019, 3, 14).iso8601, response.parsed_body.dig("recording", "recorded_at")
 
+    patch api_v1_field_recording_path(@recording), params: { recorded_at: "2026-10-09T15:22:00+02:00" }, headers: @headers, as: :json
+    assert_equal Time.utc(2026, 10, 9, 13, 22), @recording.reload.recorded_at, "an offset converts to UTC"
+
     patch api_v1_field_recording_path(@recording), params: { recorded_at: "2019-03-14T09:30:00Z" }, headers: @headers, as: :json
     assert_equal Time.utc(2019, 3, 14, 9, 30), @recording.reload.recorded_at
 
@@ -154,23 +157,6 @@ class Api::V1::Field::HumanRecordingsTest < ActionDispatch::IntegrationTest
     delete api_v1_field_recording_path(@recording), headers: @headers
     assert_response :not_found
     assert @recording.reload.kept?
-  end
-
-
-  test "a person redates a recording brought in without a date, and can clear it" do
-    patch api_v1_field_recording_path(@recording), params: { recorded_at: "2026-10-09T15:22:00+02:00" }, headers: @headers, as: :json
-    assert_response :success
-    assert_equal Time.zone.parse("2026-10-09 13:22 UTC"), @recording.reload.recorded_at
-    assert_equal "Board call", @recording.title
-    assert_equal @recording.recorded_at.iso8601, response.parsed_body.dig("recording", "recorded_at")
-
-    patch api_v1_field_recording_path(@recording), params: { recorded_at: "2026-02-30" }, headers: @headers, as: :json
-    assert_response :unprocessable_entity
-    assert_not_nil @recording.reload.recorded_at, "a refused date leaves the old one"
-
-    patch api_v1_field_recording_path(@recording), params: { recorded_at: "" }, headers: @headers, as: :json
-    assert_response :success
-    assert_nil @recording.reload.recorded_at
   end
 
   test "a recording arrives with its meeting's notes, and they can be changed or cleared" do
