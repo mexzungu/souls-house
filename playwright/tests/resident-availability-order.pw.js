@@ -43,7 +43,7 @@ test('ask bar warns at low OpenAI allowance and orders by the minimum supplied p
     props: { accountId: 'order-bar', chatId: 'chat', showUsage: false, agents: residents('bar') },
   });
   await expect(component.getByRole('button', { name: /^Low/ })).toHaveAccessibleName('Low (20% left)');
-  await expect(component.getByRole('button', { name: /^High/ })).toHaveAccessibleName('High');
+  await expect(component.getByRole('button', { name: /^High/ })).toHaveAccessibleName('High (70% left)');
   await expect.poll(() => buttonNames(component, ['High', 'Low', 'amy', 'Zed'])).toEqual(['High', 'Low', 'amy', 'Zed']);
 });
 
