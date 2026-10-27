@@ -16,7 +16,7 @@ class FieldVoiceSamplesController < ApplicationController
   # The review list is the samples; the rest are a count, listed on request.
   SAMPLES_PAGE = 50
   OTHER_PAGE = 15
-  STATE_ORDER = %w[review preparing not_ready removed confirmed].freeze
+  STATE_ORDER = %w[review preparing not_ready removed confirmed spare].freeze
 
   def index
     return render(json: other_namings_json) if params[:scope] == "other"
@@ -36,7 +36,8 @@ class FieldVoiceSamplesController < ApplicationController
       other_namings: kept_speakers.where.not(id: sampled_speaker_ids).count,
       preparable: rows.count { |row| row[:state] == "not_ready" && row[:can_relearn] },
       learning: learning_state,
-      print: print_state
+      print: print_state,
+      full: full?
     }
   end
 
@@ -204,12 +205,19 @@ class FieldVoiceSamplesController < ApplicationController
   end
 
   # One word per row for the review list: what, if anything, a person does next.
+  # With twenty included, a candidate isn't asked about: it's "spare".
   def sample_state(included:, confirmed:, current:, status:, excluded:)
     return "preparing" if status == "pending"
     return "removed" if excluded
     return "not_ready" unless current
+    return "confirmed" if confirmed && included
 
-    confirmed && included ? "confirmed" : "review"
+    full? && !included ? "spare" : "review"
+  end
+
+  def full?
+    @full = FieldVoiceprints::Limits.full?(@voice) if @full.nil?
+    @full
   end
 
   def unavailable_reason(speaker, sample, current)

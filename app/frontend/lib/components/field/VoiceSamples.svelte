@@ -148,7 +148,7 @@
     const ids = list
       .slice(Math.max(start, 0))
       .filter((row) => row.audio_url && !String(row.id).startsWith('upload-') && !heardIt(row))
-      .filter((row) => row.state === 'review' || row.state === 'removed')
+      .filter((row) => row.state === 'review' || (row.state === 'removed' && !result?.full))
       .filter((row) => !(Date.now() - (warmed.get(`${row.id}|${row.digest}`) ?? -Infinity) < 5 * 60_000))
       .slice(0, WARM_AHEAD);
     if (!ids.length) return;
@@ -254,7 +254,10 @@
   const heardIt = (sample) => heard[sample.id] === sample.digest;
   // Accepting says "I heard all of this and it is only them". A sample
   // confirmed earlier and later removed can come back without replaying.
+  // With twenty included, nothing more is added until one is rejected (an
+  // included sample can still be confirmed).
   const canAccept = (sample) =>
+    (!result?.full || sample.included) &&
     sample.source_current &&
     (sample.state === 'review' || sample.state === 'removed') &&
     (heardIt(sample) || (sample.state === 'removed' && sample.confirmed));
@@ -309,8 +312,14 @@
         {result.total === 1 ? 'sample' : 'samples'}
         {#each Object.keys(STATES) as state (state)}
           {#if counts[state]}<span> · {counts[state]} {STATES[state].label.toLowerCase()}</span>{/if}
-        {/each}. Accept after playing a sample to the end, if it is only {name} throughout. Wrong person or mixed voices:
-        reject it, then correct the speaker in the recording.
+        {/each}.
+        {#if result.full}
+          Twenty samples are included, which is as many as a fingerprint uses, so no new ones are offered. Reject one if
+          it is wrong, and candidates are offered again.
+        {:else}
+          Accept after playing a sample to the end, if it is only {name} throughout. Wrong person or mixed voices: reject
+          it, then correct the speaker in the recording.
+        {/if}
       </p>
       <ul class="divide-y rounded-md border" data-testid="voice-sample-list">
         {#each rows as sample (sample.id)}
@@ -322,6 +331,7 @@
             loading={loadingId === sample.id && playingId === sample.id}
             busy={busy != null || sample.saving}
             acceptable={canAccept(sample)}
+            full={result.full}
             onToggle={() => toggle(sample)}
             onReview={(included) => review(sample, included)} />
         {/each}

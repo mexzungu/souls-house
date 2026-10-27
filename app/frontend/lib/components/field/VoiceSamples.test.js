@@ -291,3 +291,22 @@ test('the next samples are asked to be cut ahead, once each', async () => {
   await fireEvent.click(within(rows[2]).getByTestId('sample-play'));
   expect(warms()).toHaveLength(2);
 });
+
+test('with twenty included, candidates are not asked about and nothing invites pruning', async () => {
+  serve({
+    ...listing([
+      sample({ id: 's1', state: 'spare', included: false }),
+      sample({ id: 's2', state: 'removed', included: false, digest: 'd2', audio_url: '/a/2' }),
+    ]),
+    state_counts: { spare: 1, removed: 1 },
+    full: true,
+  });
+  render(VoiceSamples, { base: '/v', name: 'Ann' });
+  const rows = await screen.findAllByTestId('voice-sample');
+  expect(within(rows[0]).getByTestId('sample-inclusion')).toHaveTextContent('Not needed');
+  for (const row of rows) expect(within(row).queryByTestId('sample-accept')).toBeNull();
+  expect(screen.getByText(/Twenty samples are included/)).toBeInTheDocument();
+  expect(screen.queryByText(/Accept after playing/)).toBeNull();
+  const warm = globalThis.fetch.mock.calls.find(([url]) => url === '/v/samples/warm');
+  expect(warm).toBeUndefined();
+});

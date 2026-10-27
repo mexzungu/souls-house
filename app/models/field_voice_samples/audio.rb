@@ -14,6 +14,7 @@ module FieldVoiceSamples
     CACHE = ActiveSupport::Cache::MemoryStore.new(size: 64.megabytes, expires_in: 10.minutes)
     WAIT = 150.seconds
     WARM_LIMIT = 8
+    QUEUE = 32
 
     @lock = Mutex.new
     @pending = {}
@@ -24,8 +25,13 @@ module FieldVoiceSamples
       # Concurrent::ImmediateExecutor.
       attr_writer :executor
 
+      # One worker, at most QUEUE recordings waiting; more are dropped and
+      # cut on play instead. (SingleThreadExecutor ignores max_queue, so a
+      # one-thread pool it is: Mira's review of #610.)
       def executor
-        @executor ||= Concurrent::SingleThreadExecutor.new(max_queue: 32, fallback_policy: :discard)
+        @executor ||= Concurrent::ThreadPoolExecutor.new(
+          min_threads: 0, max_threads: 1, max_queue: QUEUE, fallback_policy: :discard
+        )
       end
 
       def key(account, sample)
@@ -52,6 +58,7 @@ module FieldVoiceSamples
 
       # Starts cutting these [speaker, sample] pairs in the background, one
       # pass per source recording. Pairs already cut or under way are skipped.
+      # Returns how many were queued.
       def warm(account, pairs)
         claimed = @lock.synchronize do
           pairs.first(WARM_LIMIT).filter_map do |speaker, sample|
@@ -62,11 +69,12 @@ module FieldVoiceSamples
             [ key, speaker.field_recording, sample.source_segments ]
           end
         end
-        claimed.group_by { |_key, recording, _segments| recording.id }.each_value do |jobs|
-          posted = executor.post { cut_all(jobs.first[1], jobs) }
-          release(jobs, StandardError.new("The sample queue is full.")) unless posted
+        claimed.group_by { |_key, recording, _segments| recording.id }.sum do |_recording_id, jobs|
+          next jobs.size if executor.post { cut_all(jobs.first[1], jobs) }
+
+          release(jobs, StandardError.new("The sample queue is full."))
+          0
         end
-        claimed.size
       end
 
       def clear

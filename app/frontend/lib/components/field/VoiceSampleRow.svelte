@@ -13,6 +13,7 @@
     progress = null,
     busy = false,
     acceptable = false,
+    full = false,
     onToggle,
     onReview,
   } = $props();
@@ -80,7 +81,7 @@
   </span>
 
   <div class="ml-auto flex shrink-0 gap-1">
-    {#if sample.source_current && (sample.state === 'review' || sample.state === 'removed')}
+    {#if (!full || sample.included) && sample.source_current && (sample.state === 'review' || sample.state === 'removed')}
       <Button
         size="sm"
         variant="outline"

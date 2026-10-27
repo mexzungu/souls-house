@@ -303,7 +303,7 @@ class FieldVoiceSamplesControllerTest < ActionDispatch::IntegrationTest
     FieldVoiceSamples::Audio.clear
     started = Queue.new
     release = Queue.new
-    FieldVoiceSamples::Audio.executor = Concurrent::SingleThreadExecutor.new
+    FieldVoiceSamples::Audio.executor = nil # the real one-worker pool
     cut_many = ->(_recording, lists, &block) {
       started << true
       release.pop
@@ -329,6 +329,20 @@ class FieldVoiceSamplesControllerTest < ActionDispatch::IntegrationTest
     FieldVoiceSamples::Audio.executor&.shutdown
     FieldVoiceSamples::Audio.executor = nil
     FieldVoiceSamples::Audio.clear
+  end
+
+  test "with twenty included, a candidate is shown as not needed and the list says so" do
+    @sample.update!(eligible: false)
+    FieldVoiceprints::Limits.stub(:full?, true) do
+      get account_field_voice_samples_path(@account, @voice), as: :json
+    end
+    assert_response :success
+    assert response.parsed_body["full"]
+    assert_equal "spare", response.parsed_body["samples"].first["state"]
+
+    get account_field_voice_samples_path(@account, @voice), as: :json
+    assert_not response.parsed_body["full"]
+    assert_equal "review", response.parsed_body["samples"].first["state"]
   end
 
   test "missing audio is presented honestly and stale evidence cannot be streamed" do
