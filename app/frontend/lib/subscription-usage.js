@@ -63,6 +63,18 @@ export function weeklyRemainingPercent(usage, provider, modelId = '') {
   return clampPercent(remaining);
 }
 
+// OpenAI supplies allowances without verified durations. Keep low-allowance
+// warnings useful by using the most constrained applicable window, not by
+// pretending one of them is weekly.
+export function allowanceRemainingPercent(usage, provider, modelId = '') {
+  if (provider !== 'openai') return weeklyRemainingPercent(usage, provider, modelId);
+  const remaining = displayUsageWindows(usage, provider, modelId)
+    .map((window) => window.remaining_percent)
+    .filter((value) => value != null && value !== '' && Number.isFinite(Number(value)))
+    .map(clampPercent);
+  return remaining.length ? Math.min(...remaining) : null;
+}
+
 export function predictionTone(prediction) {
   if (prediction > 100) return 'danger';
   if (prediction > 75) return 'warning';

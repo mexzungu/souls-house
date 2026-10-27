@@ -19,8 +19,8 @@ for (const width of [390, 1280]) {
               resets_at: new Date(Date.now() + 3600000).toISOString(),
             },
             {
-              id: 'weekly',
-              label: 'Weekly',
+              id: 'session',
+              label: 'Session',
               remaining_percent: 81,
               resets_at: new Date(Date.now() + 6 * 86400000).toISOString(),
             },
@@ -83,7 +83,7 @@ for (const width of [390, 1280]) {
           provider_subscription: {
             available: true,
             auth_mode: 'oauth_account',
-            provider: 'anthropic',
+            provider: 'openai',
             connection: { status: 'connected' },
           },
         },
@@ -119,7 +119,7 @@ test('mobile subscription gauges fit the resident buttons and disappear on deskt
   await page.route('**/provider_subscription_usage', (route) =>
     route.fulfill({
       json: {
-        windows: [{ id: 'weekly', label: 'Weekly', remaining_percent: 20, resets_at: '2026-10-11T00:00:00Z' }],
+        windows: [{ id: 'session', label: 'Session', remaining_percent: 20, resets_at: '2026-10-11T00:00:00Z' }],
       },
     })
   );
@@ -135,7 +135,7 @@ test('mobile subscription gauges fit the resident buttons and disappear on deskt
           provider_subscription: {
             available: true,
             auth_mode: 'oauth_account',
-            provider: 'anthropic',
+            provider: 'openai',
             connection: { status: 'connected' },
           },
         },

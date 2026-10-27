@@ -8,6 +8,7 @@ import {
   resetDescription,
   usageLine,
   weeklyRemainingPercent,
+  allowanceRemainingPercent,
 } from './subscription-usage';
 
 const now = Date.parse('2026-08-31T00:00:00Z');
@@ -27,6 +28,22 @@ it('preserves genuinely exhausted weekly usage', () => {
     windows: [{ id: 'weekly', label: 'Weekly', remaining_percent: 0, resets_at: '2026-10-11T00:00:00Z' }],
   };
   expect(weeklyRemainingPercent(usage, 'anthropic')).toBe(0);
+});
+
+it('uses the minimum known OpenAI allowance without inventing a weekly duration', () => {
+  const usage = {
+    windows: [
+      { id: 'session', label: 'Session', remaining_percent: 70 },
+      { id: 'weekly', label: 'Weekly', remaining_percent: 20 },
+      { label: 'codex-spark weekly', remaining_percent: 1 },
+      { id: 'unknown', remaining_percent: null },
+    ],
+  };
+  expect(allowanceRemainingPercent(usage, 'openai')).toBe(20);
+  expect(weeklyRemainingPercent(usage, 'openai')).toBeNull();
+  expect(allowanceRemainingPercent(usage, 'openai', 'codex-spark')).toBe(1);
+  expect(allowanceRemainingPercent({ windows: [{ remaining_percent: '' }] }, 'openai')).toBeNull();
+  expect(allowanceRemainingPercent({ windows: [{ remaining_percent: 0 }] }, 'openai')).toBe(0);
 });
 
 describe('subscription usage display', () => {
