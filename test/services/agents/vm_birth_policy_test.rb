@@ -138,7 +138,10 @@ class Agents::VmBirthPolicyTest < ActiveSupport::TestCase
       assert_enqueued_with(job: ProvisionAgentJob) { birth.create! }
     end
     # Recorded so the resident's first conversation can be opened with them.
-    assert_equal @user, Agent.order(:id).last.created_by_user
+    agent = Agent.order(:id).last
+    assert_equal @user, agent.created_by_user
+    assert agent.persistent_session?
+    assert agent.persistent_wake_session?
   end
 
   test "a GitHub import approved before the switch went on fails with the reason and makes no home" do

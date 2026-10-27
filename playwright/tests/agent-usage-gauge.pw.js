@@ -1,5 +1,53 @@
 import { test, expect } from '@playwright/experimental-ct-svelte';
 import AgentTriggerBar from '../../app/frontend/lib/components/chat/AgentTriggerBar.svelte';
+import AgentSubscriptionUsageSummary from '../../app/frontend/lib/components/agents/AgentSubscriptionUsageSummary.svelte';
+
+for (const width of [390, 1280]) {
+  test(`OpenAI summary keeps both unknown-duration allowances without a forecast at ${width}px`, async ({
+    mount,
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 844 });
+    await page.route('**/provider_subscription_usage', (route) =>
+      route.fulfill({
+        json: {
+          windows: [
+            {
+              id: 'session',
+              label: 'Session',
+              remaining_percent: 49,
+              resets_at: new Date(Date.now() + 3600000).toISOString(),
+            },
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              remaining_percent: 81,
+              resets_at: new Date(Date.now() + 6 * 86400000).toISOString(),
+            },
+          ],
+        },
+      })
+    );
+    const component = await mount(AgentSubscriptionUsageSummary, {
+      props: {
+        accountId: 'allowance-account',
+        agentId: 'resident',
+        subscription: {
+          available: true,
+          auth_mode: 'oauth_account',
+          provider: 'openai',
+          connection: { status: 'connected' },
+        },
+      },
+    });
+    await expect(component.getByText('49% left', { exact: true })).toBeVisible();
+    await expect(component.getByText('81% left', { exact: true })).toBeVisible();
+    await expect(component.getByText('Allowance 1', { exact: true })).toBeVisible();
+    await expect(component.getByText('Allowance 2', { exact: true })).toBeVisible();
+    await expect(component.getByText(/Weekly|5-hour|predicted|Forecast/)).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('openai-allowances.png') });
+  });
+}
 
 for (const width of [390, 1280]) {
   test(`usage refresh keeps buttons stationary at ${width}px`, async ({ mount, page }) => {
@@ -13,7 +61,14 @@ for (const width of [390, 1280]) {
       if (requests > 1) await pending;
       await route.fulfill({
         json: {
-          windows: [{ id: 'session', remaining_percent: requests > 1 ? 79 : 80, resets_at: '2026-10-11T00:00:00Z' }],
+          windows: [
+            {
+              id: 'weekly',
+              label: 'Weekly',
+              remaining_percent: requests > 1 ? 79 : 80,
+              resets_at: '2026-10-11T00:00:00Z',
+            },
+          ],
         },
       });
     });
@@ -28,7 +83,7 @@ for (const width of [390, 1280]) {
           provider_subscription: {
             available: true,
             auth_mode: 'oauth_account',
-            provider: 'openai',
+            provider: 'anthropic',
             connection: { status: 'connected' },
           },
         },
@@ -64,7 +119,7 @@ test('mobile subscription gauges fit the resident buttons and disappear on deskt
   await page.route('**/provider_subscription_usage', (route) =>
     route.fulfill({
       json: {
-        windows: [{ id: 'session', label: 'Session', remaining_percent: 20, resets_at: '2026-10-11T00:00:00Z' }],
+        windows: [{ id: 'weekly', label: 'Weekly', remaining_percent: 20, resets_at: '2026-10-11T00:00:00Z' }],
       },
     })
   );
@@ -80,7 +135,7 @@ test('mobile subscription gauges fit the resident buttons and disappear on deskt
           provider_subscription: {
             available: true,
             auth_mode: 'oauth_account',
-            provider: 'openai',
+            provider: 'anthropic',
             connection: { status: 'connected' },
           },
         },

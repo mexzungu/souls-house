@@ -21,15 +21,14 @@ export function displayUsageWindows(usage, provider, modelId = '') {
   }
 
   if (provider === 'openai') {
-    if (model.includes('codex-spark')) {
-      const spark = windows.filter((window) => windowLabel(window).includes('codex-spark'));
-      return compactWindows([findWindow(spark, 'session', '5-hour'), findWindow(spark, 'weekly', 'Weekly')]);
-    }
-
-    const weekly =
-      windows.find((window) => String(window.id || '').toLowerCase() === 'session') ||
-      windows.find((window) => windowLabel(window) === 'session');
-    return compactWindows([{ ...weekly, displayLabel: 'Weekly' }]);
+    // Normalized ids/labels and reset timestamps do not establish a duration.
+    const applicable = windows.filter(
+      (window) => windowLabel(window).includes('codex-spark') === model.includes('codex-spark')
+    );
+    return applicable.map((window, index) => ({
+      ...window,
+      displayLabel: applicable.length === 1 ? 'Allowance' : `Allowance ${index + 1}`,
+    }));
   }
 
   return windows.map((window) => ({ ...window, displayLabel: window.label || 'Usage' }));

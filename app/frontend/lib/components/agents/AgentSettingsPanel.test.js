@@ -44,3 +44,23 @@ test('a disabled or paused resident opens Advanced so it can be switched back on
   expect(screen.getByRole('button', { name: 'Hide advanced settings' })).toHaveAttribute('aria-expanded', 'true');
   expect(screen.getByText('Availability')).toBeInTheDocument();
 });
+
+test('managed runtime continuity switches remain editable and preserve an explicit fresh choice', async () => {
+  // VM residents, like local hosted residents, reach this panel with
+  // runtimeManaged=true (external/offline or a committed birth).
+  const form = writable({
+    agent: { persistent_session: true, persistent_wake_session: true },
+    errors: {},
+  });
+  render(AgentSettingsPanel, { form, runtimeManaged: true });
+  await fireEvent.click(screen.getByRole('button', { name: 'Advanced settings' }));
+  const conversations = screen.getByRole('switch', { name: 'Persistent conversation sessions' });
+  const heartbeats = screen.getByRole('switch', { name: 'Persistent heartbeat session' });
+  expect(conversations).toBeEnabled();
+  expect(heartbeats).toBeEnabled();
+  expect(conversations).toHaveAttribute('aria-checked', 'true');
+  expect(heartbeats).toHaveAttribute('aria-checked', 'true');
+  await fireEvent.click(conversations);
+  expect(get(form).agent.persistent_session).toBe(false);
+  expect(get(form).agent.persistent_wake_session).toBe(true);
+});

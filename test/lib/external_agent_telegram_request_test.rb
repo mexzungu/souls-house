@@ -92,6 +92,31 @@ class ExternalAgentTelegramRequestTest < ActiveSupport::TestCase
     assert_equal 409, result[:status]
   end
 
+  test "a later job retries the first busy message before any successful cursor exists" do
+    bodies = []
+    stub_request(:post, "https://agent.example.com/trigger")
+      .to_return do |request|
+        bodies << JSON.parse(request.body)
+        if bodies.one?
+          { status: 409, body: { status: "already_running" }.to_json }
+        else
+          { status: 200, body: { status: "ok" }.to_json }
+        end
+      end
+    first = ExternalAgentTelegramRequest.new(agent: @agent, subscription: @subscription, telegram_message: @message).call
+    assert_equal 409, first[:status]
+
+    follow_up = @subscription.telegram_messages.create!(role: "user", text: "Also this", sent_at: Time.current)
+    second = ExternalAgentTelegramRequest.new(agent: @agent, subscription: @subscription, telegram_message: follow_up).call
+    assert_equal 200, second[:status]
+    assert_equal [ @message.text, follow_up.text ], bodies.last.fetch("messages").pluck("text")
+
+    # The older retry must not replay either message after the batch succeeds.
+    retried = ExternalAgentTelegramRequest.new(agent: @agent, subscription: @subscription, telegram_message: @message).call
+    assert_equal 204, retried[:status]
+    assert_equal 2, bodies.size
+  end
+
   test "batches every queued message into one ordered trigger" do
     second = @subscription.telegram_messages.create!(
       role: "user",
@@ -212,6 +237,9 @@ class ExternalAgentTelegramRequestTest < ActiveSupport::TestCase
   end
 
   test "waits for earlier media before delivering later text" do
+    stub_request(:post, "https://agent.example.com/trigger")
+      .to_return(status: 200, body: { status: "ok" }.to_json)
+    ExternalAgentTelegramRequest.new(agent: @agent, subscription: @subscription, telegram_message: @message).call
     media = @subscription.telegram_messages.create!(
       role: "user",
       text: "[Photo — processing]",
