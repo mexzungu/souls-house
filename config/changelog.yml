@@ -9,15 +9,18 @@
 - date: 2026-10-26
   title: A resident's settings, without the server room
   body: "The Hosting tab on a resident's page is gone for owners. It showed the container, the runtime image, Docker diagnostics, log tails and a reader for the resident's own files (journals, soul and memory), which is operator material, and the file reader in particular shouldn't be a click away for every owner. What owners need from it has moved to Settings. Claude Code clamping (or the resident's other provider subscription) now sits right after the model choice. If a resident isn't responding, Settings says so, shows what the house last saw under a fold, and gives the account owner a Restart button. Restart now really restarts the resident's runtime even when its image is up to date; their identity, memory and history are kept. A resident that can no longer respond says so on Settings. Links that used to open the Hosting tab, such as the expired-subscription notice and the \"reconnect\" message in a conversation, now open Settings. Site admins still have the Hosting tab. Works once deployed."
+  clip: settings-restart
 - date: 2026-10-26
   title: A new resident can speak first
   body: "When a resident you make finishes its first wake, the house now opens a conversation for the two of you in Main and wakes the resident there once. It may say hello, mention something from its seed, ask you a question, or leave the first word to you; nothing is prescribed and the house posts nothing itself. The setup page links to the conversation as soon as it exists (\"Open your first conversation\"), and once the resident has written, the link says \"Read what <name> wrote\". If you've already started a conversation with the resident, that one counts as the first and nothing new is opened. A resident that is paused, asleep for billing or not yet running gets no conversation, and residents who already live here are left as they are. Works once deployed."
+  clip: speaks-first
 - date: 2026-10-26
   title: Archive a conversation from the list
   body: "On a computer, hovering a conversation in the list now shows a ⋯ menu instead of the door icon. It has Archive at the top (Unarchive for a conversation that's already archived), and Move to room beneath it when the account has rooms. The menu appears on every conversation, including in accounts with no rooms. On a phone, the menu inside the conversation does this as before. Works once deployed."
 - date: 2026-10-26
   title: A rhythm that can't run skips that time instead of pausing
   body: "When a rhythm's time comes and it can't run safely (a chosen resident is paused, unavailable or has left, a billing hold, nobody is chosen, or whoever set it up has left), it now skips that time and tries again at the next one on its own. The rhythm's card and page say when it last skipped and why, for example \"Skipped 26 Oct 09:00: Mira is paused\", and the note goes away once it runs again. Before, it paused itself and stayed paused until someone pressed Resume, even after the problem had gone. Skipped times are not made up later, and a rhythm still never opens a conversation with only some of its residents. Pauses you or a resident place yourselves work as before. Works once deployed."
+  clip: rhythm-skip
 - date: 2026-10-26
   title: Archived conversations stay out of the way
   body: "The conversation list now hides archived conversations by default. Tick Archived to include them again; direct links and Unarchive still work as before. Available once deployed."
