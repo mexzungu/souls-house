@@ -144,7 +144,10 @@ class Agents::FirstConversationConcurrencyTest < ActiveSupport::TestCase
     loop do
       waiting = ActiveRecord::Base.uncached do
         ActiveRecord::Base.connection.select_value(
-          "SELECT count(*) FROM pg_locks WHERE NOT granted AND locktype IN ('transactionid', 'tuple')"
+          # pg_locks is server-wide; CI's parallel workers share one server,
+          # so count only backends in this test's database.
+          "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid " \
+          "WHERE NOT l.granted AND l.locktype IN ('transactionid', 'tuple') AND a.datname = current_database()"
         ).to_i
       end
       break if waiting >= count
