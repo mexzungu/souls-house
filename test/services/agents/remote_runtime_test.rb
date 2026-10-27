@@ -28,6 +28,23 @@ module Agents
       end
     end
 
+    test "a VM Telegram turn carries persistent session policy and the delta through admission" do
+      @agent.update!(runtime: "external", persistent_session: true)
+      subscription = @agent.telegram_subscriptions.create!(user: users(:user_1), telegram_chat_id: 111)
+      message = subscription.telegram_messages.create!(role: "user", text: "A VM conversation", sent_at: Time.current)
+      with_async do
+        result = ExternalAgentTelegramRequest.new(agent: @agent, subscription: subscription, telegram_message: message).call
+        assert_equal 202, result[:status]
+        turn = ResidentTurn.where(agent: @agent).last
+        assert_equal "runner://#{@enrollment.public_id}", turn.agent_runtime_interaction.endpoint_url
+        payload = JSON.parse(turn.payload)
+        assert payload["persistent_session"]
+        assert_equal @agent.runtime_session_policy.stringify_keys, payload["session_policy"]
+        assert_includes payload["request_delta"], message.text
+        assert_equal "#{@agent.uuid}-telegram-#{subscription.id}", payload["session_id"]
+      end
+    end
+
     test "every missing condition makes it not dispatchable, and nothing falls back to local" do
       cases = {
         "synchronous turns" => -> { },

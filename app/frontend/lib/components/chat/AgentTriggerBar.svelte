@@ -6,7 +6,7 @@
   import AgentUsageName from '$lib/components/chat/AgentUsageName.svelte';
   import AgentModelControl from '$lib/components/chat/AgentModelControl.svelte';
   import AgentModelProblems from '$lib/components/chat/AgentModelProblems.svelte';
-  import { sortAgentsByAvailability, watchAgentsWeeklyRemaining } from '$lib/agent-subscription-usage';
+  import { sortAgentsByAvailability, watchAgentsRemaining } from '$lib/agent-subscription-usage';
   import * as Dialog from '$lib/components/shadcn/dialog/index.js';
   import { onDestroy } from 'svelte';
 
@@ -42,7 +42,7 @@
   let sortedAgents = $derived(sortAgentsByAvailability(agents, remainingById));
 
   $effect(() =>
-    watchAgentsWeeklyRemaining(accountId, agents, (id, value) => {
+    watchAgentsRemaining(accountId, agents, (id, value) => {
       if (remainingById[id] !== value) remainingById = { ...remainingById, [id]: value };
     })
   );

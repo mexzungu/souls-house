@@ -93,6 +93,14 @@ same seven-day extrapolation, not reported by the provider; it can exceed 100.
 It is omitted for unknown/unavailable snapshots or when no projection can be
 computed. Other snapshot fields are unchanged.
 
+OpenAI allowances show remaining percentage and reset time only. Normalized
+window ids/labels (including `session`, `primary`, or `weekly`) do not establish
+their duration, nor does the time until reset. The helper therefore uses neutral
+allowance labels, preserves the applicable windows, and does not add a weekly
+projection to OpenAI JSON. The web summary follows the same rule. Its low-allowance
+warning and availability sorting use the lowest supplied remaining percentage
+across applicable OpenAI windows, without assigning a duration to that percentage.
+
 The raw snapshot API (without this helper-computed field):
 
 ```sh

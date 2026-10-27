@@ -147,6 +147,7 @@
           </div>
           <Switch
             id="persistent_session"
+            aria-label="Persistent conversation sessions"
             checked={$form.agent.persistent_session}
             disabled={!runtimeManaged}
             onCheckedChange={(checked) => ($form.agent.persistent_session = checked)} />
@@ -161,6 +162,7 @@
           </div>
           <Switch
             id="persistent_wake_session"
+            aria-label="Persistent heartbeat session"
             checked={$form.agent.persistent_wake_session}
             disabled={!runtimeManaged}
             onCheckedChange={(checked) => ($form.agent.persistent_wake_session = checked)} />

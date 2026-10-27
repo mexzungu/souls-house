@@ -259,15 +259,10 @@ class ExternalAgentTelegramRequest
   end
 
   def message_cursor
-    return prior_cursor_message_id if prior_cursor_message_id
-
-    earlier_media_id = subscription.telegram_messages
-      .where(role: "user")
-      .where.not(media_kind: nil)
-      .where("id < ?", telegram_message.id)
-      .minimum(:id)
-
-    [ telegram_message.id, earlier_media_id ].compact.min - 1
+    # Before the first successful delivery, every inbound message is pending.
+    # Using the queued job's message as the floor loses earlier text when a
+    # newer job runs before the first busy job's retry.
+    prior_cursor_message_id || 0
   end
 
   def last_message

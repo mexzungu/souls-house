@@ -426,8 +426,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_27_100000) do
     t.bigint "outbound_api_key_id"
     t.string "outbound_api_token"
     t.boolean "paused", default: false, null: false
-    t.boolean "persistent_session", default: false, null: false
-    t.boolean "persistent_wake_session", default: false, null: false
+    t.boolean "persistent_session", default: true, null: false
+    t.boolean "persistent_wake_session", default: true, null: false
     t.string "portable_home_id"
     t.jsonb "portability_custody", default: {}, null: false
     t.jsonb "provider_auth_modes", default: {}, null: false

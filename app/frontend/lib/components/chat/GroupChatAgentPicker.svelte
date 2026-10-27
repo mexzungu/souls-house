@@ -1,14 +1,14 @@
 <script>
   import { agentIconFor } from '$lib/agent-icons';
   import AgentUsageName from '$lib/components/chat/AgentUsageName.svelte';
-  import { sortAgentsByAvailability, watchAgentsWeeklyRemaining } from '$lib/agent-subscription-usage';
+  import { sortAgentsByAvailability, watchAgentsRemaining } from '$lib/agent-subscription-usage';
 
   let { agents = [], accountId, showUsage = false, selectedAgentIds = $bindable([]) } = $props();
   let remainingById = $state({});
   let sortedAgents = $derived(sortAgentsByAvailability(agents, remainingById));
 
   $effect(() =>
-    watchAgentsWeeklyRemaining(accountId, agents, (id, value) => {
+    watchAgentsRemaining(accountId, agents, (id, value) => {
       if (remainingById[id] !== value) remainingById = { ...remainingById, [id]: value };
     })
   );
