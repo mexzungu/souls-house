@@ -300,7 +300,7 @@ module TestSupport
       if params[:operation] == "setup"
         user = account.users.find_by!(email_address: params.fetch(:email))
         other = Account.create!(name: "#{account.name} Other", account_type: :team)
-        other.add_user!(user, role: "member", skip_confirmation: true)
+        other.add_user!(user, role: "owner", skip_confirmation: true)
         private_account = Account.create!(name: "#{account.name} Inaccessible", account_type: :team)
         [ other, private_account ].each { |target| create_agent!(target, "#{target.name} Resident", "slate") }
         render json: { other: other.to_param, hidden: private_account.to_param }
