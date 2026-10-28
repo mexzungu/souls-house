@@ -147,6 +147,11 @@ if [ "$HOME_CLASS" = "imported" ]; then
     gosu agent python3 /home/agent/imported_home.py --hook-import-check
 fi
 gosu agent python3 /usr/local/share/helixkit-agent/runtime_hooks.py
+# A house resident's own workspace is trusted, or Chaos silently skips its
+# memory hooks (#631). Imported homes keep their reviewed operator step.
+if [ "$HOME_CLASS" != "imported" ]; then
+    gosu agent python3 /usr/local/share/helixkit-agent/runtime_hooks.py --house-trust
+fi
 
 # A portable home gets only its sync worker, never its host-owned scheduled jobs.
 if [ "$HOME_CLASS" = "imported" ]; then
