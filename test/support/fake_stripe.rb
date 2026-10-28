@@ -11,6 +11,7 @@ class FakeStripe
     def update(id, params = {}, *) = handlers.fetch(:update).call(id, params)
     def cancel(id, *) = handlers.fetch(:cancel).call(id)
     def search(params = {}, *) = handlers.fetch(:search).call(params)
+    def list(params = {}, *) = handlers.fetch(:list).call(params)
   end
 
   attr_reader :created_customers, :checkout_sessions, :portal_sessions, :expired_sessions, :session_states,
@@ -21,6 +22,7 @@ class FakeStripe
     @created_customers = []
     @checkout_sessions = []
     @portal_sessions = []
+    @portal_configurations = []
     @expired_sessions = []
     # Checkout session id => { status:, subscription: }, as Stripe would report it.
     @session_states = {}
@@ -191,8 +193,31 @@ class FakeStripe
       @portal_sessions << params
       Stripe::StripeObject.construct_from(url: "https://billing.stripe.com/p/session/test_1")
     })
-    Struct.new(:sessions).new(sessions)
+    configurations = Service.new(list: lambda { |params|
+      all = @portal_configurations
+      from = params[:starting_after] ? all.index { |row| row[:id] == params[:starting_after] } + 1 : 0
+      size = @portal_page_size || params[:limit] || 100
+      page = all[from, size] || []
+      Stripe::StripeObject.construct_from(object: "list", data: page.map(&:deep_dup), has_more: from + size < all.size)
+    })
+    Struct.new(:sessions, :configurations).new(sessions, configurations)
   end
+
+  # A portal configuration whose plan switcher offers these prices (none by
+  # default: the house's portal lets nobody switch plans). allowed: what the
+  # switcher may change; products: nil for a plan list Stripe didn't send.
+  def put_portal_configuration(prices: [], active: true, enabled: true, allowed: %w[price quantity], products: :from_prices)
+    product_list = products == :from_prices ? (prices.empty? ? [] : [ { product: "prod_test", prices: prices } ]) : products
+    update = { enabled: enabled, default_allowed_updates: allowed }
+    update[:products] = product_list unless product_list.nil?
+    @portal_configurations << {
+      id: "bpc_test_#{@portal_configurations.size + 1}", active: active, is_default: @portal_configurations.empty?,
+      features: { subscription_update: update, subscription_cancel: { enabled: true } }
+    }
+  end
+
+  # Pages of this size from configurations.list, to test pagination.
+  def portal_page_size!(size) = @portal_page_size = size
 
   def subscriptions = subscriptions_service
 
