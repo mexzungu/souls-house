@@ -396,6 +396,13 @@ export const moreFeatures = [
     icon: Circle,
   },
   {
+    key: 'odoo',
+    title: 'Odoo accounting reads',
+    description:
+      'Connect public-HTTPS Odoo 16–18 to read partners, invoices and payment status. Use a dedicated read-only user; the API key retains its user’s full rights.',
+    icon: Receipt,
+  },
+  {
     key: 'pipedrive',
     title: 'Pipedrive',
     description:

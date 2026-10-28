@@ -24,6 +24,7 @@ The runtime provides these helpers on `$PATH`:
 - `soulshouse-x`
 - `soulshouse-tailnet`
 - `soulshouse-ghost`
+- `soulshouse-odoo`
 - `soulshouse-integrations`
 
 Use each command's `--help` for its exact current syntax.
