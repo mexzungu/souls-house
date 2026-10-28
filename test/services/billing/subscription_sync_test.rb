@@ -87,6 +87,44 @@ class Billing::SubscriptionSyncTest < ActiveSupport::TestCase
     assert_equal "at_cost", entitlement.rate
     assert_equal BigDecimal("0"), entitlement.allowance_limit
     assert_equal "at_cost", entitlement.as_json[:rate]
+    # No grant and no redemption named on the purchase: accepted, and flagged.
+    flag = AuditLog.find_by!(action: "billing_rate_without_grant")
+    assert_equal @agent.account, flag.account
+    assert_equal "sub_1", flag.data["stripe_subscription_id"]
+  end
+
+  test "an at-cost subscription on a granted account, or one naming its redemption, is not flagged" do
+    BillingCode.redeem!(code: BillingCode.create!(code: "PEPE", effect: "at_cost", created_by: users(:site_admin_user)).code,
+      account: @agent.account, by: users(:user_1))
+    @stripe.put_subscription(id: "sub_1", agent: @agent, customer: "cus_1",
+      price: FakeStripe::Helpers::LIFE_AT_COST_PRICE, status: "active")
+    sync("sub_1")
+    assert_nil AuditLog.find_by(action: "billing_rate_without_grant")
+
+    @agent.account.billing_code_redemptions.sole.withdraw!(by: users(:site_admin_user))
+    @stripe.put_subscription(id: "sub_2", agent: agents(:code_reviewer), customer: "cus_1",
+      price: FakeStripe::Helpers::LIFE_AT_COST_PRICE, status: "active")
+    @stripe.subscription("sub_2")[:metadata]["redemption_id"] = BillingCodeRedemption.sole.id.to_s
+    sync("sub_2")
+    assert_nil AuditLog.find_by(action: "billing_rate_without_grant"), "a purchase that names its withdrawn grant is trusted"
+  end
+
+  test "a redemption named on the purchase counts only if it is this account's, for this rate" do
+    other = accounts(:team_account)
+    foreign = BillingCode.redeem!(code: BillingCode.create!(code: "THEIRS", effect: "at_cost", created_by: users(:site_admin_user)).code,
+      account: other, by: users(:user_1))
+    @stripe.put_subscription(id: "sub_1", agent: @agent, customer: "cus_1",
+      price: FakeStripe::Helpers::LIFE_AT_COST_PRICE, status: "active")
+    @stripe.subscription("sub_1")[:metadata]["redemption_id"] = foreign.id.to_s
+    sync("sub_1")
+    assert AuditLog.exists?(action: "billing_rate_without_grant"), "another account's grant is not this one's"
+
+    AuditLog.where(action: "billing_rate_without_grant").delete_all
+    @stripe.put_subscription(id: "sub_2", agent: agents(:code_reviewer), customer: "cus_1",
+      price: FakeStripe::Helpers::LIFE_AT_COST_PRICE, status: "active")
+    @stripe.subscription("sub_2")[:metadata]["redemption_id"] = "999999"
+    sync("sub_2")
+    assert AuditLog.exists?(action: "billing_rate_without_grant"), "a name that is no redemption counts for nothing"
   end
 
 end

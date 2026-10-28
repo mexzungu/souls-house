@@ -21,6 +21,13 @@ module Billing
     # Returns the Checkout URL to send the owner to.
     def url
       raise NotConfigured, "The #{@offer.name} plan has no Stripe price configured" unless @offer.purchasable?
+      # An existing resident at cost needs a Checkout whose attempt lifecycle
+      # (recovery of an uncertain create, under contention with other offers)
+      # has its own design; until then a new resident is created at cost
+      # through the wizard, where the grant is pinned on the birth order.
+      unless @offer.standard?
+        raise NotEligible, "Moving an existing resident to a plan at cost is coming. A new resident can be created at cost now."
+      end
 
       customer = BillingCustomer.for!(@agent.account, client: @client)
       entitlement = ResidentEntitlement.for_agent!(@agent)
