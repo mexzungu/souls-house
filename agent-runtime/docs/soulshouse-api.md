@@ -2254,7 +2254,8 @@ only; your home account only.
 ### Reading Odoo accounting with soulshouse-odoo
 
 The Odoo connector supports public-HTTPS Odoo 16–18 using legacy JSON-RPC.
-Odoo 19 JSON-2 is not supported by this first slice. External API access depends
+Only numbered releases are accepted; Odoo Online SaaS branches and Odoo 19
+JSON-2 are not supported by this first slice. External API access depends
 on the host's plan; edition and installed accounting modules are not checked.
 
 ```sh
@@ -2264,7 +2265,8 @@ soulshouse-odoo --connection svc_123 invoices
 ```
 
 These are bounded read operations for partners and customer invoices/vendor
-bills, including payment status. Missing accounting permissions/modules are an
+bills, including payment status, but not credit notes. This is not a complete
+account balance or reconciliation report. Missing accounting permissions/modules are an
 error, not an invitation to change permissions or create records.
 
 **The API key has its Odoo user's full rights.** The helper's read-only command

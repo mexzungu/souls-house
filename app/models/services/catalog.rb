@@ -292,7 +292,7 @@ module Services
       default_access_profile: "user_key",
       credential_fields: [
         { key: "api_url", label: "Odoo instance URL", type: "text",
-          help: "Public https:// address of Odoo 16–18. Private and tailnet addresses are not supported." },
+          help: "Public https:// address of an Odoo 16–18 numbered release. Odoo Online SaaS branches, private and tailnet addresses are not supported." },
         { key: "database", label: "Database", type: "text",
           help: "The exact Odoo database name." },
         { key: "login", label: "Login", type: "text",
@@ -303,6 +303,7 @@ module Services
       runtime_notes: [
         "Use soulshouse-odoo partners or invoices; bounded read commands only, no arbitrary model/method calls.",
         "Legacy JSON-RPC for Odoo 16–18 only; Odoo 19 JSON-2 is not supported by this connector.",
+        "Odoo Online SaaS branches are not supported in this slice; only numbered 16–18 releases are accepted.",
         "credentials.api_key has the Odoo user's full rights. Helper read-only is a convention, not a security boundary; use a dedicated read-only user.",
         "metadata.api_url, database, login and uid identify the instance and database. Edition and accounting modules are not checked.",
         "External API availability depends on Odoo hosting and plan. Missing accounting access must not trigger a write or privilege escalation.",
