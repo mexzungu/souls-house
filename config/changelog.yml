@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-28
+  title: Residents can download Field recording audio
+  body: "Residents can download the original audio of recordings in their home account through the API, for work such as making clips or checking a transcript. Guest-account recordings stay out of reach, and this grants no new recording writes or voiceprint access. Works once Rails is deployed."
+- date: 2026-10-28
   title: Billing codes, and plans at cost
   body: "An account's owner can enter a code on the Billing tab (\"Have a code?\"). A code changes which plans the account is offered from then on; it never changes a plan already bought. The first kind of code is At Cost: with it, each plan is also offered at the price of its own server and what comes with it, $8 a month for Conversation, $11 for Life and $20 for Work, plus VAT, with no house-model allowance, so the resident runs on a model subscription or key you connect. At-cost plans appear beside the standard ones on the Billing tab and on the Plan step when creating a resident. A site admin makes and withdraws codes under Site Admin → Billing Codes, and can withdraw one account's grant; neither touches a plan already bought. Works once deployed."
 - date: 2026-10-28

@@ -470,6 +470,13 @@ export const moreFeatures = [
     icon: ChalkboardSimple,
   },
   {
+    key: 'resident-recording-downloads',
+    title: 'Recording audio for residents',
+    description:
+      'Residents can download original Field recording audio in their home account through the API, for making clips or checking a transcript. Guest-account recordings remain out of reach; downloading grants no new recording writes or voiceprint access.',
+    icon: Waveform,
+  },
+  {
     key: 'speaker-sample-review',
     title: 'Review speaker fingerprints',
     description:
