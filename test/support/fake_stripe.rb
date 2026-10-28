@@ -90,6 +90,12 @@ class FakeStripe
       retrieve: ->(id) { construct(stored_subscription(id)) },
       create: lambda { |params, opts|
         if (existing = @subscriptions.values.find { |sub| sub[:idempotency_key] && sub[:idempotency_key] == opts[:idempotency_key] })
+          # Stripe replays a key only for identical parameters; a replay
+          # whose payload moved in any way is refused, not silently honoured.
+          if params.except(:expand) != existing[:create_params]
+            raise Stripe::IdempotencyError.new("Keys for idempotent requests can only be used with the same parameters they " \
+                                               "were first used with. #{params.except(:expand)} vs #{existing[:create_params]}")
+          end
           next construct(with_invoice(existing))
         end
         if @create_fault
@@ -103,6 +109,7 @@ class FakeStripe
           id: id, object: "subscription", status: "incomplete", customer: params[:customer],
           cancel_at_period_end: false, metadata: params[:metadata].transform_keys(&:to_s),
           default_payment_method: params[:default_payment_method], idempotency_key: opts[:idempotency_key],
+          create_params: params.except(:expand).deep_dup,
           items: { object: "list", data: params[:items].map { |item| { price: { id: item[:price] }, current_period_end: 1.month.from_now.to_i } } }
         }
         raise error if error
@@ -209,11 +216,16 @@ class FakeStripe
     CONVERSATION_PRICE = "price_test_conversation".freeze
     LIFE_PRICE = "price_test_life".freeze
     WORK_PRICE = "price_test_work".freeze
+    CONVERSATION_AT_COST_PRICE = "price_test_conversation_at_cost".freeze
+    LIFE_AT_COST_PRICE = "price_test_life_at_cost".freeze
+    WORK_AT_COST_PRICE = "price_test_work_at_cost".freeze
 
     STRIPE_ENV = {
       "STRIPE_SECRET_KEY" => "sk_test_fake", "STRIPE_WEBHOOK_SECRET" => "whsec_test_fake",
       "STRIPE_PRICE_CONVERSATION" => CONVERSATION_PRICE, "STRIPE_PRICE_LIFE" => LIFE_PRICE,
-      "STRIPE_PRICE_WORK" => WORK_PRICE
+      "STRIPE_PRICE_WORK" => WORK_PRICE,
+      "STRIPE_PRICE_CONVERSATION_AT_COST" => CONVERSATION_AT_COST_PRICE, "STRIPE_PRICE_LIFE_AT_COST" => LIFE_AT_COST_PRICE,
+      "STRIPE_PRICE_WORK_AT_COST" => WORK_AT_COST_PRICE
     }.freeze
 
     def self.included(base)
