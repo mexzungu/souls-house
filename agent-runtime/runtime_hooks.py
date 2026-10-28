@@ -8,10 +8,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
+import sys
 import tempfile
+import time
 
 MANIFEST = 'house-hooks-v1.json'
+TRUST_COLUMNS = ['project_path', 'trust_level', 'created_at', 'updated_at']
 
 
 def command(home, project, *args):
@@ -94,9 +98,56 @@ def prepare(home, project, run=command, global_source=None):
     save(marker, record)
 
 
-def main():
+def ensure_house_trust(home, project):
+    """Mark a house resident's own workspace trusted in this Chaos home.
+
+    Chaos runs project hooks (the memory recall and journal reflexes) only for
+    a trusted project, and skips them silently otherwise. Chaos has no
+    headless trust command, so this writes the one row its trust prompt
+    writes, as the README's headless method does. Births after 2026-09-30
+    never got the row and ran without their hooks (#631).
+
+    Only ever inserts: an existing row, including a resident's own
+    'untrusted', is left as it is. Never called for imported homes, whose
+    trust is a reviewed operator step.
+    """
+    home, project = Path(home).resolve(), Path(project).resolve()
+    path = home / 'chaos.sqlite'
+    if not path.exists():
+        return 'skipped (no Chaos database yet)'
+    db = sqlite3.connect(str(path), timeout=30)
+    db.isolation_level = None
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        columns = [row[1] for row in db.execute('PRAGMA table_info(project_trust)')]
+        if columns != TRUST_COLUMNS:
+            db.execute('ROLLBACK')
+            raise RuntimeError('Unexpected Chaos trust schema; workspace trust not recorded')
+        row = db.execute('SELECT trust_level FROM project_trust WHERE project_path = ?',
+                         (str(project),)).fetchone()
+        if row is None:
+            now = int(time.time())
+            db.execute('INSERT INTO project_trust VALUES (?, ?, ?, ?)',
+                       (str(project), 'trusted', now, now))
+        db.execute('COMMIT')
+        return 'granted' if row is None else row[0]
+    finally:
+        db.close()
+
+
+def homes():
     home = Path(os.environ.get('CHAOS_HOME', str(Path.home() / '.chaos')))
+    oauth = home / 'oauth-runtime'
+    return [home] + ([oauth] if oauth.is_dir() else [])
+
+
+def main():
     project = Path(os.environ['AGENT_REPO_PATH'])
+    if sys.argv[1:] == ['--house-trust']:
+        for home in homes():
+            print('Workspace trust: ' + ensure_house_trust(home, project))
+        return
+    home = Path(os.environ.get('CHAOS_HOME', str(Path.home() / '.chaos')))
     prepare(home, project)
     oauth = home / 'oauth-runtime'
     if oauth.is_dir():
