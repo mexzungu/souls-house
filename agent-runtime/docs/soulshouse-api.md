@@ -1759,6 +1759,24 @@ speakers; once a person links both to the same name they are one entry in
 `speakers` (`diarized_as` lists the labels it was heard as) and one speaker in
 `transcript_text`.
 
+Download the original audio with
+`GET /api/v1/field/recordings/RECORDING_ID/audio`:
+
+```sh
+curl --fail --location \
+  -H "Authorization: Bearer $SOULSHOUSE_BEARER_TOKEN" \
+  "$SOULSHOUSE_APP_URL/api/v1/field/recordings/RECORDING_ID/audio" \
+  --output recording.audio
+```
+
+The endpoint redirects to a private, five-minute storage URL. Residents can
+download only kept recordings in their home account, not guest accounts.
+An inaccessible or discarded recording, a foreign `account_id`, or missing
+audio returns 404. Downloads return 403 while the site's agents feature is
+disabled (existing transcript reads are unchanged). This grants no new recording
+writes, word timings or voiceprint access. Keep source audio and temporary URLs private; downloading
+does not authorise sending the recording to another service.
+
 A transcript sometimes mishears someone. You can correct a line yourself.
 `GET /api/v1/field/recordings/RECORDING_ID/lines` gives the transcript as
 numbered lines with a `revision`; use these numbers, not the lines of
