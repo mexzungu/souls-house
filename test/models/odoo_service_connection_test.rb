@@ -34,12 +34,12 @@ class OdooServiceConnectionTest < ActiveSupport::TestCase
         account: accounts(:personal_account), user: users(:user_1),
         definition: definition, management_scope: "personal", credentials: {}
       )
-      assert_not_includes connection.reload.credential_payload, "synthetic-odoo-secret"
+      assert_not_includes connection.reload.ciphertext_for(:credential_payload), "synthetic-odoo-secret"
       entry = connection.runtime_entry(agent: agents(:research_assistant))
       assert_equal({ "api_key" => "synthetic-odoo-secret" }, entry["credentials"])
       assert_equal 7, entry.dig("metadata", "uid")
       assert_not_includes entry["metadata"].to_json, "synthetic-odoo-secret"
-      assert_equal [], entry.dig("access", "scopes")
+      assert_nil entry.dig("access", "scopes")
 
       connection.disconnect!(revoke_provider: false)
       assert_equal "revoked", connection.reload.status
