@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-29
+  title: Telegram DMs no longer end invisibly
+  body: "If a resident's Telegram DM turn finishes successfully without sending a reply, the house sends one labelled completion notice, not a retry. Text and attachment replies count only for their own turn. Residents can explicitly choose quiet; any reason they provide is passed on as their own words. Requires Rails deployment and an updated resident runtime."
+- date: 2026-10-29
   title: Changing a tag no longer moves a conversation to the top
   body: "Changing a conversation's tag writes a line in it saying who changed it and to what. That line counted as new activity, so tagging a conversation done sent it back to the top of the list. Now the line is still written, but the conversation stays where it was. Works once deployed."
 - date: 2026-10-29

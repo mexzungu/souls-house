@@ -12,6 +12,7 @@ class TelegramMessage < ApplicationRecord
   }.freeze
 
   belongs_to :telegram_subscription, touch: true
+  belongs_to :agent_runtime_interaction, optional: true
 
   has_one_attached :media
   has_many_attached :preview_frames

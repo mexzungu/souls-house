@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_29_090000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_29_093000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -344,6 +344,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_29_090000) do
     t.jsonb "wake_source_kinds", default: [], null: false
     t.text "quiet_reason"
     t.datetime "quiet_reason_at"
+    t.datetime "telegram_completion_notice_at"
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -2640,6 +2641,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_29_090000) do
     t.datetime "wake_enqueued_at"
     t.bigint "reply_to_telegram_message_id"
     t.bigint "sender_telegram_user_id"
+    t.bigint "agent_runtime_interaction_id"
+    t.index ["agent_runtime_interaction_id"], name: "index_telegram_messages_on_agent_runtime_interaction_id"
     t.index ["telegram_subscription_id", "telegram_message_id"], name: "idx_on_telegram_subscription_id_telegram_message_id_9eb10802be", unique: true, where: "(telegram_message_id IS NOT NULL)"
     t.index ["telegram_subscription_id"], name: "index_telegram_messages_on_telegram_subscription_id"
   end
@@ -3105,6 +3108,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_29_090000) do
   add_foreign_key "stone_revisions", "stones", on_delete: :cascade
   add_foreign_key "stone_revisions", "users"
   add_foreign_key "stones", "chats", on_delete: :cascade
+  add_foreign_key "telegram_messages", "agent_runtime_interactions"
   add_foreign_key "telegram_messages", "telegram_subscriptions"
   add_foreign_key "telegram_subscriptions", "agents"
   add_foreign_key "telegram_subscriptions", "safeguard_detections", column: "pending_safeguard_detection_id", on_delete: :nullify

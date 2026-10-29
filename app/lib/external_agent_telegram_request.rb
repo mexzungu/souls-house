@@ -36,6 +36,7 @@ class ExternalAgentTelegramRequest
       last_included_message_id: last_message.id,
       provider_auth_mode: auth_mode
     ) do |interaction|
+      @interaction = interaction
       ChaosTriggerClient.new(endpoint_url, agent.trigger_bearer_token).request_response(
         interaction: interaction,
         completion_context: { telegram_subscription_id: subscription.id, safeguard_roll_id: pending_safeguard_detection&.id },
@@ -114,6 +115,7 @@ class ExternalAgentTelegramRequest
       history_cursor: last_message.to_param,
       runtime_session_generation: subscription.runtime_session_generation
     }
+    payload[:runtime_run_id] = @interaction.run_id if @interaction
     payload[:roll_session] = true if pending_safeguard_detection
     payload[:media] = last_message.media_json if telegram_messages.one? && last_message.media?
     payload
@@ -155,6 +157,7 @@ class ExternalAgentTelegramRequest
           printf '%s\n' 'your reply' | soulshouse-send-telegram --reply-to #{subscription.to_param}
 
       You can verify the ground-truth bytes at GET /api/v1/telegram_conversations/#{subscription.to_param}.
+      If you intentionally choose not to reply, declare it with `soulshouse-quiet-reason --telegram #{subscription.to_param}` (optionally pipe your own reason through stdin). Otherwise, a successful turn without a delivered reply produces a house-labelled completion notice. An authored reason is sent faithfully to this DM, labelled as yours.
 
       RECENT TELEGRAM TRANSCRIPT FROM DATABASE:
       #{transcript_text}
@@ -204,6 +207,7 @@ class ExternalAgentTelegramRequest
       #{messages_prompt}
 
       Reply by piping stdin to `soulshouse-send-telegram --reply-to #{subscription.to_param}` if appropriate. Stdout is diagnostic only.
+      To choose intentional quiet, use `soulshouse-quiet-reason --telegram #{subscription.to_param}`; optionally pipe your own reason. Without that declaration or a delivered reply, the house sends a completion-without-reply notice. Any reason you supply is sent to this DM, labelled as yours.
       History cursor: #{last_message.to_param}
       TEXT
     ].compact_blank.join("\n\n")

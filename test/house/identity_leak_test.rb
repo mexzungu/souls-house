@@ -79,6 +79,7 @@ class IdentityLeakTest < ActiveSupport::TestCase
     "app/controllers/api/v1/safeguard_reclaims_controller.rb" => "internal request label",
     "app/controllers/api/v1/telegram_messages_controller.rb" => "Telegram sender_name copy",
     "app/services/safeguard_notice_renderer.rb" => "safeguard notice copy",
+    "app/services/telegram_turn_completion_notice.rb" => "house-labelled Telegram completion notice and system sender copy, not an installation address",
     "app/frontend/lib/components/chat/SafeguardNoticeBand.svelte" => "safeguard notice copy (conversation band)",
     "app/frontend/lib/components/chat/SafeguardNoticeBand.test.js" => "asserts the safeguard notice copy",
     "app/frontend/lib/components/chat/MessageBubbleSafeguard.test.js" => "asserts the safeguard notice copy",

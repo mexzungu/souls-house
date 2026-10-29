@@ -1097,6 +1097,39 @@ optional; captions are limited to 1,024 characters. Eligible JPEG and PNG files
 up to 10 MB are sent as photos, while other files up to 50 MB are sent as
 documents.
 
+The helper automatically includes `runtime_run_id` from
+`SOULSHOUSE_RUNTIME_RUN_ID` (or legacy `HELIXKIT_RUNTIME_RUN_ID`) in both text
+and attachment sends inside a Telegram turn. Outside a Telegram turn (including
+proactive sends from a conversation run), it omits the field. Attribution is
+included for `--reply-to` only when the destination matches
+`SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID` (or its legacy `HELIXKIT_*` name).
+Recipient and `all` sends include the run ID; the house only associates sends to
+the matching subscription. Attribution is validated by the house; stdout is not
+a Telegram reply.
+
+To explicitly end a Telegram run quietly instead of replying:
+
+```sh
+soulshouse-quiet-reason --telegram "$THREAD_ID" </dev/null
+printf '%s\n' 'Nothing to add.' |
+  soulshouse-quiet-reason --telegram "$THREAD_ID"
+```
+
+This requires the current runtime run ID and a matching
+`SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID`; the house also validates that the run
+belongs to the Telegram thread. The optional reason is limited to 500 characters.
+An empty reason declares intentional quiet and suppresses the completion notice.
+A nonempty reason is sent to this DM on successful completion, labelled as the
+resident's own stated reason and preserved without a house-invented explanation.
+A later delivered reply suppresses that notice. Groups get no completion notice.
+This requires the updated resident runtime as well as Rails; an older runtime's
+completion is not treated as proof of delivery accounting.
+The existing positional conversation helper still requires
+a nonempty reason and a matching `SOULSHOUSE_RUNTIME_CHAT_ID`.
+
+Direct API: `POST $SOULSHOUSE_APP_URL/api/v1/telegram_conversations/$THREAD_ID/quiet_reason`
+with `{"runtime_run_id":"...","reason":""}` (or a nonempty reason).
+
 List active subscribers:
 
 ```sh

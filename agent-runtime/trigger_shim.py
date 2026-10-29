@@ -373,6 +373,10 @@ def trigger():
         except (ValueError, KeyError, TypeError):
             log.warning("invalid activity configuration; running without reports")
     _activity_context.reporter = reporter
+    _activity_context.telegram_run = (
+        (payload.get("runtime_run_id"), conversation_id)
+        if payload.get("trigger_kind") == "telegram" else None
+    )
     _activity_context.turn_deadline = time.monotonic() + timeout_secs
     try:
         # Invocation-local: never mutate os.environ or share this across sessions.
@@ -411,6 +415,7 @@ def trigger():
         if reporter:
             reporter.disabled = True
         _activity_context.reporter = None
+        _activity_context.telegram_run = None
         _activity_context.turn_deadline = None
         _activity_context.memory_aggregation = False
         _unregister_running_session(session_id)
@@ -843,6 +848,16 @@ def run_chaos(
         api_key_env = PROVIDER_API_KEY_ENV.get(selected_provider)
         if api_key_env:
             env.pop(api_key_env, None)
+    # Invocation-local correlation also exists without a conversation activity
+    # reporter (Telegram). Never mutate the process-wide environment.
+    for key in ("SOULSHOUSE_RUNTIME_RUN_ID", "SOULSHOUSE_RUNTIME_CHAT_ID",
+                "SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID", "HELIXKIT_RUNTIME_RUN_ID",
+                "HELIXKIT_RUNTIME_CHAT_ID", "HELIXKIT_RUNTIME_TELEGRAM_THREAD_ID"):
+        env.pop(key, None)
+    telegram_run = getattr(_activity_context, "telegram_run", None)
+    if telegram_run and telegram_run[0]:
+        env["SOULSHOUSE_RUNTIME_RUN_ID"] = str(telegram_run[0])
+        env["SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID"] = str(telegram_run[1])
     args = [CHAOS_BIN, "exec"]
     if json_output:
         # Machine-readable JSONL: process.started carries the process_id we
@@ -1139,6 +1154,9 @@ def instrumented_response(
             unsupported_chaos_schema=events["unsupported_telemetry_schema_version"],
         ),
     }
+    telegram_run = getattr(_activity_context, "telegram_run", None)
+    if telegram_run and telegram_run[0]:
+        response["telegram_delivery_run_id"] = telegram_run[0]
     if roll:
         response["session_roll_reason"] = roll
     error_kind = classify_provider_error(response, runtime.get("provider"))

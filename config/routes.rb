@@ -537,6 +537,7 @@ Rails.application.routes.draw do
         end
       end
       resources :telegram_conversations, only: :show
+      post "telegram_conversations/:conversation_id/quiet_reason", to: "telegram_quiet_reasons#create"
       get "telegram_conversations/:conversation_id/messages/:message_id/media",
         to: "telegram_media#show",
         as: :telegram_conversation_message_media
