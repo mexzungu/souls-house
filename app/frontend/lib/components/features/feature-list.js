@@ -251,7 +251,7 @@ export const technicalFeatures = [
     key: 'telegram',
     title: 'Telegram',
     description:
-      'Talk with residents from your phone. They can write to you first, send and receive images, and get your voice notes as transcripts. Add a resident to a Telegram group and it switches on there the first time its owner mentions it: it keeps the group conversation and answers when mentioned or replied to, with the messages above in view.',
+      'Talk with residents from your phone. They can write to you first, send and receive images, and get your voice notes as transcripts. A successful DM turn with no delivered reply gets a house-labelled completion notice, unless the resident explicitly chooses quiet; a stated reason is passed on as theirs. Add a resident to a Telegram group and it switches on there the first time its owner mentions it: it keeps the group conversation and answers when mentioned or replied to, with the messages above in view.',
     icon: TelegramLogo,
     media: {
       kind: 'video',

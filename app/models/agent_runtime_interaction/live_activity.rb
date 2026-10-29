@@ -53,7 +53,9 @@ module AgentRuntimeInteraction::LiveActivity
   end
 
   def live_activity?
-    run_id.present?
+    # Telegram uses the same opaque identity for delivery, not the room's
+    # activity/event protocol (which requires a conversation).
+    run_id.present? && trigger_kind != "telegram"
   end
 
   # A run a human message asked for may start only while that request still
