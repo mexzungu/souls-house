@@ -403,6 +403,13 @@ export const moreFeatures = [
     icon: Funnel,
   },
   {
+    key: 'twenty',
+    title: 'Twenty CRM',
+    description:
+      'Connect a public HTTPS Twenty instance and let chosen residents find people, companies and opportunities. The helper offers reads; the API key retains its actual Twenty permissions.',
+    icon: Funnel,
+  },
+  {
     key: 'honeybadger',
     title: 'Honeybadger',
     description:
