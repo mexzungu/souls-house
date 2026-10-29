@@ -58,6 +58,7 @@ module Api
 
       test "text and media-only replies link to their exact Telegram turn" do
         run = telegram_run
+        neighbouring_turn = telegram_run
         fake_ok = OpenStruct.new(body: { "ok" => true, "result" => { "message_id" => 78 } }.to_json)
         Net::HTTP.stub :post, fake_ok do
           post api_v1_telegram_messages_url,
@@ -74,6 +75,7 @@ module Api
         end
         assert_response :created
         assert_equal 2, run.linked_telegram_messages.where.not(telegram_message_id: nil).count
+        assert_empty neighbouring_turn.linked_telegram_messages
       end
 
       test "recipient sends link only the triggering thread and reject finished or foreign runs" do
