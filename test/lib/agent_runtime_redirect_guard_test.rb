@@ -62,9 +62,9 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
       "s = a.refresh(); print(s, file=sys.stderr); sys.exit(0 if s == 'fetched' else 1)" }
   }.freeze
 
-  # Guarded before #502 and covered by their own tests; the static check
-  # still holds them to the rule.
-  GUARDED_EARLIER = %w[soulshouse-ghost soulshouse-integrations soulshouse-stone memory_client.py runtime_activity.py].freeze
+  # Covered by their own redirect-refusal tests (including Twenty added after
+  # #502); the static check still holds them to the rule.
+  GUARDED_EARLIER = %w[soulshouse-ghost soulshouse-twenty soulshouse-integrations soulshouse-stone memory_client.py runtime_activity.py].freeze
 
   def self.credential_senders
     Dir.glob(RUNTIME.join("**/*").to_s).select { |path| File.file?(path) }.filter_map do |path|
@@ -117,7 +117,7 @@ class AgentRuntimeRedirectGuardTest < ActiveSupport::TestCase
     end
   end
 
-  test "every credential sender is either driven end to end here or was guarded earlier" do
+  test "every credential sender is either driven end to end here or covered by dedicated tests" do
     assert_equal self.class.credential_senders, (HELPERS.keys + GUARDED_EARLIER).sort
   end
 
