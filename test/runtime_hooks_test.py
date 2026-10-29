@@ -80,6 +80,66 @@ class RuntimeHooksTest(unittest.TestCase):
 
 
 
+class HouseTrustTest(unittest.TestCase):
+    SCHEMA = ('CREATE TABLE project_trust (project_path TEXT PRIMARY KEY NOT NULL, '
+              'trust_level TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)')
+
+    def setUp(self):
+        import sqlite3
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name) / 'home'
+        self.project = Path(self.tmp.name) / 'repo'
+        self.home.mkdir()
+        self.project.mkdir()
+        self.db = self.home / 'chaos.sqlite'
+        sqlite3.connect(str(self.db)).execute(self.SCHEMA)
+
+    def rows(self):
+        import sqlite3
+        return sqlite3.connect(str(self.db)).execute('SELECT project_path, trust_level FROM project_trust').fetchall()
+
+    def test_grants_the_workspace_once(self):
+        self.assertEqual(s.ensure_house_trust(self.home, self.project), 'granted')
+        self.assertEqual(self.rows(), [(str(self.project.resolve()), 'trusted')])
+        self.assertEqual(s.ensure_house_trust(self.home, self.project), 'trusted')
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_never_overrides_a_resident_untrusting_their_workspace(self):
+        import sqlite3
+        db = sqlite3.connect(str(self.db))
+        db.execute('INSERT INTO project_trust VALUES (?, ?, 1, 1)', (str(self.project.resolve()), 'untrusted'))
+        db.commit()
+        self.assertEqual(s.ensure_house_trust(self.home, self.project), 'untrusted')
+        self.assertEqual(self.rows(), [(str(self.project.resolve()), 'untrusted')])
+
+    def test_unknown_schema_writes_nothing(self):
+        import sqlite3
+        db = sqlite3.connect(str(self.db))
+        db.execute('DROP TABLE project_trust')
+        db.execute('CREATE TABLE project_trust (project_path TEXT PRIMARY KEY, trust_level TEXT)')
+        db.commit()
+        with self.assertRaisesRegex(RuntimeError, 'schema'):
+            s.ensure_house_trust(self.home, self.project)
+        self.assertEqual(sqlite3.connect(str(self.db)).execute('SELECT * FROM project_trust').fetchall(), [])
+
+    def test_no_database_yet_is_skipped(self):
+        self.db.unlink()
+        self.assertIn('skipped', s.ensure_house_trust(self.home, self.project))
+
+    def test_entrypoint_creates_house_oauth_home_before_provisioning(self):
+        text = (Path(s.__file__).with_name('entrypoint.sh')).read_text()
+        mk = text.index('mkdir -p "$CHAOS_HOME/oauth-runtime"')
+        self.assertIn('if [ "$HOME_CLASS" != "imported" ]; then', text[mk - 120:mk])
+        self.assertLess(mk, text.index('runtime_settings.py\n'))
+        self.assertLess(mk, text.index('runtime_hooks.py\n'))
+        self.assertLess(text.index('HOME_CLASS="$('), mk)
+
+    def test_entrypoint_grants_only_for_house_homes(self):
+        text = (Path(s.__file__).with_name('entrypoint.sh')).read_text()
+        block = text[text.index('runtime_hooks.py --house-trust') - 200:text.index('runtime_hooks.py --house-trust')]
+        self.assertIn('if [ "$HOME_CLASS" != "imported" ]; then', block)
+
 @unittest.skipUnless(__import__('os').environ.get('CHAOS_TEST_BIN'), 'set CHAOS_TEST_BIN for real binary tests')
 class RealRuntimeHooksTest(unittest.TestCase):
     def test_actual_import_disable_delete_and_restart(self):
@@ -106,6 +166,57 @@ class RealRuntimeHooksTest(unittest.TestCase):
             s.command(home, project, '--yes', 'remove', ident)
             s.prepare(home, project)
             self.assertEqual(json.loads(s.command(home, project, 'list')), [])
+
+    def test_actual_project_hook_runs_only_once_workspace_is_trusted(self):
+        import os
+        import subprocess
+        from unittest.mock import patch
+        config_spec = importlib.util.spec_from_file_location('runtime_settings', Path(s.__file__).with_name('runtime_settings.py'))
+        config = importlib.util.module_from_spec(config_spec)
+        config_spec.loader.exec_module(config)
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CHAOS_BIN': os.environ['CHAOS_TEST_BIN']}):
+            home, project = Path(td) / 'home', Path(td) / 'repo'
+            (project / '.chaos').mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(project)], check=True)
+            (project / '.chaos/hooks.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'true'}]}]}}))
+            config.prepare(home)
+            s.prepare(home, project)
+            before = json.loads(s.command(home, project, 'list'))[0]['inactive_reason']
+            self.assertIn('not trusted', before or '')
+            self.assertEqual(s.ensure_house_trust(home, project), 'granted')
+            self.assertIsNone(json.loads(s.command(home, project, 'list'))[0]['inactive_reason'])
+    def test_fresh_birth_then_first_subscription_turn_has_trusted_hooks(self):
+        """No oauth-runtime before boot. Boot as the entrypoint does for a house
+        home; the subscription home the shim then selects already has settings,
+        the project hook and trust, before its first turn."""
+        import os
+        import subprocess
+        from unittest.mock import patch
+        config_spec = importlib.util.spec_from_file_location('runtime_settings', Path(s.__file__).with_name('runtime_settings.py'))
+        config = importlib.util.module_from_spec(config_spec)
+        config_spec.loader.exec_module(config)
+        with tempfile.TemporaryDirectory() as td:
+            home, project = Path(td) / 'home', Path(td) / 'repo'
+            (project / '.chaos').mkdir(parents=True)
+            subprocess.run(['git', 'init', '-q', str(project)], check=True)
+            (project / '.chaos/hooks.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'true'}]}]}}))
+            home.mkdir()
+            self.assertFalse((home / 'oauth-runtime').exists())
+            env = {'CHAOS_BIN': os.environ['CHAOS_TEST_BIN'], 'CHAOS_HOME': str(home), 'AGENT_REPO_PATH': str(project)}
+            with patch.dict(os.environ, env):
+                (home / 'oauth-runtime').mkdir()          # entrypoint, house homes
+                config.main()                              # runtime_settings.py
+                s.main()                                   # runtime_hooks.py
+                with patch.object(s.sys, 'argv', ['runtime_hooks.py', '--house-trust']):
+                    s.main()
+            oauth = home / 'oauth-runtime'                 # what _oauth_account_env selects
+            with patch.dict(os.environ, {'CHAOS_BIN': os.environ['CHAOS_TEST_BIN']}):
+                rows = json.loads(s.command(oauth, project, 'list'))
+            project_rows = [r for r in rows if r['definition'].get('project')]
+            self.assertTrue(project_rows)
+            for row in project_rows:
+                self.assertTrue(row['enabled'])
+                self.assertIsNone(row['inactive_reason'])
 
 
 if __name__ == '__main__':

@@ -49,6 +49,10 @@ test('the homepage links to a two-column features page with an expandable index'
   await dropboxRow.click();
   await expect(detail).toBeVisible();
 
+  const audioRow = page.getByTestId('feature-index').getByText('Recording audio for residents', { exact: true });
+  await audioRow.click();
+  await expect(page.getByText('Residents can download original Field recording audio', { exact: false })).toBeVisible();
+
   await expect(page.getByRole('heading', { name: 'Recently changed' })).toBeVisible();
   await expect(page.getByTestId('changelog-entry').first()).toBeVisible();
   await expect(page.getByText('A voice', { exact: true })).toHaveCount(0);
