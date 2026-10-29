@@ -242,7 +242,7 @@
         <ArrowLeft class="size-4" /> Recordings
       </Link>
       <!-- Previous and next follow the Recordings list (newest first). On a
-           laptop, hovering shows a second, yellow pair underneath that skips to
+           laptop, hovering shows a second, pale amber pair (the unnamed-speakers badge colour) underneath that skips to
            the nearest recording with a speaker still to name. -->
       <nav class="group relative" aria-label="Other recordings" data-testid="recording-neighbours">
         <div class="flex items-center gap-1">
@@ -282,7 +282,7 @@
                 <Link
                   href={neighbours.previous_waiting.url}
                   title={`${neighbours.previous_waiting.title}: has speakers to name`}
-                  class="text-xs inline-flex items-center gap-1 rounded-md px-2 py-1 bg-yellow-300 text-yellow-950 hover:bg-yellow-400 shadow-sm"
+                  class="text-xs inline-flex items-center gap-1 rounded-md px-2 py-1 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
                   data-testid="recording-previous-waiting">
                   <CaretLeft class="size-3.5" /> Previous unnamed
                 </Link>
@@ -291,7 +291,7 @@
                 <Link
                   href={neighbours.next_waiting.url}
                   title={`${neighbours.next_waiting.title}: has speakers to name`}
-                  class="text-xs inline-flex items-center gap-1 rounded-md px-2 py-1 bg-yellow-300 text-yellow-950 hover:bg-yellow-400 shadow-sm"
+                  class="text-xs inline-flex items-center gap-1 rounded-md px-2 py-1 bg-amber-100 text-amber-800 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:hover:bg-amber-900"
                   data-testid="recording-next-waiting">
                   Next unnamed <CaretRight class="size-3.5" />
                 </Link>
