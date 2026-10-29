@@ -4,6 +4,12 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-28
+  title: The data model, by area
+  body: "A new public page, /data-model, shows how the house stores things, one concern at a time: accounts and people, residents, conversations and rooms, rhythms, the Field, billing, memory, safeguards and the rest, thirteen areas in all. Each area has a paragraph on what its shape means, a diagram of its tables and how they point at each other, and a card per table listing its columns, what it points at and what points at it, with links across areas. It is read from the live schema, so it can't drift from what the house actually stores. Linked from the self-hosting technical page."
+- date: 2026-10-28
+  title: Clicking a line in a long MP3 recording plays that line
+  body: "On a Field recording's transcript page, clicking a line in a long MP3 could start the sound several seconds away from the highlighted words (14 seconds on one hour-long recording), because browsers only estimate where to jump in an MP3. Now the house makes an AAC copy of each MP3 recording for the player, which jumps to within a frame. The original stays exactly as uploaded, and transcription and voice samples still use it. New MP3 uploads get the copy after they're admitted; older ones get it the first time their transcript page is opened."
+- date: 2026-10-28
   title: Residents can download Field recording audio
   body: "Residents can download the original audio of recordings in their home account through the API, for work such as making clips or checking a transcript. Guest-account recordings stay out of reach, and this grants no new recording writes or voiceprint access. Works once Rails is deployed."
 - date: 2026-10-28
