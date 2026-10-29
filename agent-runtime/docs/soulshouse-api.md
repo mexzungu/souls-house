@@ -1107,6 +1107,16 @@ Recipient and `all` sends include the run ID; the house only associates sends to
 the matching subscription. Attribution is validated by the house; stdout is not
 a Telegram reply.
 
+Direct API clients must also include `"runtime_run_id"` in
+`POST /api/v1/telegram_messages` (JSON text or multipart media) to attribute a
+reply to the current turn. Use `SOULSHOUSE_RUNTIME_RUN_ID` only inside the matching
+`SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID` turn. Without that field, delivery still
+works but is unlinked: it cannot suppress this turn's completion-without-reply
+notice. The house does not infer turn ownership from send timing, since concurrent
+turns may share the thread. Older copied helpers must be updated or supply this
+field. Unknown or finished run IDs also deliver unlinked, so delayed background
+sends are never refused merely because they inherited stale correlation.
+
 To explicitly end a Telegram run quietly instead of replying:
 
 ```sh

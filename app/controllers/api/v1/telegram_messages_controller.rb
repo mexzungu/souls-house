@@ -27,10 +27,7 @@ module Api
         return render json: { error: "No matching active Telegram subscribers for this resident" }, status: :not_found if subscriptions.empty?
 
         @runtime_interaction = if params[:runtime_run_id].present?
-          current_api_agent.agent_runtime_interactions.find_by!(run_id: params[:runtime_run_id], trigger_kind: "telegram")
-        end
-        if @runtime_interaction&.finished_at
-          return render json: { error: "That Telegram turn has finished" }, status: :unprocessable_entity
+          current_api_agent.agent_runtime_interactions.find_by(run_id: params[:runtime_run_id], trigger_kind: "telegram")
         end
 
         content_type = detected_content_type(media) if media.present?
@@ -129,9 +126,10 @@ module Api
         # Serialize delivery accounting against this turn's completion, never
         # against another turn in the same thread. A recipient/all send may
         # reach other threads, but only its triggering thread gets the link.
+        # The lock spans transport (including media) so completion cannot race
+        # receipt storage. Stale inherited correlation must never block delivery.
         if @runtime_interaction
           return @runtime_interaction.with_lock do
-            raise TelegramNotifiable::TelegramError, "Telegram turn has finished" if @runtime_interaction.finished_at
             deliver_linked_response(subscription, text, media, media_kind, content_type, sender_name: sender_name)
           end
         end
@@ -172,7 +170,8 @@ module Api
           media_status: ("ready" if media.present?),
           media_metadata: media.present? ? media_metadata(media, content_type) : {},
           sender_name: sender_name,
-          agent_runtime_interaction: (@runtime_interaction if @runtime_interaction&.conversation_obfuscated_id == subscription.to_param),
+          agent_runtime_interaction: (@runtime_interaction if @runtime_interaction && !@runtime_interaction.finished_at &&
+            @runtime_interaction.conversation_obfuscated_id == subscription.to_param),
           sent_at: Time.current
         )
 
