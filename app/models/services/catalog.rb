@@ -280,19 +280,19 @@ module Services
 
     Services::Definition.register(
       key: "odoo",
-      name: "Odoo (16–18)",
+      name: "Odoo (16–19)",
       management_scopes: %w[personal],
       connection_method: "credentials",
       credential_strategy: "static",
       api_origins: [],
       documentation: [
-        "https://www.odoo.com/documentation/18.0/developer/reference/external_api.html"
+        "https://www.odoo.com/documentation/19.0/developer/reference/external_rpc_api.html"
       ],
       access_profiles: { user_key: [] },
       default_access_profile: "user_key",
       credential_fields: [
         { key: "api_url", label: "Odoo instance URL", type: "text",
-          help: "Public https:// address of an Odoo 16–18 numbered release. Odoo Online SaaS branches, private and tailnet addresses are not supported." },
+          help: "Public https:// address of an Odoo 16–19 numbered or Odoo Online SaaS release. Private and tailnet addresses are not supported." },
         { key: "database", label: "Database", type: "text",
           help: "The exact Odoo database name." },
         { key: "login", label: "Login", type: "text",
@@ -302,8 +302,8 @@ module Services
       ],
       runtime_notes: [
         "Use soulshouse-odoo partners or invoices; bounded read commands only, no arbitrary model/method calls.",
-        "Legacy JSON-RPC for Odoo 16–18 only; Odoo 19 JSON-2 is not supported by this connector.",
-        "Odoo Online SaaS branches are not supported in this slice; only numbered 16–18 releases are accepted.",
+        "Legacy JSON-RPC for Odoo 16–19 numbered and Odoo Online SaaS releases; JSON-2 is not implemented.",
+        "The legacy API is deprecated in Odoo 19. The instance must still expose /jsonrpc; future versions are refused.",
         "credentials.api_key has the Odoo user's full rights. Helper read-only is a convention, not a security boundary; use a dedicated read-only user.",
         "metadata.api_url, database, login and uid identify the instance and database. Edition and accounting modules are not checked.",
         "External API availability depends on Odoo hosting and plan. Missing accounting access must not trigger a write or privilege escalation.",

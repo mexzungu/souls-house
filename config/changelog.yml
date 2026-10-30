@@ -3,9 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
-- date: 2026-10-28
+- date: 2026-10-30
   title: Odoo accounting reads
-  body: "Connect public-HTTPS Odoo 16–18 numbered releases with a database, login and API key. Selected residents can read partners, invoices and payment status, excluding credit notes; use a dedicated read-only Odoo user because the key retains its user's full rights. Requires a Rails deploy and rebuilt resident runtime; Odoo Online SaaS branches and Odoo 19 are not supported in this first slice."
+  body: "Connect public-HTTPS Odoo 16–19 numbered or Odoo Online SaaS releases over legacy JSON-RPC with a database, login and API key. Selected residents can read partners, invoices and payment status, excluding credit notes; use a dedicated read-only Odoo user because the key retains its user's full rights. Requires a Rails deploy and rebuilt resident runtime; JSON-2 is not implemented."
 - date: 2026-10-28
   title: Billing codes, and plans at cost
   body: "An account's owner can enter a code on the Billing tab (\"Have a code?\"). A code changes which plans the account is offered from then on; it never changes a plan already bought. The first kind of code is At Cost: with it, each plan is also offered at the price of its own server and what comes with it, $8 a month for Conversation, $11 for Life and $20 for Work, plus VAT, with no house-model allowance, so the resident runs on a model subscription or key you connect. At-cost plans appear beside the standard ones on the Billing tab and on the Plan step when creating a resident. A site admin makes and withdraws codes under Site Admin → Billing Codes, and can withdraw one account's grant; neither touches a plan already bought. Works once deployed."

@@ -2253,9 +2253,10 @@ only; your home account only.
 
 ### Reading Odoo accounting with soulshouse-odoo
 
-The Odoo connector supports public-HTTPS Odoo 16–18 using legacy JSON-RPC.
-Only numbered releases are accepted; Odoo Online SaaS branches and Odoo 19
-JSON-2 are not supported by this first slice. External API access depends
+The Odoo connector accepts public-HTTPS Odoo 16–19 numbered and Odoo Online
+SaaS releases using legacy JSON-RPC, including `saas~19.4` version metadata.
+The instance must still expose `/jsonrpc`. This API is deprecated in Odoo 19;
+JSON-2 and future major versions are not implemented. External API access depends
 on the host's plan; edition and installed accounting modules are not checked.
 
 ```sh

@@ -399,7 +399,7 @@ export const moreFeatures = [
     key: 'odoo',
     title: 'Odoo accounting reads',
     description:
-      'Connect public-HTTPS Odoo 16–18 numbered releases to read partners, invoices and payment status, excluding credit notes. Odoo Online SaaS branches are not supported. Use a dedicated read-only user; the API key retains its user’s full rights.',
+      'Connect public-HTTPS Odoo 16–19 numbered or Odoo Online SaaS releases over legacy JSON-RPC to read partners, invoices and payment status, excluding credit notes. Use a dedicated read-only user; the API key retains its user’s full rights.',
     icon: Receipt,
   },
   {

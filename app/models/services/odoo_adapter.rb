@@ -34,9 +34,12 @@ module Services
 
       version = rpc(api_url, "common", "version", [])
       version_info = version.is_a?(Hash) && version["server_version_info"]
+      major = version_info.first if version_info.is_a?(Array)
+      major = major.delete_prefix("saas~").to_i if major.is_a?(String) && major.match?(/\Asaas~(?:16|17|18|19)\z/)
       unless version_info.is_a?(Array) && version_info.size >= 3 &&
-             version_info.first(3).all? { |part| part.is_a?(Integer) && part >= 0 } && (16..18).cover?(version_info.first)
-        raise Error, "This connector supports Odoo 16–18 JSON-RPC only"
+             major.is_a?(Integer) && (16..19).cover?(major) &&
+             version_info[1, 2].all? { |part| part.is_a?(Integer) && part >= 0 }
+        raise Error, "This connector supports Odoo 16–19 numbered and SaaS releases over JSON-RPC only"
       end
 
       uid = rpc(api_url, "common", "authenticate", [ database, login, key, {} ])

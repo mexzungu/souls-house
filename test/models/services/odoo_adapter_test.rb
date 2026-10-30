@@ -50,16 +50,35 @@ class Services::OdooAdapterTest < ActiveSupport::TestCase
     }.to_json
   end
 
-  test "all three supported major versions validate while older and JSON-2 versions refuse" do
-    [ 16, 17, 18 ].each do |major|
+  test "supported numbered versions validate while older and future versions refuse" do
+    [ 16, 17, 18, 19 ].each do |major|
       stub_version(major)
       stub_rpc("authenticate", result: 7)
       assert_equal "#{major}.0.0", connect.dig(:credential_metadata, "odoo_version")
     end
-    [ 15, 19, 20 ].each do |major|
+    [ 15, 20 ].each do |major|
       stub_version(major)
-      assert_match "16–18", assert_raises(Services::OdooAdapter::Error) { connect }.message
+      assert_match "16–19", assert_raises(Services::OdooAdapter::Error) { connect }.message
     end
+  end
+
+  test "SaaS versions preserve their branch and point release in metadata" do
+    [ 16, 17, 18, 19 ].each do |major|
+      stub_rpc("version", result: { server_version_info: [ "saas~#{major}", 4, 0, "final", 0, "e" ] })
+      stub_rpc("authenticate", result: 7)
+      assert_equal "saas~#{major}.4.0", connect.dig(:credential_metadata, "odoo_version")
+    end
+  end
+
+  test "malformed and unsupported version information refuses before authentication" do
+    [ nil, false, {}, [], [ 19 ], [ 19, 0 ], [ "19", 0, 0 ],
+      [ "saas~15", 4, 0 ], [ "saas~20", 1, 0 ], [ "saas~19.4", 0, 0 ],
+      [ "saas~019", 4, 0 ], [ "saas~19\n", 4, 0 ], [ true, 0, 0 ],
+      [ 19, "4", 0 ], [ 19, -1, 0 ], [ "saas~19", 4, false ] ].each do |info|
+      stub_rpc("version", result: { server_version_info: info })
+      assert_raises(Services::OdooAdapter::Error) { connect }
+    end
+    assert_not_requested :post, API, body: /authenticate/
   end
 
   test "refused and wrongly shaped uids are not authenticated" do

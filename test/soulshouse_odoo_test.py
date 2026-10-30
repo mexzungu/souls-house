@@ -67,16 +67,21 @@ class OdooTest(unittest.TestCase):
 
     def test_metadata_rejected_before_network(self):
         for field, values in {"protocol": ["xmlrpc", "json2", None],
-                              "odoo_version": ["15.0", "19.0", "saas~18", "", 19],
+                              "odoo_version": ["15.0", "20.0", "saas~15.9", "saas~20.0",
+                                               "saas~", "saas~~19.4", "SaaS~19.4",
+                                               "xsaas~19.4", "saas~19.", "19.0junk",
+                                               "19.0+community", "", 19, True, None, []],
                               "uid": [False, 0, "7"], "database": ["", None],
                               "login": ["", None]}.items():
             for value in values:
                 with self.subTest(field=field, value=value):
                     self.write(**{field: value})
                     self.assertEqual(1, self.invoke("partners")[0])
-        for version in ("16.0", "17.0", "18.0+e"):
-            self.write(odoo_version=version)
-            self.assertEqual(version, odoo.load_connection(None)[0]["odoo_version"])
+        for version in ("16.0", "17.0", "18.0+e", "19.0.0", "saas~16.0",
+                        "saas~17.0", "saas~18", "saas~19.4.0", "saas~19.4+e"):
+            with self.subTest(version=version):
+                self.write(odoo_version=version)
+                self.assertEqual(version, odoo.load_connection(None)[0]["odoo_version"])
 
     def test_fixed_read_operations(self):
         for command, model in (("partners", "res.partner"), ("invoices", "account.move")):
@@ -96,6 +101,21 @@ class OdooTest(unittest.TestCase):
                 if command == "invoices":
                     self.assertEqual([[["move_type", "in", ["out_invoice", "in_invoice"]]]], args[5])
                     self.assertIn("payment_state", args[6]["fields"])
+
+    def test_saas_19_partners_read_only(self):
+        self.write(odoo_version="saas~19.4.0")
+        with patch.object(odoo, "Client") as client:
+            client.return_value.call.side_effect = [7, [{"id": 1, "name": "Example"}]]
+            status, out, err = self.invoke("partners")
+            self.assertEqual((0, ""), (status, err))
+            self.assertEqual([{"id": 1, "name": "Example"}], json.loads(out))
+            self.assertEqual([
+                unittest.mock.call("common", "authenticate", ["test", "reader", KEY, {}]),
+                unittest.mock.call("object", "execute_kw", [
+                    "test", 7, KEY, "res.partner", "search_read", [[]],
+                    {"fields": ["id", "name", "email", "phone", "is_company"],
+                     "limit": 20, "offset": 0, "order": "id asc"}]),
+            ], client.return_value.call.call_args_list)
 
     def test_bounds_uid_and_credential_echo(self):
         for option, value in (("--limit", "0"), ("--limit", "101"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read partners and invoices from Odoo 16–18 using legacy JSON-RPC.
+"""Read partners and invoices from Odoo 16–19 and SaaS 16–19 using legacy JSON-RPC.
 
 These fixed read-only operations are a helper convention, not API-key permissions.
 """
@@ -43,7 +43,8 @@ def load_connection(connection_id):
     if (not isinstance(key, str) or not key or meta["protocol"] != "jsonrpc"
             or type(meta["uid"]) is not int or meta["uid"] <= 0
             or any(not isinstance(meta[k], str) or not meta[k] for k in ("database", "login"))
-            or not re.fullmatch(r"(16|17|18)(?:\.[0-9]+)*(?:\+e)?", str(meta["odoo_version"]))):
+            or not isinstance(meta["odoo_version"], str)
+            or not re.fullmatch(r"(?:saas~)?(?:16|17|18|19)(?:\.[0-9]+)*(?:\+e)?", meta["odoo_version"])):
         raise OdooError("Unsupported or incomplete Odoo metadata")
     return meta, key
 
