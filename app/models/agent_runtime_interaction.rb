@@ -17,6 +17,7 @@ class AgentRuntimeInteraction < ApplicationRecord
 
   belongs_to :agent
   belongs_to :chat, optional: true
+  has_many :linked_telegram_messages, class_name: "TelegramMessage", dependent: :nullify
   has_one :resident_turn, dependent: :destroy
   # A follow-through nudge points at the run it continues (FollowThroughCheck).
   belongs_to :follow_through_of, class_name: "AgentRuntimeInteraction", optional: true
@@ -34,6 +35,9 @@ class AgentRuntimeInteraction < ApplicationRecord
   after_update_commit :enqueue_follow_through_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
   after_update_commit :enqueue_pending_wake_release, if: -> { saved_change_to_finished_at? && finished_at.present? && trigger_kind == "conversation" }
   after_update_commit :enqueue_oom_check, if: -> { saved_change_to_finished_at? && finished_at.present? }
+  after_update_commit :enqueue_telegram_completion_notice, if: -> {
+    trigger_kind == "telegram" && saved_change_to_finished_at? && finished_at.present? && runtime_status == "ok"
+  }
   # A handoff to this resident is delivered once a run reads it, and blocked
   # if the run meant to read it ends without doing so (MessageHandoff).
   after_update_commit :sync_message_handoffs, if: -> {
@@ -43,6 +47,13 @@ class AgentRuntimeInteraction < ApplicationRecord
   validates :trigger_kind, presence: true
   validates :started_at, presence: true
   validates :provider_auth_mode, inclusion: { in: Agent::PROVIDER_AUTH_MODES }
+
+  def enqueue_telegram_completion_notice
+    TelegramTurnCompletionNoticeJob.perform_later(id)
+  rescue StandardError => error
+    Rails.logger.warn("Telegram completion notice enqueue failed for interaction #{id}: #{error.class}")
+  end
+  private :enqueue_telegram_completion_notice
 
   # Why a quiet-reason submission was refused; the message is for the resident.
   class QuietReasonRefused < StandardError; end
@@ -109,6 +120,7 @@ class AgentRuntimeInteraction < ApplicationRecord
         endpoint_url: endpoint_url,
         request_text: request_text,
         last_included_message_id: last_included_message_id,
+        run_id: (SecureRandom.uuid if trigger_kind == "telegram"),
         provider_auth_mode: provider_auth_mode,
         provider: provider,
         model: model,
@@ -451,6 +463,7 @@ class AgentRuntimeInteraction < ApplicationRecord
       agent_name: agent.name,
       agent_icon: agent.icon,
       agent_colour: agent.colour,
+      agent_avatar_url: agent.avatar_url,
       trigger_kind: trigger_kind,
       status: chat_activity_status,
       status_label: chat_activity_status_label,

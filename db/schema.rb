@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_30_080000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -344,6 +344,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.jsonb "wake_source_kinds", default: [], null: false
     t.text "quiet_reason"
     t.datetime "quiet_reason_at"
+    t.datetime "telegram_completion_notice_at"
     t.index ["agent_id", "chaos_session_id", "started_at"], name: "idx_runtime_interactions_agent_chaos_started"
     t.index ["agent_id", "created_at"], name: "index_agent_runtime_interactions_on_agent_id_and_created_at"
     t.index ["agent_id", "session_id", "started_at"], name: "idx_runtime_interactions_agent_session_started"
@@ -403,6 +404,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.string "github_repo_name"
     t.string "github_repo_owner"
     t.string "github_repo_url"
+    t.datetime "health_failing_since"
+    t.string "health_failure_kind"
     t.string "health_state", default: "unknown", null: false
     t.integer "heartbeat_wakes_per_day", default: 2, null: false
     t.string "home_profile", default: "house", null: false
@@ -440,6 +443,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.string "restic_password"
     t.string "runtime", default: "deprecated", null: false
     t.datetime "runtime_ready_at"
+    t.integer "runtime_restart_count"
     t.string "sandbox_host"
     t.text "sandbox_last_error"
     t.datetime "sandbox_last_error_at"
@@ -453,6 +457,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.text "system_prompt"
     t.string "telegram_bot_token"
     t.string "telegram_bot_username"
+    t.boolean "telegram_reads_all_group_messages"
     t.string "telegram_webhook_token"
     t.integer "thinking_budget", default: 10000
     t.boolean "thinking_enabled", default: false, null: false
@@ -671,6 +676,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.text "summary"
     t.datetime "summary_generated_at"
     t.string "title"
+    t.integer "title_sweep_attempts", default: 0, null: false
     t.datetime "updated_at", null: false
     t.boolean "web_access", default: false, null: false
     t.bigint "visual_tag_id"
@@ -1600,6 +1606,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.bigint "agent_id"
     t.decimal "charge_usd", precision: 14, scale: 8, null: false
     t.datetime "created_at", null: false
+    t.boolean "free_pool", null: false
     t.bigint "house_inference_grant_id"
     t.string "model_id", null: false
     t.date "month", null: false
@@ -1611,6 +1618,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.index ["agent_id"], name: "index_house_inference_calls_on_agent_id"
     t.index ["house_inference_grant_id", "month"], name: "index_house_calls_on_grant_month"
     t.index ["house_inference_grant_id"], name: "index_house_inference_calls_on_house_inference_grant_id"
+    t.index ["month", "free_pool"], name: "index_house_calls_on_month_free_pool"
     t.index ["month"], name: "index_house_inference_calls_on_month"
     t.index ["resident_entitlement_id", "month"], name: "index_house_calls_on_entitlement_month"
     t.check_constraint "charge_usd >= 0::numeric", name: "house_calls_nonnegative_charge"
@@ -2619,6 +2627,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
   end
 
   create_table "telegram_messages", force: :cascade do |t|
+    t.boolean "addressed", default: true, null: false
     t.text "caption"
     t.datetime "created_at", null: false
     t.string "media_error"
@@ -2637,6 +2646,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
     t.datetime "wake_enqueued_at"
     t.bigint "reply_to_telegram_message_id"
     t.bigint "sender_telegram_user_id"
+    t.bigint "agent_runtime_interaction_id"
+    t.index ["agent_runtime_interaction_id"], name: "index_telegram_messages_on_agent_runtime_interaction_id"
     t.index ["telegram_subscription_id", "telegram_message_id"], name: "idx_on_telegram_subscription_id_telegram_message_id_9eb10802be", unique: true, where: "(telegram_message_id IS NOT NULL)"
     t.index ["telegram_subscription_id"], name: "index_telegram_messages_on_telegram_subscription_id"
   end
@@ -3102,6 +3113,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_180000) do
   add_foreign_key "stone_revisions", "stones", on_delete: :cascade
   add_foreign_key "stone_revisions", "users"
   add_foreign_key "stones", "chats", on_delete: :cascade
+  add_foreign_key "telegram_messages", "agent_runtime_interactions"
   add_foreign_key "telegram_messages", "telegram_subscriptions"
   add_foreign_key "telegram_subscriptions", "agents"
   add_foreign_key "telegram_subscriptions", "safeguard_detections", column: "pending_safeguard_detection_id", on_delete: :nullify

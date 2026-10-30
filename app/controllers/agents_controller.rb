@@ -85,7 +85,7 @@ class AgentsController < ApplicationController
       reflexes: -> { reflexes_props },
       # Count/provider partials must not mint another registration token.
       telegram_deep_link: InertiaRails.optional { @agent.telegram_configured? ? @agent.telegram_deep_link_for(Current.user) : nil },
-      telegram_configuration: -> { { configured: @agent.telegram_configured?, username: @agent.telegram_bot_username } },
+      telegram_configuration: -> { { configured: @agent.telegram_configured?, username: @agent.telegram_bot_username, reads_all_group_messages: @agent.telegram_reads_all_group_messages } },
       telegram_subscriber_count: -> { @agent.telegram_subscriptions.active.count },
       telegram_groups: -> { TelegramGroupPresentation.list(@agent, account: current_account) },
       can_manage_telegram_groups: -> { current_account.owned_by?(Current.user) },
@@ -96,6 +96,7 @@ class AgentsController < ApplicationController
       active_tab: params[:tab],
       local_dev_endpoint_mode: Agents::Config.publish_ports?,
       identity_export_url: identity_export_account_agent_path(current_account, @agent),
+      avatar_path: avatar_account_agent_path(current_account, @agent),
       memory_overview_url: account_agent_memory_overview_path(current_account, @agent),
       memory_history_url: Current.user.is_site_admin? ? history_account_agent_memory_overview_path(current_account, @agent) : nil,
       # The Hosting tab is site-admin only; owners get health, Restart and the

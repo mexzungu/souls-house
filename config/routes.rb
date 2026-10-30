@@ -1,4 +1,6 @@
 Rails.application.routes.draw do
+  # Same-origin, uncached text for attachment previews (AttachmentPreviewsController).
+  get "attachment_previews/:signed_id/*filename", to: "attachment_previews#show", as: :attachment_preview, format: false
   resources :stones, only: :show do
     get "revisions/:number", to: "stones#show", as: :revision
     get "revisions/:number/content", to: "stones#content", as: :revision_content
@@ -61,7 +63,7 @@ Rails.application.routes.draw do
   resource :user, only: %i[edit update] do
     scope module: :users do
       resource :password, only: [ :edit, :update ]
-      resource :avatar, only: :destroy
+      resource :avatar, only: %i[update destroy]
     end
   end
 
@@ -223,6 +225,8 @@ Rails.application.routes.draw do
         get "identity_export", to: "agents/runtime_checks#identity_export", as: :identity_export
         post "send_test_request", to: "agents/runtime_checks#send_test_request", as: :send_test_request
         post "send_orientation", to: "agents/runtime_checks#send_orientation", as: :send_orientation
+        patch :avatar, to: "agents/avatars#update"
+        delete :avatar, to: "agents/avatars#destroy"
       end
 
       scope module: :agents do
@@ -474,6 +478,8 @@ Rails.application.routes.draw do
         resources :judgments, only: :index, module: :reflexes
       end
       patch "agent/activity_preferences", to: "agents#activity_preferences"
+      patch "agent/avatar", to: "agent_avatars#update"
+      delete "agent/avatar", to: "agent_avatars#destroy"
       get "agent/github_import_approval", to: "github_import_approvals#show"
       namespace :memory do
         resources :formations, only: :create
@@ -537,6 +543,7 @@ Rails.application.routes.draw do
         end
       end
       resources :telegram_conversations, only: :show
+      post "telegram_conversations/:conversation_id/quiet_reason", to: "telegram_quiet_reasons#create"
       get "telegram_conversations/:conversation_id/messages/:message_id/media",
         to: "telegram_media#show",
         as: :telegram_conversation_message_media

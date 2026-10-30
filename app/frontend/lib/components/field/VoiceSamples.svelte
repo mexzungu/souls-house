@@ -191,6 +191,7 @@
   async function review(sample, included) {
     const url = base;
     error = '';
+    if (playing?.id === sample.id) stop(); // the verdict is on what has been heard
     pending = { ...pending, [sample.id]: { included, settled: null } };
     try {
       await save(`${url}/samples/${sample.id}`, 'PATCH', { included, digest: sample.digest });

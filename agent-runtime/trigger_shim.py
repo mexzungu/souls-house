@@ -373,6 +373,10 @@ def trigger():
         except (ValueError, KeyError, TypeError):
             log.warning("invalid activity configuration; running without reports")
     _activity_context.reporter = reporter
+    _activity_context.telegram_run = (
+        (payload.get("runtime_run_id"), conversation_id)
+        if payload.get("trigger_kind") == "telegram" else None
+    )
     _activity_context.turn_deadline = time.monotonic() + timeout_secs
     try:
         # Invocation-local: never mutate os.environ or share this across sessions.
@@ -411,6 +415,7 @@ def trigger():
         if reporter:
             reporter.disabled = True
         _activity_context.reporter = None
+        _activity_context.telegram_run = None
         _activity_context.turn_deadline = None
         _activity_context.memory_aggregation = False
         _unregister_running_session(session_id)
@@ -814,6 +819,25 @@ def require_house_trust(cwd, chaos_home):
     )
 
 
+SHELL_ENV_ALLOWED_KEYS = frozenset({"OPENROUTER_API_KEY"})
+
+
+def shell_env_excludes(env):
+    """The tool shell's exclude list, as a TOML array literal.
+
+    Chaos patterns have only `*` and `?`, so "every *KEY* name but one"
+    can't be one glob. `*KEY?*` covers names with KEY in the middle; names
+    ending in KEY are listed exactly from the environment Chaos is about to
+    inherit, minus SHELL_ENV_ALLOWED_KEYS.
+    """
+    ending_in_key = sorted(
+        name for name in env
+        if name.upper().endswith("KEY") and name not in SHELL_ENV_ALLOWED_KEYS
+    )
+    patterns = ["*KEY?*", "*SECRET*", "TRIGGER_BEARER_TOKEN", *ending_in_key]
+    return json.dumps(patterns, separators=(",", ":"))
+
+
 def run_chaos(
     model, timeout_secs, prompt_text, json_output,
     resume_id=None, provider=None, reasoning_effort=None, auth_mode="api_key",
@@ -843,6 +867,16 @@ def run_chaos(
         api_key_env = PROVIDER_API_KEY_ENV.get(selected_provider)
         if api_key_env:
             env.pop(api_key_env, None)
+    # Invocation-local correlation also exists without a conversation activity
+    # reporter (Telegram). Never mutate the process-wide environment.
+    for key in ("SOULSHOUSE_RUNTIME_RUN_ID", "SOULSHOUSE_RUNTIME_CHAT_ID",
+                "SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID", "HELIXKIT_RUNTIME_RUN_ID",
+                "HELIXKIT_RUNTIME_CHAT_ID", "HELIXKIT_RUNTIME_TELEGRAM_THREAD_ID"):
+        env.pop(key, None)
+    telegram_run = getattr(_activity_context, "telegram_run", None)
+    if telegram_run and telegram_run[0]:
+        env["SOULSHOUSE_RUNTIME_RUN_ID"] = str(telegram_run[0])
+        env["SOULSHOUSE_RUNTIME_TELEGRAM_THREAD_ID"] = str(telegram_run[1])
     args = [CHAOS_BIN, "exec"]
     if json_output:
         # Machine-readable JSONL: process.started carries the process_id we
@@ -871,10 +905,13 @@ def run_chaos(
         # including the resident's outbound bearer token, even with
         # inherit="all". Disable that broad default, then retain explicit
         # protection for provider keys, secrets, and the inbound trigger token.
+        # OPENROUTER_API_KEY is the one key a resident's own tools may use
+        # (image generation and the like): the house only passes it in when
+        # the account has its own key or falls back to house keys.
         "--headless",
         "-c", "shell_environment_policy.inherit=\"all\"",
         "-c", "shell_environment_policy.ignore_default_excludes=true",
-        "-c", 'shell_environment_policy.exclude=["*KEY*","*SECRET*","TRIGGER_BEARER_TOKEN"]',
+        "-c", f"shell_environment_policy.exclude={shell_env_excludes(env)}",
     ]
     if auth_mode == "oauth_account" and selected_provider == "anthropic":
         # Headless clamp is startup config, so this applies equally to fresh and
@@ -1139,6 +1176,9 @@ def instrumented_response(
             unsupported_chaos_schema=events["unsupported_telemetry_schema_version"],
         ),
     }
+    telegram_run = getattr(_activity_context, "telegram_run", None)
+    if telegram_run and telegram_run[0]:
+        response["telegram_delivery_run_id"] = telegram_run[0]
     if roll:
         response["session_roll_reason"] = roll
     error_kind = classify_provider_error(response, runtime.get("provider"))

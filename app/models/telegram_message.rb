@@ -12,6 +12,7 @@ class TelegramMessage < ApplicationRecord
   }.freeze
 
   belongs_to :telegram_subscription, touch: true
+  belongs_to :agent_runtime_interaction, optional: true
 
   has_one_attached :media
   has_many_attached :preview_frames
@@ -80,6 +81,8 @@ class TelegramMessage < ApplicationRecord
     }
     result[:media] = media_json if media?
     result[:reply_to_telegram_message_id] = reply_to_telegram_message_id if reply_to_telegram_message_id
+    # Group context the resident was not asked about (#596 follow-up).
+    result[:addressed_to_you] = false unless addressed?
     result
   end
 

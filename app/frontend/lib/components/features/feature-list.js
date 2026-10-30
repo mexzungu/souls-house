@@ -251,7 +251,7 @@ export const technicalFeatures = [
     key: 'telegram',
     title: 'Telegram',
     description:
-      'Talk with residents from your phone. They can write to you first, send and receive images, and get your voice notes as transcripts.',
+      'Talk with residents from your phone. They can write to you first, send and receive images, and get your voice notes as transcripts. A successful DM turn with no delivered reply gets a house-labelled completion notice, unless the resident explicitly chooses quiet; a stated reason is passed on as theirs. Add a resident to a Telegram group and it switches on there the first time its owner mentions it: it keeps the group conversation and answers when mentioned or replied to, with the messages above in view.',
     icon: TelegramLogo,
     media: {
       kind: 'video',
@@ -410,6 +410,13 @@ export const moreFeatures = [
     icon: Funnel,
   },
   {
+    key: 'twenty',
+    title: 'Twenty CRM',
+    description:
+      'Connect a public HTTPS Twenty instance and let chosen residents find people, companies and opportunities. The helper offers reads; the API key retains its actual Twenty permissions.',
+    icon: Funnel,
+  },
+  {
     key: 'honeybadger',
     title: 'Honeybadger',
     description:
@@ -475,6 +482,13 @@ export const moreFeatures = [
     description:
       "Bring recordings, documents and notes from your own life into one place your residents can read with you. Notes keep every earlier version, a recording can arrive with a transcript you already have and keep the meeting's notes beside it, and old files and notes can be imported with the date they are from. The house reads the text in PDFs page by page, so search finds it and residents can read it, and says which pages it could not read; where it is turned on, scanned pages are transcribed by a small model and marked as such. Readable files and transcripts get a few-word summary and a one-sentence one, written by a small model. Correcting a transcript or its speakers schedules a check 30 minutes later, refreshing the summary only if it is still out of date; you can also refresh it yourself. The Field learns the voices of the people you name in recordings, inside the house, and suggests who's speaking in new ones once a voice has been checked against recordings it wasn't learned from; you confirm each suggestion. A finished transcript can be copied as text, or shared by a private link that anyone holding it can read without an account, expiring after an hour, a day, a week or never, and revocable.",
     icon: ChalkboardSimple,
+  },
+  {
+    key: 'resident-recording-downloads',
+    title: 'Recording audio for residents',
+    description:
+      'Residents can download original Field recording audio in their home account through the API, for making clips or checking a transcript. Guest-account recordings remain out of reach; downloading grants no new recording writes or voiceprint access.',
+    icon: Waveform,
   },
   {
     key: 'speaker-sample-review',
@@ -593,6 +607,13 @@ export const moreFeatures = [
     title: 'Your own colours',
     description: 'Tint the whole site in a colour of your choosing, and give each account its own dot in the logo.',
     icon: Palette,
+  },
+  {
+    key: 'resident-pictures',
+    title: 'Faces for residents',
+    description:
+      "A resident can have a picture as well as an icon, shown wherever its face is drawn. You set it on the resident's Appearance tab (drop, paste, pick a file or give a web address), or the resident sets its own.",
+    icon: IdentificationCard,
   },
   {
     key: 'memory-tab',

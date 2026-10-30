@@ -26,6 +26,10 @@ module Api
         subscriptions = target_subscriptions
         return render json: { error: "No matching active Telegram subscribers for this resident" }, status: :not_found if subscriptions.empty?
 
+        @runtime_interaction = if params[:runtime_run_id].present?
+          current_api_agent.agent_runtime_interactions.find_by(run_id: params[:runtime_run_id], trigger_kind: "telegram")
+        end
+
         content_type = detected_content_type(media) if media.present?
         media_kind = media_kind_for(media, content_type) if media.present?
         safeguard_check = SafeguardResponseCheck.new(agent: current_api_agent, text: text).call
@@ -119,6 +123,20 @@ module Api
       end
 
       def deliver_outbound_response(subscription, text, media, media_kind, content_type, sender_name: current_api_agent.name)
+        # Serialize delivery accounting against this turn's completion, never
+        # against another turn in the same thread. A recipient/all send may
+        # reach other threads, but only its triggering thread gets the link.
+        # The lock spans transport (including media) so completion cannot race
+        # receipt storage. Stale inherited correlation must never block delivery.
+        if @runtime_interaction
+          return @runtime_interaction.with_lock do
+            deliver_linked_response(subscription, text, media, media_kind, content_type, sender_name: sender_name)
+          end
+        end
+        deliver_linked_response(subscription, text, media, media_kind, content_type, sender_name: sender_name)
+      end
+
+      def deliver_linked_response(subscription, text, media, media_kind, content_type, sender_name:)
         # Checked again here, before the message is stored; the send itself
         # checks once more at the HTTP boundary (TelegramNotifiable).
         raise TelegramNotifiable::TelegramGroupNotAllowed, "group is not allowed" if subscription.group? && !subscription.deliverable?
@@ -137,6 +155,10 @@ module Api
       rescue TelegramNotifiable::TelegramError
         message&.destroy!
         raise
+      ensure
+        # with_lock defers Active Storage's after-commit upload until the
+        # transport has read this IO. Leave it at the start for that upload.
+        media.tempfile.rewind if media.present? && !media.tempfile.closed?
       end
 
       def build_outbound_message(subscription, text, media, media_kind, content_type, sender_name:)
@@ -148,6 +170,8 @@ module Api
           media_status: ("ready" if media.present?),
           media_metadata: media.present? ? media_metadata(media, content_type) : {},
           sender_name: sender_name,
+          agent_runtime_interaction: (@runtime_interaction if @runtime_interaction && !@runtime_interaction.finished_at &&
+            @runtime_interaction.conversation_obfuscated_id == subscription.to_param),
           sent_at: Time.current
         )
 
@@ -202,7 +226,7 @@ module Api
         return unless subscription.group?
 
         target = turn_reply_target(subscription) ||
-          subscription.telegram_messages.where(role: "user").where.not(telegram_message_id: nil).order(:id).last
+          subscription.telegram_messages.where(role: "user", addressed: true).where.not(telegram_message_id: nil).order(:id).last
         return unless target&.telegram_message_id
 
         { message_id: target.telegram_message_id, allow_sending_without_reply: true }
@@ -215,7 +239,12 @@ module Api
         interaction = interactions.active.order(:id).last || interactions.order(:id).last
         return unless interaction
 
-        subscription.telegram_messages.find_by(id: interaction.last_included_message_id, role: "user")
+        # A wake also carries the group's conversation around the mention;
+        # the answer goes to the last message in it addressed to the resident.
+        subscription.telegram_messages
+          .where(role: "user", addressed: true)
+          .where("id <= ?", interaction.last_included_message_id)
+          .order(:id).last
       end
 
       def record_outbound_message(message, result)

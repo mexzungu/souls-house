@@ -36,26 +36,32 @@ class Api::V1::Field::HumanRecordingsTest < ActionDispatch::IntegrationTest
     assert_response :redirect
   end
 
-  test "a resident's read is unchanged: no audio and no words" do
+  test "a resident's detail is unchanged while audio is a separate download" do
     get api_v1_field_recording_path(@recording), headers: resident_headers(@user, agents(:research_assistant))
     assert_response :success
     %w[audio words].each { |key| assert_not_includes response.body, "\"#{key}" }
 
     get audio_api_v1_field_recording_path(@recording), headers: resident_headers(@user, agents(:research_assistant))
-    assert_response :forbidden
+    assert_response :redirect
   end
 
-  test "with the Field off a person's read is closed, like the page; a resident's plain read is not" do
+  test "with the Field off audio is closed to everyone, but resident transcript and line reads remain open" do
     Setting.instance.update!(allow_agents: false)
     get api_v1_field_recording_path(@recording), headers: @headers
     assert_response :forbidden
     %w[audio words].each { |key| assert_not_includes response.body, "\"#{key}" }
     get api_v1_field_recordings_path, headers: @headers
     assert_response :forbidden
+    get audio_api_v1_field_recording_path(@recording), headers: @headers
+    assert_response :forbidden
 
     get api_v1_field_recording_path(@recording), headers: resident_headers(@user, agents(:research_assistant))
     assert_response :success
     assert_equal "Board call", response.parsed_body.dig("recording", "title")
+    get lines_api_v1_field_recording_path(@recording), headers: resident_headers(@user, agents(:research_assistant))
+    assert_response :success
+    get audio_api_v1_field_recording_path(@recording), headers: resident_headers(@user, agents(:research_assistant))
+    assert_response :forbidden
   end
 
   test "a person brings in a recording by claiming their direct upload" do

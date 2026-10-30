@@ -102,11 +102,15 @@ class ProcessTelegramUpdateJob < ApplicationJob
 
   # Groups (#596). The bot hears about a group the first time it is added
   # (my_chat_member) or the first time a message from it arrives, and records
-  # it with allowed off. Nothing from a group is persisted unless the owner
-  # has allowed it, and then only a message addressed to the bot: an
-  # @mention of its username, a text_mention of it, or a reply to one of its
-  # own messages. This check is ours, whatever BotFather's privacy mode or
-  # the bot's admin status lets Telegram deliver.
+  # it switched off. Nothing from a group is kept while it is off.
+  #
+  # A group switches on the first time an owner of the resident's account,
+  # whose Telegram is linked to this bot, addresses the bot there; or when an
+  # owner switches it on in settings. Once on, every message is kept as
+  # context, and only one addressed to the bot (an @mention of its username,
+  # a text_mention of it, a reply to one of its own messages, or, in a group
+  # that is already on, a person writing the resident's name) wakes the
+  # resident, which then sees the conversation above the mention too.
   def process_membership(agent, member_update)
     chat = member_update["chat"] || {}
     return unless TelegramSubscription::GROUP_CHAT_TYPES.include?(chat["type"])
@@ -114,27 +118,78 @@ class ProcessTelegramUpdateJob < ApplicationJob
     group = record_group(agent, chat)
     status = member_update.dig("new_chat_member", "status")
     if %w[left kicked].include?(status)
-      group.update!(removed_at: Time.current, allowed: false)
+      # A bot added back later starts again: off until an owner addresses it.
+      group.update!(removed_at: Time.current, allowed: false, allowed_at: nil, allowed_by: nil)
     elsif group.removed_at
       group.update!(removed_at: nil)
     end
+    RefreshTelegramBotInfoJob.perform_later(agent)
   end
 
   def process_group_message(agent, message)
     return migrate_group(agent, message) if message["migrate_to_chat_id"]
 
     group = record_group(agent, message["chat"])
-    return if message.dig("from", "is_bot")
+    from_person = !message.dig("from", "is_bot")
+    addressed = from_person && addressed_to_bot?(agent, message)
+    allow_on_first_owner_address(agent, group, message) if addressed
     return unless group.deliverable?
-    return unless addressed_to_bot?(agent, message)
+
+    # Pepe, 29 Oct (eqRmyj): "Alanis?" should reach her like the tag does.
+    # Only a person's words count, never another bot's (that loop is #609's),
+    # and only once the group is on: a name alone never switches a group on.
+    addressed ||= from_person && names_resident?(agent, message)
 
     content = supported_content(message)
     return unless content
 
-    telegram_message = create_inbound_message(group, message, content)
+    telegram_message = create_inbound_message(group, message, content, addressed: addressed)
     return unless telegram_message
 
-    enqueue_wake(agent, group, telegram_message, content)
+    if addressed
+      enqueue_wake(agent, group, telegram_message, content)
+    elsif content[:media_kind]
+      prepare_context_media(group, telegram_message, content)
+    end
+  end
+
+  # The owner's first word to the bot in a group is their consent to it
+  # being there. Only the first: a group an owner later switched off in
+  # settings stays off until it is switched on there again.
+  def allow_on_first_owner_address(agent, group, message)
+    return if group.allowed? || group.allowed_at || group.removed_at
+
+    owner = linked_owner(agent, message.dig("from", "id"))
+    return unless owner
+
+    allowed = group.with_lock do
+      next false if group.allowed? || group.allowed_at || group.removed_at
+
+      group.allow!(by: owner)
+      true
+    end
+    TelegramGroupNoticeJob.perform_later(group) if allowed
+  end
+
+  # A direct chat's id is the person's Telegram user id, so the owner is
+  # whoever linked their Telegram to this bot and owns the account.
+  def linked_owner(agent, telegram_user_id)
+    return if telegram_user_id.blank?
+
+    agent.telegram_subscriptions.where(telegram_chat_id: telegram_user_id).includes(:user)
+      .map(&:user).find { |user| agent.account.owned_by?(user) }
+  end
+
+  # Media nobody addressed is prepared the same way, so the resident can see
+  # it when someone later asks about it, but it wakes nobody and is never
+  # answered with an error in the group.
+  def prepare_context_media(group, telegram_message, content)
+    if content[:file_size].to_i > TelegramMessage.media_limit_for(content[:media_kind])
+      telegram_message.update!(media_status: "failed", media_error: "too_large")
+      telegram_message.rebuild_text!
+    else
+      PrepareTelegramMediaJob.perform_later(telegram_message, content[:file_id], content[:telegram_metadata])
+    end
   end
 
   def record_group(agent, chat)
@@ -173,6 +228,19 @@ class ProcessTelegramUpdateJob < ApplicationJob
     end
   end
 
+  # The resident's name as a whole word, in any case: "Alanis?" and "ask
+  # alanis" wake her; "Alanisa" does not. Names under three characters are
+  # too likely to be ordinary words to count.
+  def names_resident?(agent, message)
+    name = agent.name.to_s.strip
+    return false if name.length < 3
+
+    text = message["text"] || message["caption"]
+    return false if text.blank?
+
+    text.match?(/(?<![\p{L}\p{N}_])#{Regexp.escape(name)}(?![\p{L}\p{N}_])/i)
+  end
+
   # Telegram measures entity offsets in UTF-16 code units.
   def entity_text(text, entity)
     return if text.blank?
@@ -195,7 +263,7 @@ class ProcessTelegramUpdateJob < ApplicationJob
     end
   end
 
-  def create_inbound_message(subscription, message, content)
+  def create_inbound_message(subscription, message, content, addressed: true)
     telegram_message_id = message["message_id"]
     existing = subscription.telegram_messages.find_by(telegram_message_id: telegram_message_id) if telegram_message_id
     return if existing
@@ -203,6 +271,7 @@ class ProcessTelegramUpdateJob < ApplicationJob
     subscription.telegram_messages.create!(
       **sender_attributes(subscription, message),
       role: "user",
+      addressed: addressed,
       text: content[:text],
       caption: content[:caption],
       media_kind: content[:media_kind],
