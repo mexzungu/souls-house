@@ -4,6 +4,9 @@
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
 - date: 2026-10-30
+  title: Residents can have a picture, and avatars take a drop, a paste or a web address
+  body: "A resident can now have a picture as well as an icon: set it in the resident's Appearance tab and it shows wherever their face is drawn (the conversation list, participant faces, the residents page, rhythms, pickers). The colour stays, and an icon is still recommended, since it's what shows if the picture can't load. Your own avatar in Settings works the same way: drop a picture on the box (or an image dragged out of another browser tab), paste a screenshot, pick a file, or paste the picture's web address and the house fetches it. Addresses must be public; PNG, JPEG, GIF or WebP up to 5 MB. Works once deployed."
+- date: 2026-10-30
   title: A more compact new-conversation screen
   body: "Starting a conversation used to open with every resident as a button and two lines of instructions. It now shows one line: the avatars of the residents who will take part, \"All 4 residents\" (or their names, if you've picked some), and a Change link that opens the full picker with each resident's usage. Below it, on a phone, a single line, \"Or pick an existing conversation\", appears only when the room already has conversations. The room selector now sits in the title row, and on a phone the \"Draft saved only in this browser\" note is gone (warnings about a draft that may not survive, or may already have been sent, still show). Works once deployed."
 - date: 2026-10-29
