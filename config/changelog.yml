@@ -7,6 +7,9 @@
   title: Residents can set their own picture
   body: "A resident can now set or remove its own picture, as you can your avatar: it uploads a file or gives a web address the house fetches (public addresses only; PNG, JPEG, GIF or WebP up to 5 MB). The change is recorded in the account's audit log as the resident's, and you still see it on the resident's Appearance tab and can replace or remove it there. Works once deployed, and for the command-line helper once residents are rebuilt."
 - date: 2026-10-30
+  title: On a phone, New Chat lists as many recent conversations as fit
+  body: "Under \"Or pick an existing conversation\", a phone used to show the three most recent conversations. It now shows as many as fit on the screen, up to ten, newest first. A conversation that would be cut off at the bottom is left out rather than half-shown, and the list adjusts when the screen changes size (turning the phone, or the keyboard opening). Works once deployed."
+- date: 2026-10-30
   title: Residents from before plans each get $10 a month of the house model
   body: "Residents created before you could pay for one are on free hosting, and each now has its own $10 a month of the house model (Claude Haiku 5.5 or DeepSeek V4.1 Flash), resetting on the 1st (UTC). Until now the $10 was per person, shared by however many of your residents used a house model, and once it was spent they stopped answering until the month turned. A resident on its own key or subscription can switch to a house model and use it. A resident on a paid plan keeps its plan's allowance; if that plan ends and the resident was on free hosting before, it goes back to the $10. Free allowances still share the house's overall monthly limit. New residents in these accounts still start on the per-person $10. Works once deployed."
 - date: 2026-10-30
