@@ -82,6 +82,7 @@ class Agent < ApplicationRecord
   SENSITIVE_JSON_ATTRIBUTES = %i[
     github_deploy_key_priv outbound_api_token restic_password
     telegram_bot_token telegram_webhook_token trigger_bearer_token
+    telegram_callback_forward_secret
   ].freeze
   LIST_JSON_ATTRIBUTES = %i[
     name model_id model_label active? paused? colour icon runtime health_state deprecated? unavailability_reason inference_setup_message

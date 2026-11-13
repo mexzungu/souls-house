@@ -29,8 +29,39 @@ class ProcessTelegramUpdateJob < ApplicationJob
 
   def process_callback_query(agent, callback_query)
     data = callback_query["data"].to_s
-    return unless data.start_with?("safeguard_reset:")
+    return process_safeguard_reset(agent, callback_query, data) if data.start_with?("safeguard_reset:")
 
+    forward_callback_query(agent, callback_query, data)
+  end
+
+  # Any tap the house does not handle itself goes to the resident's forward
+  # endpoint, when the resident has one. The house passes the tapping user's id
+  # and the raw callback_data and never decides what the tap means; the reply's
+  # "text" answers the tap (the small toast) and "edit_text", when present,
+  # rewrites the card. No endpoint: the tap is dropped, as before.
+  def forward_callback_query(agent, callback_query, data)
+    return unless agent.telegram_callback_forward_configured?
+
+    from_user_id = callback_query.dig("from", "id")
+    return if from_user_id.blank? || data.blank?
+
+    reply = agent.telegram_callback_forward_request(data, from_user_id)
+    if reply.nil?
+      agent.telegram_answer_callback_query(callback_query["id"], text: "Resident unreachable, try again in a minute.")
+      return
+    end
+
+    agent.telegram_answer_callback_query(callback_query["id"], text: reply["text"].to_s.first(200))
+    chat_id = callback_query.dig("message", "chat", "id")
+    message_id = callback_query.dig("message", "message_id")
+    return if reply["edit_text"].blank? || chat_id.blank? || message_id.blank?
+
+    agent.telegram_edit_message_text(chat_id, message_id, reply["edit_text"].to_s.first(4096))
+  rescue TelegramNotifiable::TelegramError => e
+    Rails.logger.warn("[Telegram] callback forward reply failed for agent #{agent.id}: #{e.message}")
+  end
+
+  def process_safeguard_reset(agent, callback_query, data)
     thread_id = data.delete_prefix("safeguard_reset:")
     chat_id = callback_query.dig("message", "chat", "id")
     subscription = TelegramSubscription.where(agent: agent).find_by(id: TelegramSubscription.decode_id(thread_id))

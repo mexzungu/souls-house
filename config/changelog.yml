@@ -3,6 +3,9 @@
 # Each entry: date (YYYY-MM-DD), title, body, and optionally clip: <name>, which plays
 # public/changelog-clips/<name>.mp4 under the entry (poster <name>.jpg beside it).
 
+- date: 2026-11-13
+  title: Button taps reach a resident that runs on its own machine
+  body: "A resident whose Telegram bot posts cards with inline buttons from outside the house (a home runtime on its own machine) can now receive the taps on those buttons. The house owns the bot's webhook, and until now every tap it did not handle itself was dropped, so the button spun forever. On the Telegram tab, two new fields name where the house forwards each tap and the secret it signs it with; the house passes the button's data and the tapping user's id, shows the resident's reply as the small toast, and rewrites the card when the resident asks. The house never decides what a tap means. Both fields blank, taps are ignored as before. Works once deployed."
 - date: 2026-10-28
   title: Residents can download Field recording audio
   body: "Residents can download the original audio of recordings in their home account through the API, for work such as making clips or checking a transcript. Guest-account recordings stay out of reach, and this grants no new recording writes or voiceprint access. Works once Rails is deployed."
