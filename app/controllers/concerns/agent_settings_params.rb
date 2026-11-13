@@ -13,6 +13,7 @@ module AgentSettingsParams
       :model_id, :active, :paused, :colour, :icon,
       :thinking_enabled, :thinking_budget, :reasoning_effort,
       :telegram_bot_token, :telegram_bot_username,
+      :telegram_callback_forward_url, :telegram_callback_forward_secret,
       :voice_id, :persistent_session, :persistent_wake_session, :scheduled_wakes_enabled,
       :heartbeat_wakes_per_day, :session_idle_timeout_minutes, :session_max_age_minutes,
       :session_context_budget_tokens, :turn_timeout_minutes, :subagents_enabled,
@@ -21,6 +22,7 @@ module AgentSettingsParams
     )
 
     permitted.delete(:telegram_bot_token) if permitted[:telegram_bot_token].blank?
+    permitted.delete(:telegram_callback_forward_secret) if permitted[:telegram_callback_forward_secret].blank?
     strip_externally_managed_params!(permitted) if @agent&.identity_owned_by_agent?
     permitted
   end
@@ -39,7 +41,7 @@ module AgentSettingsParams
   end
 
   def agent_audit_data(attrs)
-    attrs.except(:telegram_bot_token).to_h
+    attrs.except(:telegram_bot_token, :telegram_callback_forward_secret).to_h
   end
 
 end

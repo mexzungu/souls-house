@@ -164,6 +164,8 @@
       reasoning_effort: agent.reasoning_effort || 'default',
       telegram_bot_username: agent.telegram_bot_username || '',
       telegram_bot_token: agent.telegram_bot_token || '',
+      telegram_callback_forward_url: agent.telegram_callback_forward_url || '',
+      telegram_callback_forward_secret: '',
       persistent_session: agent.persistent_session || false,
       persistent_wake_session: agent.persistent_wake_session || false,
       scheduled_wakes_enabled: agent.scheduled_wakes_enabled ?? true,

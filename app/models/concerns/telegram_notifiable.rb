@@ -24,8 +24,10 @@ module TelegramNotifiable
     has_many :telegram_messages, through: :telegram_subscriptions
 
     encrypts :telegram_bot_token
+    encrypts :telegram_callback_forward_secret
 
     validates :telegram_bot_username, format: { with: /\A[a-zA-Z0-9_]+\z/ }, allow_blank: true
+    validates :telegram_callback_forward_url, format: { with: %r{\Ahttps?://\S+\z}i }, allow_blank: true
 
     before_save :set_telegram_webhook_token, if: :telegram_bot_token_changed?
     after_update_commit :manage_telegram_webhook, if: -> { saved_change_to_telegram_bot_token? || saved_change_to_telegram_bot_username? }
@@ -157,6 +159,46 @@ module TelegramNotifiable
     raise TelegramError, result["description"] unless result["ok"]
 
     result
+  end
+
+  # Rewrites one of the bot's own messages, as when a card's buttons have been
+  # used and the card should now show the outcome. Buttons go with the text
+  # unless the caller passes a new reply_markup.
+  def telegram_edit_message_text(chat_id, message_id, text, **options)
+    body = { chat_id: chat_id, message_id: message_id, text: text }.merge(options)
+    result = telegram_api_request("editMessageText", body)
+    raise TelegramError, result["description"] unless result["ok"]
+
+    result
+  end
+
+  # Inline-button taps the house does not handle itself are forwarded to the
+  # resident's own endpoint when one is set, with the shared secret in a header.
+  # Both fields must be present: a URL without a secret forwards nothing.
+  def telegram_callback_forward_configured?
+    telegram_callback_forward_url.present? && telegram_callback_forward_secret.present?
+  end
+
+  # Posts a raw tap to the forward endpoint and returns its parsed reply
+  # ({"text" => ..., "edit_text" => ...}), or nil when the endpoint did not answer
+  # 2xx in time. Every failure is nil, never an exception, so the job can tell the
+  # tapper the resident was unreachable instead of leaving the button spinning.
+  def telegram_callback_forward_request(data, from_user_id)
+    uri = URI(telegram_callback_forward_url)
+    response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == "https",
+                                                       open_timeout: 5, read_timeout: 10) do |http|
+      request = Net::HTTP::Post.new(uri.request_uri, "Content-Type" => "application/json",
+                                                     "X-Lead-Callback-Secret" => telegram_callback_forward_secret)
+      request.body = { data: data, from_user_id: from_user_id }.to_json
+      http.request(request)
+    end
+    return nil unless response.is_a?(Net::HTTPSuccess)
+
+    parsed = JSON.parse(response.body)
+    parsed.is_a?(Hash) ? parsed : nil
+  rescue SocketError, Timeout::Error, SystemCallError, IOError, OpenSSL::SSL::SSLError, JSON::ParserError => e
+    Rails.logger.warn("[Telegram] callback forward failed for agent #{id}: #{e.class}: #{e.message}")
+    nil
   end
 
   def delete_telegram_webhook!

@@ -306,7 +306,84 @@ class ProcessTelegramUpdateJobTest < ActiveSupport::TestCase
     assert methods.any? { |path| path.end_with?("/answerCallbackQuery") }
   end
 
+  test "a tap the house does not handle is dropped when no forward is set" do
+    methods = []
+    responder = lambda do |uri, _body, _headers|
+      methods << uri.path
+      @fake_ok
+    end
+
+    Net::HTTP.stub :post, responder do
+      ProcessTelegramUpdateJob.perform_now(@agent, build_callback("wasend:10:reject"))
+    end
+
+    assert_empty methods
+  end
+
+  test "a forwarded tap answers the query and edits the card with the resident's reply" do
+    @agent.update!(telegram_callback_forward_url: "http://100.64.0.9:8752/telegram/callback",
+                   telegram_callback_forward_secret: "shared")
+    forwarded = []
+    reply = { "text" => "Rejected. Nothing sent to X.", "edit_text" => "WhatsApp send #10: Rejected." }
+    calls = []
+    responder = lambda do |uri, body, _headers|
+      calls << [ uri.path, JSON.parse(body) ]
+      @fake_ok
+    end
+
+    @agent.stub :telegram_callback_forward_request, ->(data, from_id) { forwarded << [ data, from_id ]; reply } do
+      Net::HTTP.stub :post, responder do
+        ProcessTelegramUpdateJob.perform_now(@agent, build_callback("wasend:10:reject"))
+      end
+    end
+
+    assert_equal [ [ "wasend:10:reject", 789 ] ], forwarded
+    answer = calls.find { |path, _| path.end_with?("/answerCallbackQuery") }
+    assert_equal "Rejected. Nothing sent to X.", answer.last["text"]
+    edit = calls.find { |path, _| path.end_with?("/editMessageText") }
+    assert_equal({ "chat_id" => 456, "message_id" => 321, "text" => "WhatsApp send #10: Rejected." }, edit.last)
+  end
+
+  test "a forwarded tap the resident does not answer tells the tapper and leaves the card" do
+    @agent.update!(telegram_callback_forward_url: "http://100.64.0.9:8752/telegram/callback",
+                   telegram_callback_forward_secret: "shared")
+    calls = []
+    responder = lambda do |uri, body, _headers|
+      calls << [ uri.path, JSON.parse(body) ]
+      @fake_ok
+    end
+
+    @agent.stub :telegram_callback_forward_request, ->(_data, _from_id) { nil } do
+      Net::HTTP.stub :post, responder do
+        ProcessTelegramUpdateJob.perform_now(@agent, build_callback("wasend:10:approve"))
+      end
+    end
+
+    assert_equal [ "/bot123:ABC/answerCallbackQuery" ], calls.map(&:first)
+    assert_equal "Resident unreachable, try again in a minute.", calls.first.last["text"]
+  end
+
+  test "a forward needs both the address and the secret" do
+    @agent.update!(telegram_callback_forward_url: "http://100.64.0.9:8752/telegram/callback")
+    assert_not @agent.telegram_callback_forward_configured?
+    @agent.update!(telegram_callback_forward_secret: "shared")
+    assert @agent.telegram_callback_forward_configured?
+    assert_not @agent.as_json.key?("telegram_callback_forward_secret")
+    assert_not @agent.update(telegram_callback_forward_url: "ftp://nope")
+  end
+
   private
+
+  def build_callback(data)
+    {
+      "callback_query" => {
+        "id" => "callback-2",
+        "data" => data,
+        "from" => { "id" => 789 },
+        "message" => { "message_id" => 321, "chat" => { "id" => 456 } }
+      }
+    }
+  end
 
   def build_update(text, username: nil)
     {

@@ -4,6 +4,7 @@
   import { Input } from '$lib/components/shadcn/input';
   import { Label } from '$lib/components/shadcn/label';
   import { Switch } from '$lib/components/shadcn/switch';
+  import TelegramCallbackForward from './telegram-callback-forward.svelte';
   import { siteName } from '$lib/branding';
   import { router } from '@inertiajs/svelte';
   import { onDestroy } from 'svelte';
@@ -163,6 +164,9 @@
           : 'The token is encrypted when stored and is never shown again.'}
       </p>
     </div>
+  </div>
+
+  <TelegramCallbackForward {form} />
   </div>
 
   {#if configured}
